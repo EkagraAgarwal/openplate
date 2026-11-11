@@ -1,0 +1,295 @@
+{
+  "models": [
+    {
+      "id": "demo_faraday",
+      "title": "Demo: Faraday current distribution",
+      "description": "Synthetic demo model producing every plot kind so the UI can be developed without Python.",
+      "package": "platesim.demo",
+      "params": [
+        {
+          "name": "I_total_mA",
+          "type": "float",
+          "default": 48.0,
+          "min": 0.1,
+          "max": 500,
+          "unit": "mA",
+          "help": "Total cell current. [J]"
+        },
+        {
+          "name": "n_points",
+          "type": "int",
+          "default": 64,
+          "min": 8,
+          "max": 512,
+          "unit": "",
+          "help": "Number of mesh points along the coupon. [J]"
+        },
+        {
+          "name": "stir_rpm",
+          "type": "float",
+          "default": 120.0,
+          "min": 0,
+          "max": 1000,
+          "unit": "rpm",
+          "help": "Rotating disk electrode stir rate. [J]"
+        },
+        {
+          "name": "recipe",
+          "type": "enum",
+          "choices": ["dc", "plan_ramp", "pulses"],
+          "default": "dc",
+          "help": "Waveform recipe. [J]"
+        },
+        {
+          "name": "taped",
+          "type": "bool",
+          "default": true,
+          "help": "Whether the back side is taped (insulated). [J]"
+        }
+      ]
+    },
+    {
+      "id": "demo_feature_fill",
+      "title": "Demo: Via bottom-up fill",
+      "description": "Synthetic feature-fill demo producing contour frames of a via cross-section (r >= 0; the app mirrors to -r).",
+      "package": "platesim.demo",
+      "params": [
+        {
+          "name": "via_diam_um",
+          "type": "float",
+          "default": 50.0,
+          "min": 5,
+          "max": 300,
+          "unit": "um",
+          "help": "Via diameter. [J]"
+        },
+        {
+          "name": "aspect_ratio",
+          "type": "float",
+          "default": 4.0,
+          "min": 0.5,
+          "max": 12,
+          "unit": "",
+          "help": "Depth / diameter. [J]"
+        },
+        {
+          "name": "suppressors_ppm",
+          "type": "float",
+          "default": 10.0,
+          "min": 0,
+          "max": 200,
+          "unit": "ppm",
+          "help": "Suppressor concentration. [J]"
+        }
+      ]
+    }
+  ],
+  "results": {
+    "demo_faraday": {
+      "summary": {
+        "peak_current_density_mA_cm2": 24.6,
+        "mean_current_density_mA_cm2": 20.1,
+        "uniformity_percent": 91.4,
+        "cell_voltage_V": 3.12,
+        "temperature_K": 298.15,
+        "elapsed_s": 0.02
+      },
+      "plots": [
+        {
+          "kind": "line",
+          "title": "Current density along coupon",
+          "x": [0, 1, 2, 3, 4, 5, 6, 7, 8],
+          "series": [
+            { "name": "top", "y": [18.1, 19.2, 20.0, 20.4, 20.6, 20.4, 20.0, 19.2, 18.1], "mode": "lines" },
+            { "name": "edge points", "y": [17.5, 19.0, 20.2, 20.5, 20.7, 20.5, 20.2, 19.0, 17.5], "mode": "markers" }
+          ],
+          "xlabel": "x (cm)",
+          "ylabel": "j (mA/cm2)"
+        },
+        {
+          "kind": "heatmap",
+          "title": "Primary current distribution map",
+          "x": [-2, -1, 0, 1, 2],
+          "y": [0, 0.5, 1, 1.5, 2],
+          "z": [
+            [17.2, 18.4, 19.1, 18.4, 17.2],
+            [18.0, 19.5, 20.2, 19.5, 18.0],
+            [18.2, 19.8, 20.6, 19.8, 18.2],
+            [18.0, 19.5, 20.2, 19.5, 18.0],
+            [17.2, 18.4, 19.1, 18.4, 17.2]
+          ],
+          "zlabel": "j (mA/cm2)",
+          "xlabel": "x (cm)",
+          "ylabel": "y (cm)"
+        },
+        {
+          "kind": "bar",
+          "title": "Average thickness by site",
+          "x": ["center", "mid-left", "mid-right", "edge-left", "edge-right"],
+          "series": [
+            { "name": "thickness", "y": [20.1, 19.4, 19.5, 17.8, 17.9] }
+          ],
+          "xlabel": "site",
+          "ylabel": "h (um)"
+        },
+        {
+          "kind": "contours",
+          "title": "Coupon surface (r >= 0; mirrored in the app)",
+          "frames": [
+            {
+              "t": 0,
+              "lines": [
+                [[0, 0], [1, 0.02], [2, 0.03], [3, 0.03], [4, 0.02], [5, 0]]
+              ]
+            },
+            {
+              "t": 300,
+              "lines": [
+                [[0, -0.8], [1, -0.81], [2, -0.82], [3, -0.82], [4, -0.81], [5, -0.8]]
+              ]
+            },
+            {
+              "t": 600,
+              "lines": [
+                [[0, -1.6], [1, -1.62], [2, -1.64], [3, -1.64], [4, -1.62], [5, -1.6]]
+              ]
+            }
+          ],
+          "xlabel": "r (cm)",
+          "ylabel": "z (cm)"
+        }
+      ],
+      "warnings": [
+        "Demo fixture: values are synthetic and carry no physical meaning."
+      ],
+      "assumptions": [
+        "Uniform conductivity, primary current distribution.",
+        "Steady state, isothermal."
+      ]
+    },
+    "demo_feature_fill": {
+      "summary": {
+        "bottom_up_ratio": 1.35,
+        "seam_risk": "low",
+        "fill_time_s": 420,
+        "surface_roughness_nm": 3.2
+      },
+      "plots": [
+        {
+          "kind": "contours",
+          "title": "Via cross-section fill (r >= 0; mirrored in the app)",
+          "frames": [
+            {
+              "t": 0,
+              "lines": [
+                [[0, 0], [0.5, 0], [1, 0], [1, 4], [1.2, 4]]
+              ]
+            },
+            {
+              "t": 120,
+              "lines": [
+                [[0, 0.4], [0.5, 0.45], [1, 0.4], [1, 4], [1.2, 4]]
+              ]
+            },
+            {
+              "t": 240,
+              "lines": [
+                [[0, 1.5], [0.5, 1.6], [1, 1.5], [1, 4], [1.2, 4]]
+              ]
+            },
+            {
+              "t": 420,
+              "lines": [
+                [[0, 4], [0.5, 4.02], [1, 4], [1, 4], [1.2, 4]]
+              ]
+            }
+          ],
+          "xlabel": "r (um)",
+          "ylabel": "z (um)"
+        },
+        {
+          "kind": "line",
+          "title": "Bottom vs wall thickness",
+          "x": [0, 120, 240, 420],
+          "series": [
+            { "name": "bottom", "y": [0, 0.4, 1.5, 4.0] },
+            { "name": "wall", "y": [0, 0.1, 0.3, 0.7] }
+          ],
+          "xlabel": "t (s)",
+          "ylabel": "h (um)"
+        }
+      ],
+      "warnings": [
+        "Demo fixture: values are synthetic and carry no physical meaning."
+      ],
+      "assumptions": [
+        "Level-set front, constant boundary speeds."
+      ]
+    }
+  },
+  "sweep": {
+    "demo_faraday": {
+      "summary": {
+        "points": 5,
+        "mean_of_mean_current_density_mA_cm2": 20.1
+      },
+      "plots": [
+        {
+          "kind": "line",
+          "title": "Mean current vs total current",
+          "x": [12, 24, 48, 96, 192],
+          "series": [{ "name": "mean j", "y": [5.2, 10.1, 20.1, 39.8, 78.4] }],
+          "xlabel": "I_total (mA)",
+          "ylabel": "j_mean (mA/cm2)"
+        }
+      ],
+      "warnings": ["Demo sweep fixture."],
+      "assumptions": ["Linear scaling with total current."]
+    }
+  },
+  "planar_doe": {
+    "columns": ["run", "current_mA_cm2", "time_min", "temperature_C", "fe_percent", "rate_um_min"],
+    "rows": [
+      ["W9-01", 20, 10, 25, 94.2, 1.85],
+      ["W9-02", 30, 10, 25, 93.1, 2.71],
+      ["W9-03", 40, 10, 25, 91.5, 3.48],
+      ["W9-04", 20, 20, 35, 95.0, 1.92],
+      ["W9-05", 30, 20, 35, 93.8, 2.8],
+      ["W9-06", 40, 20, 35, 92.0, 3.6]
+    ]
+  },
+  "literature": [
+    {
+      "name": "west_acdp_2011",
+      "tag": "Cu ACDP additive window",
+      "source": "A.C. West et al., J. Electrochem. Soc. (demo placeholder citation)",
+      "data": {
+        "x": [0, 10, 20, 30, 40],
+        "y": [92.1, 94.5, 95.0, 94.2, 92.8],
+        "xlabel": "current density (mA/cm2)",
+        "ylabel": "FE (%)"
+      }
+    },
+    {
+      "name": "moffat_tsv_2006",
+      "tag": "TSV fill models",
+      "source": "T.P. Moffat et al., Electrochem. Solid-State Lett. (demo placeholder citation)",
+      "data": {
+        "x": [0, 1, 2, 3, 4],
+        "y": [1.0, 1.08, 1.15, 1.22, 1.28],
+        "xlabel": "aspect ratio",
+        "ylabel": "bottom-up ratio"
+      }
+    }
+  ],
+  "sem": {
+    "columns": ["sample", "site_x_mm", "site_y_mm", "thickness_um", "method"],
+    "rows": [
+      ["S1", 0, 0, 20.1, "SEM cross-section"],
+      ["S1", 25, 0, 19.2, "SEM cross-section"],
+      ["S1", -25, 0, 18.9, "SEM cross-section"],
+      ["S2", 0, 15, 22.4, "SEM cross-section"],
+      ["S2", 0, -15, 21.8, "SEM cross-section"]
+    ]
+  }
+}

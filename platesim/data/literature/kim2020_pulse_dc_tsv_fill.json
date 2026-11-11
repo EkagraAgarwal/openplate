@@ -1,0 +1,77 @@
+{
+  "id": "kim2020_pulse_dc_tsv_fill",
+  "file": "kim2020_pulse_dc_tsv_fill.json",
+  "source": {
+    "authors": [
+      "Y. Kim",
+      "S. Jin",
+      "K. Park",
+      "J. Lee",
+      "J.-H. Lim",
+      "B. Yoo"
+    ],
+    "year": 2020,
+    "title": "Effect of Pulse Current and Pre-annealing on Thermal Extrusion of Cu in Through-Silicon Via (TSV)",
+    "journal": "Front. Chem. 8:771",
+    "doi": "10.3389/fchem.2020.00771",
+    "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC7591792/"
+  },
+  "tag": "[FT] full text (PMC, OA) read 2026-10-28",
+  "conditions": {
+    "bath": "1 M CuSO4 + 1.9 mM HCl, pH 0.5 adjusted with H2SO4, 100 ppm suppressor (CuSupH-1, commercial)",
+    "temperature": "room temperature",
+    "hydrodynamics": "NO agitation, 100 mL cell",
+    "reference": "Ag/AgCl",
+    "vias": "5 um dia x 60 um deep (AR12), SiO2/Ta barrier/Cu seed",
+    "pulse": "peak 450 mA/cm2 fixed, on-time 2 us fixed, off-time varied to set average"
+  },
+  "data": [
+    {
+      "kind": "fill_outcome_vs_j",
+      "DC": [
+        {
+          "j_avg_mA_cm2": 1,
+          "outcome": "best DC: void-free bottom-up, linear fill, complete < 200 s",
+          "tag": "[FT]"
+        },
+        {
+          "j_avg_mA_cm2": 3,
+          "outcome": "bump defects on field (suppressor desorption)",
+          "tag": "[FT]"
+        },
+        {
+          "j_avg_mA_cm2": [
+            5,
+            10
+          ],
+          "outcome": "no bottom-up; many bump defects",
+          "tag": "[FT]"
+        }
+      ],
+      "PC": [
+        {
+          "j_avg_mA_cm2": 3,
+          "outcome": "best PC: highest fill ratio, no bumps; slower start (suppressor re-adsorption in off-time), steeper linear slope from 200 s on",
+          "tag": "[FT]"
+        },
+        {
+          "j_avg_mA_cm2": ">=5",
+          "outcome": "insufficient suppressor supply in via (short off-time); pinch-off voids at very high peak j",
+          "tag": "[FT]"
+        }
+      ],
+      "fill_time_series_note": "their Fig 4 shows fill fraction vs t curves: DC 1 mA/cm2 linear to completion <200 s; PC 3 mA/cm2 lower initially, steeper after 200 s. Individual points not in text - digitise Fig 4 (est. error +-0.05 fill fraction, +-10 s)",
+      "tag": "[FT]"
+    },
+    {
+      "kind": "mechanism",
+      "result": "PC advantage: thinner diffusion layer (Cu2+ resupply during off-time) + suppressor re-adsorption prevents field bumps; consistent with S-NDR breakdown at via bottom",
+      "tag": "[FT]"
+    }
+  ],
+  "units": {
+    "j": "mA/cm2",
+    "t": "s"
+  },
+  "notes": "Useful small-via (AR12, 5 um) DC-vs-PC validation set with a commercial suppressor at pH 0.5. Filling-ratio-vs-time curves (their Fig 4) are the digitisable time series. Supports platesim PR module qualitatively (PC outperforms DC at equal average j via suppressor resupply, not via supply of Cu2+ alone). No agitation -> lower-bound mass transfer case."
+}

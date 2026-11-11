@@ -1,0 +1,33 @@
+{
+  "id": "wagner_hull_cell_kim2018",
+  "file": "wagner_hull_cell_kim2018.json",
+  "source": {
+    "authors": [
+      "K. R. Kim",
+      "S. K. Kim",
+      "J. G. Kim",
+      "H. O. Nam"
+    ],
+    "year": 2018,
+    "title": "CFD Approach to Wagner Number Estimation for a Current Distribution Uniformity in a Rotating Cylinder Hull Cell",
+    "journal": "Int. J. Electrochem. Sci. 13:8686-8693",
+    "doi": "10.20964/2018.09.73",
+    "url": "https://doi.org/10.20964/2018.09.73"
+  },
+  "tag": "[AB] abstract + metadata only (full text not retrieved: ijecs.com down, ScienceDirect 403); DOI verified via Crossref + DOAJ",
+  "conditions": {
+    "application": "copper electrorefining/electrodeposition, rotating cylinder Hull (RCH) cell",
+    "method": "3D CFD secondary current distribution; Wagner number compared with analytical Tafel-kinetics approximation"
+  },
+  "data": [
+    {
+      "kind": "pointer",
+      "content": "Wagner number Wa = kappa * (deta/dj) / L (Tafel slope form). Paper gives CFD-vs-analytical Wa for RCH geometry; no numeric tables retrieved. Use as method reference for coupon-scale uniformity validation of platesim cell module, not as a data source.",
+      "tag": "[AB]"
+    }
+  ],
+  "units": {
+    "Wa": "-"
+  },
+  "notes": "PRIORITY 5 was 'if quickly available' - it was NOT quickly available. This is a metadata-level pointer only. Other potentially useful paywalled leads for uniformity vs Wa: Fairweather 1984 Trans. IMF 62:5 (throwing power of acid copper PCB processes, doi 10.1080/00202967.1984.11870659 [AB]); Dikusar 2005 Russ J Electrochem 41:82 (throwing power dilute H2SO4 copper, doi 10.1007/s11175-005-0009-z [AB]). No digitised thickness-vs-Wa dataset was obtained; the team's own Oct-7 coupon corner-to-corner gradient (KB section 2, +/-16%) remains the primary in-house uniformity datum."
+}

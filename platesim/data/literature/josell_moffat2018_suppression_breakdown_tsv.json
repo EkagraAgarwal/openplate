@@ -1,0 +1,127 @@
+{
+  "id": "josell_moffat2018_suppression_breakdown_tsv",
+  "file": "josell_moffat2018_suppression_breakdown_tsv.json",
+  "source": {
+    "authors": [
+      "D. Josell",
+      "T. P. Moffat"
+    ],
+    "year": 2018,
+    "title": "Superconformal Copper Deposition in Through Silicon Vias by Suppression-Breakdown",
+    "journal": "J. Electrochem. Soc. 165 (2) D23-D30",
+    "doi": "10.1149/2.0061802jes",
+    "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC7543049/"
+  },
+  "tag": "[FT] full text (PMC manuscript) read 2026-10-28",
+  "conditions": {
+    "bath": "1 mol/L CuSO4 + 0.5 mol/L H2SO4 + 1 mmol/L NaCl + 0.25-25 umol/L Tetronic 701",
+    "temperature": "room temperature",
+    "hydrodynamics": "helicopter rotation 100 rpm (~10 cm/s at ~1 cm); ethanol prewet; 2 min -0.40 V mix",
+    "reference": "SSE; E_reversible ~ -0.37 V",
+    "vias": "annular TSV ~56 um deep (IBM Cu-seeded), 50 um pitch arrays, 1 cm Cu RDE for voltammetry",
+    "cell_resistance_ohm": "~3 (voltammetry), ~4 (fill specimens)"
+  },
+  "data": [
+    {
+      "kind": "fill_outcome_matrix",
+      "TET_umol_L": 6,
+      "rpm": 100,
+      "points": [
+        {
+          "E_V": -0.66,
+          "t_min": 4,
+          "outcome": "sub-conformal; sidewall impingement in upper half; keyhole void in lower half",
+          "tag": "[FT]"
+        },
+        {
+          "E_V": -0.64,
+          "t_min": 4,
+          "outcome": "passive-active sidewall transition at via midpoint; transient",
+          "tag": "[FT]"
+        },
+        {
+          "E_V": -0.64,
+          "t_min": 8,
+          "outcome": "bottom-up dominates after 8 min",
+          "tag": "[FT]"
+        },
+        {
+          "E_V": -0.54,
+          "t_min": 4,
+          "outcome": "brief conformal sidewall increment then quenched (delayed adsorption)",
+          "tag": "[FT]"
+        }
+      ],
+      "note": "transition location varies little from -0.64 to -0.56 V at 6 umol/L TET"
+    },
+    {
+      "kind": "fill_outcome_matrix",
+      "TET_umol_L": 12,
+      "points": [
+        {
+          "E_V": -0.68,
+          "outcome": "deposition at mouth, sub-conformal, pinch-off",
+          "tag": "[FT]"
+        },
+        {
+          "E_V": -0.56,
+          "outcome": "complete suppression",
+          "tag": "[FT]"
+        },
+        {
+          "E_V_range": "-0.66..-0.60",
+          "t_min": [
+            4,
+            12
+          ],
+          "outcome": "extreme bottom-up; sidewall bifurcation ~3/4 down (deeper than 6 umol/L)",
+          "tag": "[FT]"
+        },
+        {
+          "E_V": -0.58,
+          "outcome": "BIMODAL: some vias bottom-up, others quenched; 8 and 12 min composite in their Fig 6",
+          "tag": "[FT]"
+        }
+      ]
+    },
+    {
+      "kind": "fill_outcome_matrix",
+      "TET_umol_L": 25,
+      "points": [
+        {
+          "E_V_range": "-0.68..-0.64",
+          "t_min": 15,
+          "outcome": "COMPLETE FILL (fastest published: ~15 min for 56 um deep annular TSV at 100 rpm)",
+          "tag": "[FT]"
+        },
+        {
+          "E_V": -0.62,
+          "outcome": "transient bottom-up quenched after few um",
+          "tag": "[FT]"
+        },
+        {
+          "E_V": -0.6,
+          "outcome": "negligible deposition (outside hysteresis window)",
+          "tag": "[FT]"
+        }
+      ]
+    },
+    {
+      "kind": "pretreatment_effect",
+      "measurement": "passive-active transition depth vs -0.4 V prehold duration (30 s to 4 min) at 6 umol/L TET",
+      "result": "transition shifts deeper with longer prehold; at -0.60 V short dwells give conformal lower sidewall, 4 min dwell gives bottom-up",
+      "tag": "[FT]"
+    },
+    {
+      "kind": "voltammetry_summary",
+      "measurement": "passive state behavior on Cu RDE",
+      "result": "passive j slope ~200 mV/decade; saturation above 6 umol/L TET; breakdown independent of rotation 25-400 rpm; REPASSIVATION strongly rotation-dependent (transport-limited)",
+      "tag": "[FT]"
+    }
+  ],
+  "units": {
+    "E": "V vs SSE",
+    "t": "min"
+  },
+  "notes": "The named priority paper ('suppression-breakdown'). Quantifies the S-NDR operating window: breakdown ~ -0.67 V, repassivation ~ -0.59 V at 50 umol/L TET (from Menk 2019 D3066); at 25 umol/L TET full fill in 15 min. Fill outcome matrix (E x TET x t) is directly usable as qualitative validation targets for platesim feature module. Asymmetric hydrodynamic dependence (breakdown E rotation-independent, reformation rotation-dependent) is a model acceptance criterion."
+}

@@ -1,0 +1,51 @@
+{
+  "name": "platesim-app",
+  "productName": "platesim",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Desktop UI for the platesim Cu electroplating simulator (Electron + Vite + React + Plotly)",
+  "main": "out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "dev:mock": "cross-env PLATESIM_MOCK=1 electron-vite dev",
+    "build": "npm run typecheck && electron-vite build",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.node.json --noEmit",
+    "start": "electron-vite preview",
+    "test": "vitest run",
+    "package": "npm run build && electron-builder --win portable nsis"
+  },
+  "dependencies": {
+    "plotly.js-dist-min": "2.35.2",
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "22.10.2",
+    "@types/react": "18.3.12",
+    "@types/react-dom": "18.3.1",
+    "@vitejs/plugin-react": "4.3.4",
+    "cross-env": "7.0.3",
+    "electron": "33.2.0",
+    "electron-builder": "25.1.8",
+    "electron-vite": "2.1.0",
+    "typescript": "5.6.3",
+    "vite": "5.4.11",
+    "vitest": "2.1.8"
+  },
+  "build": {
+    "appId": "com.platesim.desktop",
+    "productName": "platesim",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "out/**/*"
+    ],
+    "win": {
+      "target": [
+        "portable",
+        "nsis"
+      ]
+    }
+  }
+}

@@ -1,0 +1,386 @@
+{
+  "quick": true,
+  "constants": {
+    "delta_um": 64.0,
+    "nu_cm2_s": 0.0114,
+    "dx_list_um": [
+      8.0,
+      6.0,
+      4.0
+    ],
+    "march_dx_um": [
+      8.0
+    ],
+    "march_stages": [
+      2
+    ],
+    "sites": [
+      "trench1_narrow"
+    ],
+    "tau_site": "trench1_narrow"
+  },
+  "sites": [
+    {
+      "id": "trench1_narrow",
+      "conditions": {
+        "id": "trench1_narrow",
+        "width_um": 227.0,
+        "depth_um": 88.0,
+        "T_C": 22.0,
+        "hours": 4.5,
+        "field_um": 69.0,
+        "delta_um": 64.0,
+        "shear_rate_s": 59.27776448719644,
+        "j_field_mA_cm2": 11.588978540223414,
+        "D_cm2_s": 4.083403976806167e-06,
+        "c_bulk_mol_cm3": 0.0010228810625373746,
+        "Mfac_cm_s_per_A_cm2": 3.675267189835653e-05
+      },
+      "rows": [
+        {
+          "dx_um": 8.0,
+          "floor_over_field": 0.9419415133429755,
+          "wall_up_over_field": 0.9335189685295142,
+          "wall_down_over_field": 0.9710503033281498,
+          "wall_over_field": 0.952284635928832,
+          "wall_asymmetry": 1.0402041480289952,
+          "k_cm_s": 6.52513552109768e-05,
+          "field_flux_cm_s": 5.871225061686322e-05,
+          "i_lim_field_mA_cm2": 125.93858310071204,
+          "lbm_converged": true,
+          "lbm_steps": 1000,
+          "lbm_tau": 2.0,
+          "lbm_u_lid_lb": 0.013311497990107272,
+          "lbm_re": 0.21298396784171636,
+          "lbm_re_clamped": true,
+          "penetration_um": 28.0,
+          "n_up": 10,
+          "n_down": 10,
+          "grid_shape": [
+            21,
+            72
+          ],
+          "balance_error": 0.008489797059820536,
+          "wall_s": 0.8595318794250488
+        },
+        {
+          "dx_um": 6.0,
+          "floor_over_field": 0.9393475722247374,
+          "wall_up_over_field": 0.9292728693212557,
+          "wall_down_over_field": 0.9689739244688472,
+          "wall_over_field": 0.9491233968950514,
+          "wall_asymmetry": 1.042722709828588,
+          "k_cm_s": 6.576748858458483e-05,
+          "field_flux_cm_s": 5.8712249171333546e-05,
+          "i_lim_field_mA_cm2": 125.93858310071204,
+          "lbm_converged": true,
+          "lbm_steps": 1500,
+          "lbm_tau": 2.0,
+          "lbm_u_lid_lb": 0.010295611726723592,
+          "lbm_re": 0.22650345798791902,
+          "lbm_re_clamped": true,
+          "penetration_um": 27.0,
+          "n_up": 14,
+          "n_down": 14,
+          "grid_shape": [
+            28,
+            96
+          ],
+          "balance_error": 0.004492156516162119,
+          "wall_s": 1.667771339416504
+        },
+        {
+          "dx_um": 4.0,
+          "floor_over_field": 0.9384070633335702,
+          "wall_up_over_field": 0.9256407699892227,
+          "wall_down_over_field": 0.9672068134676904,
+          "wall_over_field": 0.9464237917284566,
+          "wall_asymmetry": 1.0449051563264133,
+          "k_cm_s": 6.577143264443767e-05,
+          "field_flux_cm_s": 5.871224881298096e-05,
+          "i_lim_field_mA_cm2": 125.93858310071204,
+          "lbm_converged": true,
+          "lbm_steps": 1500,
+          "lbm_tau": 2.0,
+          "lbm_u_lid_lb": 0.006655748995053636,
+          "lbm_re": 0.21298396784171636,
+          "lbm_re_clamped": true,
+          "penetration_um": 26.0,
+          "n_up": 21,
+          "n_down": 21,
+          "grid_shape": [
+            40,
+            145
+          ],
+          "balance_error": 0.001061663488124436,
+          "wall_s": 4.196851491928101
+        }
+      ],
+      "richardson_floor_over_field": {
+        "key": "floor_over_field",
+        "dxs_used_um": [
+          8.0,
+          6.0,
+          4.0
+        ],
+        "values_used": [
+          0.9419415133429755,
+          0.9393475722247374,
+          0.9384070633335702
+        ],
+        "observed_order": 4.075163029089499,
+        "extrapolated": 0.9381841495424835,
+        "dx_probe_um": 4.0,
+        "dx_probe_minus_extrapolated": 0.0002229137910866319,
+        "dx_probe_error_rel": 0.00023760131867004832,
+        "note": ""
+      },
+      "richardson_wall_over_field": {
+        "key": "wall_over_field",
+        "dxs_used_um": [
+          8.0,
+          6.0,
+          4.0
+        ],
+        "values_used": [
+          0.952284635928832,
+          0.9491233968950514,
+          0.9464237917284566
+        ],
+        "observed_order": 1.4667103247291333,
+        "extrapolated": 0.9431011470365082,
+        "dx_probe_um": 4.0,
+        "dx_probe_minus_extrapolated": 0.0033226446919484287,
+        "dx_probe_error_rel": 0.0035231053449453673,
+        "note": ""
+      },
+      "wall_s": 6.726686954498291
+    }
+  ],
+  "march": {
+    "dx_values_um": [
+      8.0
+    ],
+    "stage_values": [
+      2
+    ],
+    "delta_um": 64.0,
+    "use_flow": true,
+    "sites": [
+      {
+        "id": "trench1_narrow",
+        "width_um": 227.0,
+        "depth_um": 88.0,
+        "rows": [
+          {
+            "dx_um": 8.0,
+            "n_stages": 2,
+            "floor_over_field": 0.951691252326892,
+            "floor_um": 65.66669641055555,
+            "wall_up_um": 63.840494131642075,
+            "wall_down_um": 66.5839694259195,
+            "wall_asymmetry": 1.042973904440969,
+            "j_field_mA_cm2": 11.588978540223414,
+            "k_first_cm_s": 6.370285299752001e-05,
+            "eddy_summary_available_all": true,
+            "wall_s": 2.1861846446990967
+          }
+        ],
+        "spread_defined": false,
+        "spread_floor_over_field": null,
+        "min_floor_over_field": null,
+        "max_floor_over_field": null,
+        "wall_s": 2.1861846446990967,
+        "note": "spread undefined: 1 usable run(s), need at least 2 (quick mode runs one dx x one stage count)"
+      }
+    ],
+    "notes": [
+      "spread = max - min of the final floor_over_field over the whole (dx, n_stages) grid",
+      "predict_site marches floor += floor_over_field * dT with the conformal midpoint geometry dep = t_field * 0.5 * (1 + previous ratio) [J]"
+    ]
+  },
+  "tau_clamp": {
+    "id": "trench1_narrow",
+    "dx_um": 4.0,
+    "shear_rate_s": 59.27776448719644,
+    "grid_shape": [
+      40,
+      145
+    ],
+    "degenerate_requested_pair": true,
+    "requested_max_rel_diff": 0.0,
+    "max_rel_diff": 0.8097857459720302,
+    "max_rel_diff_sig": 0.2507165188001455,
+    "sig_threshold_frac": 0.05,
+    "benign_threshold": 0.05,
+    "tau_clamp_benign": false,
+    "interpretation": "requested u_lid_lb pair is degenerate: both clamp to u_lid_lb = 0.006656 with tau = 2 (TAU_MAX), so the requested comparison shows no difference by construction. The unclamped pair at the same Re (tau 1.18 vs 1.85) gives a velocity field that differs by 5.5 % mean and 25.1 % on cells above 5 % of the trench speed (max 81.0 % at a near-stagnant corner). The effect on the floor/field flux ratio is NOT measured here. tau_clamp_benign = false (threshold 5 % on significant cells), i.e. the clamp does alter the trench flow at this Re.",
+    "pairs": [
+      {
+        "label": "requested u_lid_lb 0.05 vs 0.1",
+        "note": "",
+        "tau": [
+          2.0,
+          2.0
+        ],
+        "u_lid_lb": [
+          0.006655748995053636,
+          0.006655748995053636
+        ],
+        "n_cells": 1254,
+        "max_rel_diff": 0.0,
+        "mean_rel_diff": 0.0,
+        "max_rel_diff_sig": 0.0,
+        "n_cells_sig": 1153,
+        "sig_threshold_frac": 0.05,
+        "max_abs_diff_cm_s": 0.0,
+        "u_max_trench_cm_s": 0.05889459138373527,
+        "re": [
+          0.21298396784171636,
+          0.21298396784171636
+        ],
+        "re_clamped": [
+          true,
+          true
+        ],
+        "steps": [
+          1500,
+          1500
+        ],
+        "converged": [
+          true,
+          true
+        ]
+      },
+      {
+        "label": "unclamped pair, u_lid_lb 0.002995 vs 0.00599",
+        "note": "same Re, tau differs because nu_lb is below the TAU_MAX clamp",
+        "tau": [
+          1.175,
+          1.85
+        ],
+        "u_lid_lb": [
+          0.0029950870477741362,
+          0.0059901740955482724
+        ],
+        "n_cells": 1254,
+        "max_rel_diff": 0.8097857459720302,
+        "mean_rel_diff": 0.05498046958303878,
+        "max_rel_diff_sig": 0.2507165188001455,
+        "n_cells_sig": 1157,
+        "sig_threshold_frac": 0.05,
+        "max_abs_diff_cm_s": 0.0027733099635160706,
+        "u_max_trench_cm_s": 0.058740883336870206,
+        "re": [
+          0.21298396784171636,
+          0.21298396784171636
+        ],
+        "re_clamped": [
+          false,
+          false
+        ],
+        "steps": [
+          3000,
+          2000
+        ],
+        "converged": [
+          true,
+          true
+        ]
+      }
+    ],
+    "wall_s": 20.555071353912354
+  },
+  "particle_cross_check": {
+    "settings": {
+      "width_um": 120.0,
+      "depth_um": 60.0,
+      "dx_um": 6.0,
+      "height_um": 90.0,
+      "delta_um": 128.0,
+      "delta_note": "delta_um = 128 is a SHEAR input only: G = shear_from_delta(delta_um, D) (7.41 1/s) is chosen so the Leveque layer fits the 90 um domain; it is not the Nernst-consistent delta of this case. The delta realised by the continuum solution is delta_eff_um = 102.6 um (D (1 - c_wall) / flux on the field plane), and the surface depletion actually imposed is c_wall_field = 0.692.",
+      "shear_rate_s": 7.409720560899555,
+      "use_flow": true,
+      "scheme": "upwind",
+      "T_C": 22.0,
+      "D_cm2_s": 4.083403976806167e-06,
+      "k_cm_s": 0.00017736897329516762,
+      "c_wall_target": 0.7,
+      "n_ref_per_um2": 0.25,
+      "t_burn_s": 30.0,
+      "t_sample_s": 30.0,
+      "seed": 0,
+      "grid_shape": [
+        27,
+        60
+      ],
+      "lbm_steps": 1000,
+      "lbm_converged": true,
+      "lbm_tau": 2.0
+    },
+    "continuum": {
+      "field": 0.00012269761684074155,
+      "floor": 9.032353342612269e-05,
+      "wall": 0.00010023472890793292,
+      "floor_over_field": 0.7361474146915207,
+      "wall_over_field": 0.8169248229004733,
+      "k_cm_s": 0.00017736897329516762,
+      "balance_error": 0.0007680663050840133,
+      "delta_eff_um": 102.58135163593066
+    },
+    "particles": {
+      "field": 0.00012233397461513938,
+      "floor": 8.877824315848897e-05,
+      "wall": 9.530914159136905e-05,
+      "floor_over_field": 0.7257039055404177,
+      "wall_over_field": 0.7790897164194166,
+      "field_counts": 2202.0,
+      "floor_counts": 861.0,
+      "wall_counts": 772.0,
+      "n_particles_mean": 7901.1331584632,
+      "steps": 12962,
+      "dt_s": 0.004628891025807151,
+      "P_abs": 0.01058473265083577,
+      "particle_wall_s": 24.17694350000238
+    },
+    "depletion": {
+      "field": 0.3082351746122194,
+      "floor": 0.490759112216254,
+      "wall": 0.43488014253131047
+    },
+    "c_wall_field": 0.6917648253877806,
+    "comparisons": {
+      "floor_over_field": {
+        "continuum": 0.7361474146915207,
+        "particles": 0.7257039055404177,
+        "difference": -0.010443509151102925,
+        "particle_se_rel": 0.040194188542021746,
+        "particle_se_abs": 0.02916907960497309,
+        "tolerance": 0.08750723881491927,
+        "agree": true
+      },
+      "wall_over_field": {
+        "continuum": 0.8169248229004733,
+        "particles": 0.7790897164194166,
+        "difference": -0.0378351064810567,
+        "particle_se_rel": 0.041826658894608466,
+        "particle_se_abs": 0.03258671981697218,
+        "tolerance": 0.09776015945091654,
+        "agree": true
+      }
+    },
+    "agree": true,
+    "wall_s": 25.06036686897278
+  },
+  "notes": [
+    "delta = 64 um (central Nernst layer, as validate.py); G = shear_from_delta(delta, D)",
+    "j_field = field_um * 1e-4 / (Mfac * hours * 3600), the field current density implied by the measured field thickness (predict_site, model.py:260)",
+    "single quasi-steady stage at deposit = 0 with flow; no parameter is fitted",
+    "observed order and Richardson extrapolation use the three finest grids of dx_list; non-monotone sequences give NaN, not an exception",
+    "marching spread = max - min of the final floor_over_field over the (dx, n_stages) grid",
+    "LBM tau clamp: _scaling keeps Re matched and clamps tau to [TAU_MIN, TAU_MAX]; the requested u_lid_lb pair is degenerate in this cavity, so an unclamped pair at the same Re is added",
+    "full production sweep deferred (plan.md, Task 2); --quick exercises every part cheaply"
+  ],
+  "runtime_s": 54.53282046318054,
+  "output_json": "D:\\Workspace\\Semiconductors\\platesim\\platesim\\trenchflow\\convergence_quick.json"
+}

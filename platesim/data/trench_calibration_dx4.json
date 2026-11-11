@@ -1,0 +1,45 @@
+{
+  "fitted_with": "python -m platesim.feature.calibrate",
+  "data": "D:\\workspace\\semiconductors\\platesim\\platesim\\data\\trench_sem.json",
+  "dx_um": 4.0,
+  "use_pr": true,
+  "theta": {
+    "delta_um": 80.0,
+    "efficiency": 0.8281151263638821,
+    "i0_u": 0.002,
+    "k_mix": 1.0
+  },
+  "free": [
+    "efficiency"
+  ],
+  "n_data": 4,
+  "n_free": 1,
+  "rms_sigma": 1.9626541858300721,
+  "table": [
+    {
+      "id": "trench1_wide",
+      "field_meas": 82.0,
+      "field_pred": 72.413,
+      "floor_meas": 75.0,
+      "floor_pred": 69.481,
+      "ratio_meas": 0.9146,
+      "ratio_pred": 0.9595
+    },
+    {
+      "id": "trench1_narrow",
+      "field_meas": 69.0,
+      "field_pred": 67.951,
+      "floor_meas": 53.0,
+      "floor_pred": 62.214,
+      "ratio_meas": 0.7681,
+      "ratio_pred": 0.9156
+    }
+  ],
+  "identifiable": true,
+  "warnings": [
+    "single-sample fit: parameters are not validated on independent data"
+  ],
+  "param_sd": {
+    "efficiency": 0.05256356982209108
+  }
+}

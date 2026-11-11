@@ -1,0 +1,869 @@
+{
+  "quick": false,
+  "constants": {
+    "delta_um": 64.0,
+    "nu_cm2_s": 0.0114,
+    "dx_list_um": [
+      8.0,
+      6.0,
+      4.0,
+      3.0,
+      2.0
+    ],
+    "march_dx_um": [
+      6.0,
+      4.0,
+      3.0
+    ],
+    "march_stages": [
+      3,
+      5,
+      9
+    ],
+    "sites": [
+      "trench1_wide",
+      "trench1_narrow"
+    ],
+    "tau_site": "trench1_narrow"
+  },
+  "sites": [
+    {
+      "id": "trench1_wide",
+      "conditions": {
+        "id": "trench1_wide",
+        "width_um": 944.0,
+        "depth_um": 97.0,
+        "T_C": 22.0,
+        "hours": 4.5,
+        "field_um": 82.0,
+        "delta_um": 64.0,
+        "shear_rate_s": 59.27776448719644,
+        "j_field_mA_cm2": 13.772409279685796,
+        "D_cm2_s": 4.083403976806167e-06,
+        "c_bulk_mol_cm3": 0.0010228810625373746,
+        "Mfac_cm_s_per_A_cm2": 3.675267189835653e-05
+      },
+      "rows": [
+        {
+          "dx_um": 8.0,
+          "floor_over_field": 0.930824580562686,
+          "wall_up_over_field": 0.8962598652640663,
+          "wall_down_over_field": 0.9779917441898268,
+          "wall_over_field": 0.9371258047269466,
+          "wall_asymmetry": 1.0911921665728943,
+          "k_cm_s": 7.835859556704787e-05,
+          "field_flux_cm_s": 6.977397854895915e-05,
+          "i_lim_field_mA_cm2": 125.93858310071204,
+          "lbm_converged": true,
+          "lbm_steps": 2000,
+          "lbm_tau": 2.0,
+          "lbm_u_lid_lb": 0.013311497990107272,
+          "lbm_re": 0.21298396784171636,
+          "lbm_re_clamped": true,
+          "penetration_um": 36.0,
+          "n_up": 11,
+          "n_down": 11,
+          "grid_shape": [
+            23,
+            236
+          ],
+          "balance_error": 0.00209997173290012,
+          "wall_s": 3.806410551071167
+        },
+        {
+          "dx_um": 6.0,
+          "floor_over_field": 0.9287105533980553,
+          "wall_up_over_field": 0.8902656163893177,
+          "wall_down_over_field": 0.9755172477348988,
+          "wall_over_field": 0.9328914320621082,
+          "wall_asymmetry": 1.0957597707652007,
+          "k_cm_s": 7.87864958789829e-05,
+          "field_flux_cm_s": 6.977397495699015e-05,
+          "i_lim_field_mA_cm2": 125.93858310071204,
+          "lbm_converged": true,
+          "lbm_steps": 2500,
+          "lbm_tau": 2.0,
+          "lbm_u_lid_lb": 0.010295611726723592,
+          "lbm_re": 0.22650345798791902,
+          "lbm_re_clamped": true,
+          "penetration_um": 33.0,
+          "n_up": 15,
+          "n_down": 15,
+          "grid_shape": [
+            30,
+            315
+          ],
+          "balance_error": 0.0016039354446023642,
+          "wall_s": 7.355481863021851
+        },
+        {
+          "dx_um": 4.0,
+          "floor_over_field": 0.9292108468113307,
+          "wall_up_over_field": 0.8864039833487686,
+          "wall_down_over_field": 0.973212874598846,
+          "wall_over_field": 0.9298084289738073,
+          "wall_asymmetry": 1.0979337783683234,
+          "k_cm_s": 7.855646493755167e-05,
+          "field_flux_cm_s": 6.977397725103641e-05,
+          "i_lim_field_mA_cm2": 125.93858310071204,
+          "lbm_converged": true,
+          "lbm_steps": 4000,
+          "lbm_tau": 2.0,
+          "lbm_u_lid_lb": 0.006655748995053636,
+          "lbm_re": 0.21298396784171636,
+          "lbm_re_clamped": true,
+          "penetration_um": 30.0,
+          "n_up": 23,
+          "n_down": 23,
+          "grid_shape": [
+            43,
+            472
+          ],
+          "balance_error": 0.000270098618262811,
+          "wall_s": 44.81989622116089
+        },
+        {
+          "dx_um": 3.0,
+          "floor_over_field": 0.9294240954838633,
+          "wall_up_over_field": 0.8842507579549891,
+          "wall_down_over_field": 0.9718459942936841,
+          "wall_over_field": 0.9280483761243365,
+          "wall_asymmetry": 1.0990615337907959,
+          "k_cm_s": 7.842913150498987e-05,
+          "field_flux_cm_s": 6.97739780099492e-05,
+          "i_lim_field_mA_cm2": 125.93858310071204,
+          "lbm_converged": true,
+          "lbm_steps": 5500,
+          "lbm_tau": 2.0,
+          "lbm_u_lid_lb": 0.004913814687754442,
+          "lbm_re": 0.20638021688568656,
+          "lbm_re_clamped": true,
+          "penetration_um": 28.5,
+          "n_up": 31,
+          "n_down": 31,
+          "grid_shape": [
+            56,
+            629
+          ],
+          "balance_error": 0.00018128206848479575,
+          "wall_s": 97.73351716995239
+        },
+        {
+          "dx_um": 2.0,
+          "floor_over_field": 0.9283313808097922,
+          "wall_up_over_field": 0.8803092255051337,
+          "wall_down_over_field": 0.9699151172552467,
+          "wall_over_field": 0.9251121713801902,
+          "wall_asymmetry": 1.1017891090471033,
+          "k_cm_s": 7.864735371667831e-05,
+          "field_flux_cm_s": 6.977397638743744e-05,
+          "i_lim_field_mA_cm2": 125.93858310071204,
+          "lbm_converged": true,
+          "lbm_steps": 8500,
+          "lbm_tau": 2.0,
+          "lbm_u_lid_lb": 0.003327874497526818,
+          "lbm_re": 0.21298396784171636,
+          "lbm_re_clamped": true,
+          "penetration_um": 29.0,
+          "n_up": 47,
+          "n_down": 47,
+          "grid_shape": [
+            83,
+            944
+          ],
+          "balance_error": 0.0005960182146351323,
+          "wall_s": 326.0149509906769
+        }
+      ],
+      "richardson_floor_over_field": {
+        "key": "floor_over_field",
+        "dxs_used_um": [
+          4.0,
+          3.0,
+          2.0
+        ],
+        "values_used": [
+          0.9292108468113307,
+          0.9294240954838633,
+          0.9283313808097922
+        ],
+        "observed_order": null,
+        "extrapolated": null,
+        "dx_probe_um": 4.0,
+        "dx_probe_minus_extrapolated": null,
+        "dx_probe_error_rel": null,
+        "note": "non-monotone or degenerate sequence: observed order and extrapolation set to NaN"
+      },
+      "richardson_wall_over_field": {
+        "key": "wall_over_field",
+        "dxs_used_um": [
+          4.0,
+          3.0,
+          2.0
+        ],
+        "values_used": [
+          0.9298084289738073,
+          0.9280483761243365,
+          0.9251121713801902
+        ],
+        "observed_order": null,
+        "extrapolated": null,
+        "dx_probe_um": 4.0,
+        "dx_probe_minus_extrapolated": null,
+        "dx_probe_error_rel": null,
+        "note": "non-monotone or degenerate sequence: observed order and extrapolation set to NaN"
+      },
+      "wall_s": 479.73327803611755
+    },
+    {
+      "id": "trench1_narrow",
+      "conditions": {
+        "id": "trench1_narrow",
+        "width_um": 227.0,
+        "depth_um": 88.0,
+        "T_C": 22.0,
+        "hours": 4.5,
+        "field_um": 69.0,
+        "delta_um": 64.0,
+        "shear_rate_s": 59.27776448719644,
+        "j_field_mA_cm2": 11.588978540223414,
+        "D_cm2_s": 4.083403976806167e-06,
+        "c_bulk_mol_cm3": 0.0010228810625373746,
+        "Mfac_cm_s_per_A_cm2": 3.675267189835653e-05
+      },
+      "rows": [
+        {
+          "dx_um": 8.0,
+          "floor_over_field": 0.9419415133429755,
+          "wall_up_over_field": 0.9335189685295142,
+          "wall_down_over_field": 0.9710503033281498,
+          "wall_over_field": 0.952284635928832,
+          "wall_asymmetry": 1.0402041480289952,
+          "k_cm_s": 6.52513552109768e-05,
+          "field_flux_cm_s": 5.871225061686322e-05,
+          "i_lim_field_mA_cm2": 125.93858310071204,
+          "lbm_converged": true,
+          "lbm_steps": 1000,
+          "lbm_tau": 2.0,
+          "lbm_u_lid_lb": 0.013311497990107272,
+          "lbm_re": 0.21298396784171636,
+          "lbm_re_clamped": true,
+          "penetration_um": 28.0,
+          "n_up": 10,
+          "n_down": 10,
+          "grid_shape": [
+            21,
+            72
+          ],
+          "balance_error": 0.008489797059820536,
+          "wall_s": 0.5984203815460205
+        },
+        {
+          "dx_um": 6.0,
+          "floor_over_field": 0.9393475722247374,
+          "wall_up_over_field": 0.9292728693212557,
+          "wall_down_over_field": 0.9689739244688472,
+          "wall_over_field": 0.9491233968950514,
+          "wall_asymmetry": 1.042722709828588,
+          "k_cm_s": 6.576748858458483e-05,
+          "field_flux_cm_s": 5.8712249171333546e-05,
+          "i_lim_field_mA_cm2": 125.93858310071204,
+          "lbm_converged": true,
+          "lbm_steps": 1500,
+          "lbm_tau": 2.0,
+          "lbm_u_lid_lb": 0.010295611726723592,
+          "lbm_re": 0.22650345798791902,
+          "lbm_re_clamped": true,
+          "penetration_um": 27.0,
+          "n_up": 14,
+          "n_down": 14,
+          "grid_shape": [
+            28,
+            96
+          ],
+          "balance_error": 0.004492156516162119,
+          "wall_s": 0.9235718250274658
+        },
+        {
+          "dx_um": 4.0,
+          "floor_over_field": 0.9384070633335702,
+          "wall_up_over_field": 0.9256407699892227,
+          "wall_down_over_field": 0.9672068134676904,
+          "wall_over_field": 0.9464237917284566,
+          "wall_asymmetry": 1.0449051563264133,
+          "k_cm_s": 6.577143264443767e-05,
+          "field_flux_cm_s": 5.871224881298096e-05,
+          "i_lim_field_mA_cm2": 125.93858310071204,
+          "lbm_converged": true,
+          "lbm_steps": 1500,
+          "lbm_tau": 2.0,
+          "lbm_u_lid_lb": 0.006655748995053636,
+          "lbm_re": 0.21298396784171636,
+          "lbm_re_clamped": true,
+          "penetration_um": 26.0,
+          "n_up": 21,
+          "n_down": 21,
+          "grid_shape": [
+            40,
+            145
+          ],
+          "balance_error": 0.001061663488124436,
+          "wall_s": 1.4990460872650146
+        },
+        {
+          "dx_um": 3.0,
+          "floor_over_field": 0.9376566306150347,
+          "wall_up_over_field": 0.9235786194461096,
+          "wall_down_over_field": 0.9659443670861944,
+          "wall_over_field": 0.944761493266152,
+          "wall_asymmetry": 1.0458712953592326,
+          "k_cm_s": 6.575077379190555e-05,
+          "field_flux_cm_s": 5.871224875568496e-05,
+          "i_lim_field_mA_cm2": 125.93858310071204,
+          "lbm_converged": true,
+          "lbm_steps": 2000,
+          "lbm_tau": 2.0,
+          "lbm_u_lid_lb": 0.004913814687754442,
+          "lbm_re": 0.20638021688568656,
+          "lbm_re_clamped": true,
+          "penetration_um": 25.5,
+          "n_up": 28,
+          "n_down": 28,
+          "grid_shape": [
+            53,
+            193
+          ],
+          "balance_error": 0.0003199681221176582,
+          "wall_s": 4.411480665206909
+        },
+        {
+          "dx_um": 2.0,
+          "floor_over_field": 0.9362050924594595,
+          "wall_up_over_field": 0.9204899949884707,
+          "wall_down_over_field": 0.9642248416027992,
+          "wall_over_field": 0.9423574182956349,
+          "wall_asymmetry": 1.0475125714048377,
+          "k_cm_s": 6.599441624352998e-05,
+          "field_flux_cm_s": 5.871224606887947e-05,
+          "i_lim_field_mA_cm2": 125.93858310071204,
+          "lbm_converged": true,
+          "lbm_steps": 3000,
+          "lbm_tau": 2.0,
+          "lbm_u_lid_lb": 0.003327874497526818,
+          "lbm_re": 0.21298396784171636,
+          "lbm_re_clamped": true,
+          "penetration_um": 25.0,
+          "n_up": 43,
+          "n_down": 43,
+          "grid_shape": [
+            78,
+            290
+          ],
+          "balance_error": 0.00023237461951533504,
+          "wall_s": 33.01053476333618
+        }
+      ],
+      "richardson_floor_over_field": {
+        "key": "floor_over_field",
+        "dxs_used_um": [
+          4.0,
+          3.0,
+          2.0
+        ],
+        "values_used": [
+          0.9384070633335702,
+          0.9376566306150347,
+          0.9362050924594595
+        ],
+        "observed_order": null,
+        "extrapolated": null,
+        "dx_probe_um": 4.0,
+        "dx_probe_minus_extrapolated": null,
+        "dx_probe_error_rel": null,
+        "note": "non-monotone or degenerate sequence: observed order and extrapolation set to NaN"
+      },
+      "richardson_wall_over_field": {
+        "key": "wall_over_field",
+        "dxs_used_um": [
+          4.0,
+          3.0,
+          2.0
+        ],
+        "values_used": [
+          0.9464237917284566,
+          0.944761493266152,
+          0.9423574182956349
+        ],
+        "observed_order": null,
+        "extrapolated": null,
+        "dx_probe_um": 4.0,
+        "dx_probe_minus_extrapolated": null,
+        "dx_probe_error_rel": null,
+        "note": "non-monotone or degenerate sequence: observed order and extrapolation set to NaN"
+      },
+      "wall_s": 40.445053815841675
+    }
+  ],
+  "march": {
+    "dx_values_um": [
+      6.0,
+      4.0,
+      3.0
+    ],
+    "stage_values": [
+      3,
+      5,
+      9
+    ],
+    "delta_um": 64.0,
+    "use_flow": true,
+    "sites": [
+      {
+        "id": "trench1_wide",
+        "width_um": 944.0,
+        "depth_um": 97.0,
+        "rows": [
+          {
+            "dx_um": 6.0,
+            "n_stages": 3,
+            "floor_over_field": 0.9394276338994998,
+            "floor_um": 77.03306597975899,
+            "wall_up_um": 73.27472387984162,
+            "wall_down_um": 79.938950679808,
+            "wall_asymmetry": 1.0909485078496455,
+            "j_field_mA_cm2": 13.772409279685796,
+            "k_first_cm_s": 7.689713635254429e-05,
+            "eddy_summary_available_all": true,
+            "wall_s": 27.10318922996521
+          },
+          {
+            "dx_um": 6.0,
+            "n_stages": 5,
+            "floor_over_field": 0.938161726498896,
+            "floor_um": 76.92926157290947,
+            "wall_up_um": 73.01128255110004,
+            "wall_down_um": 79.84151245424924,
+            "wall_asymmetry": 1.0935503344756172,
+            "j_field_mA_cm2": 13.772409279685796,
+            "k_first_cm_s": 7.784609959973589e-05,
+            "eddy_summary_available_all": true,
+            "wall_s": 53.12135577201843
+          },
+          {
+            "dx_um": 6.0,
+            "n_stages": 9,
+            "floor_over_field": 0.9392780019658935,
+            "floor_um": 77.02079616120326,
+            "wall_up_um": 73.10725311206414,
+            "wall_down_um": 79.88699017389278,
+            "wall_asymmetry": 1.0927368595211224,
+            "j_field_mA_cm2": 13.772409279685796,
+            "k_first_cm_s": 7.784014113326917e-05,
+            "eddy_summary_available_all": true,
+            "wall_s": 91.7151153087616
+          },
+          {
+            "dx_um": 4.0,
+            "n_stages": 3,
+            "floor_over_field": 0.9363053364623182,
+            "floor_um": 76.7770375899101,
+            "wall_up_um": 72.63436310134522,
+            "wall_down_um": 79.39052134270429,
+            "wall_asymmetry": 1.093016004448643,
+            "j_field_mA_cm2": 13.772409279685796,
+            "k_first_cm_s": 7.660469641441005e-05,
+            "eddy_summary_available_all": true,
+            "wall_s": 195.1687319278717
+          },
+          {
+            "dx_um": 4.0,
+            "n_stages": 5,
+            "floor_over_field": 0.9340494275199391,
+            "floor_um": 76.59205305663501,
+            "wall_up_um": 72.33046124306722,
+            "wall_down_um": 79.23457429913664,
+            "wall_asymmetry": 1.0954523576570054,
+            "j_field_mA_cm2": 13.772409279685796,
+            "k_first_cm_s": 7.724848152461653e-05,
+            "eddy_summary_available_all": true,
+            "wall_s": 386.8604736328125
+          },
+          {
+            "dx_um": 4.0,
+            "n_stages": 9,
+            "floor_over_field": 0.9334297104016622,
+            "floor_um": 76.5412362529363,
+            "wall_up_um": 72.23397887325349,
+            "wall_down_um": 79.23214144526268,
+            "wall_asymmetry": 1.0968818647563168,
+            "j_field_mA_cm2": 13.772409279685796,
+            "k_first_cm_s": 7.789611711643636e-05,
+            "eddy_summary_available_all": true,
+            "wall_s": 598.3689107894897
+          },
+          {
+            "dx_um": 3.0,
+            "n_stages": 3,
+            "floor_over_field": 0.9309122674745288,
+            "floor_um": 76.33480593291137,
+            "wall_up_um": 71.7422225911986,
+            "wall_down_um": 78.78766938516233,
+            "wall_asymmetry": 1.0982050254298656,
+            "j_field_mA_cm2": 13.772409279685796,
+            "k_first_cm_s": 7.598964678067701e-05,
+            "eddy_summary_available_all": true,
+            "wall_s": 446.91424202919006
+          },
+          {
+            "dx_um": 3.0,
+            "n_stages": 5,
+            "floor_over_field": 0.9312641547534191,
+            "floor_um": 76.36366068978036,
+            "wall_up_um": 71.86410228780365,
+            "wall_down_um": 78.83239478013458,
+            "wall_asymmetry": 1.0969648582601657,
+            "j_field_mA_cm2": 13.772409279685796,
+            "k_first_cm_s": 7.694125356839284e-05,
+            "eddy_summary_available_all": true,
+            "wall_s": 910.9260580539703
+          },
+          {
+            "dx_um": 3.0,
+            "n_stages": 9,
+            "floor_over_field": 0.9308919218505046,
+            "floor_um": 76.33313759174138,
+            "wall_up_um": 71.78841487688668,
+            "wall_down_um": 78.85473457630796,
+            "wall_asymmetry": 1.0984325912689346,
+            "j_field_mA_cm2": 13.772409279685796,
+            "k_first_cm_s": 7.742599545726172e-05,
+            "eddy_summary_available_all": true,
+            "wall_s": 1316.936933517456
+          }
+        ],
+        "spread_defined": true,
+        "spread_floor_over_field": 0.00853571204899517,
+        "min_floor_over_field": 0.9308919218505046,
+        "max_floor_over_field": 0.9394276338994998,
+        "wall_s": 4027.1150102615356
+      },
+      {
+        "id": "trench1_narrow",
+        "width_um": 227.0,
+        "depth_um": 88.0,
+        "rows": [
+          {
+            "dx_um": 6.0,
+            "n_stages": 3,
+            "floor_over_field": 0.9531743527242026,
+            "floor_um": 65.76903033796998,
+            "wall_up_um": 63.99838378491835,
+            "wall_down_um": 66.61044581403522,
+            "wall_asymmetry": 1.040814499908237,
+            "j_field_mA_cm2": 11.588978540223414,
+            "k_first_cm_s": 6.448439019713387e-05,
+            "eddy_summary_available_all": true,
+            "wall_s": 2.7150180339813232
+          },
+          {
+            "dx_um": 6.0,
+            "n_stages": 5,
+            "floor_over_field": 0.9523190957186449,
+            "floor_um": 65.7100176045865,
+            "wall_up_um": 64.04840098423878,
+            "wall_down_um": 66.58774764387832,
+            "wall_asymmetry": 1.0396473076707164,
+            "j_field_mA_cm2": 11.588978540223414,
+            "k_first_cm_s": 6.516436146795397e-05,
+            "eddy_summary_available_all": true,
+            "wall_s": 4.780139923095703
+          },
+          {
+            "dx_um": 6.0,
+            "n_stages": 9,
+            "floor_over_field": 0.9531352136263587,
+            "floor_um": 65.76632974021875,
+            "wall_up_um": 64.08414442472336,
+            "wall_down_um": 66.63758599499413,
+            "wall_asymmetry": 1.0398451378760338,
+            "j_field_mA_cm2": 11.588978540223414,
+            "k_first_cm_s": 6.51260891211087e-05,
+            "eddy_summary_available_all": true,
+            "wall_s": 8.4647216796875
+          },
+          {
+            "dx_um": 4.0,
+            "n_stages": 3,
+            "floor_over_field": 0.9508698323831364,
+            "floor_um": 65.61001843443641,
+            "wall_up_um": 63.70708335519286,
+            "wall_down_um": 66.32066603034747,
+            "wall_asymmetry": 1.0410249934152978,
+            "j_field_mA_cm2": 11.588978540223414,
+            "k_first_cm_s": 6.434297531169218e-05,
+            "eddy_summary_available_all": true,
+            "wall_s": 7.119679927825928
+          },
+          {
+            "dx_um": 4.0,
+            "n_stages": 5,
+            "floor_over_field": 0.9511096906889159,
+            "floor_um": 65.6265686575352,
+            "wall_up_um": 63.802224720287185,
+            "wall_down_um": 66.36067119542368,
+            "wall_asymmetry": 1.0400996436464853,
+            "j_field_mA_cm2": 11.588978540223414,
+            "k_first_cm_s": 6.482429389933133e-05,
+            "eddy_summary_available_all": true,
+            "wall_s": 11.027958631515503
+          },
+          {
+            "dx_um": 4.0,
+            "n_stages": 9,
+            "floor_over_field": 0.9513589133622894,
+            "floor_um": 65.64376502199796,
+            "wall_up_um": 63.81382348980815,
+            "wall_down_um": 66.37953310620247,
+            "wall_asymmetry": 1.0402061728334473,
+            "j_field_mA_cm2": 11.588978540223414,
+            "k_first_cm_s": 6.530634601222499e-05,
+            "eddy_summary_available_all": true,
+            "wall_s": 20.248156547546387
+          },
+          {
+            "dx_um": 3.0,
+            "n_stages": 3,
+            "floor_over_field": 0.9489796865766701,
+            "floor_um": 65.47959837379024,
+            "wall_up_um": 63.6003607613622,
+            "wall_down_um": 66.21632898280558,
+            "wall_asymmetry": 1.0411313424975508,
+            "j_field_mA_cm2": 11.588978540223414,
+            "k_first_cm_s": 6.425916885105912e-05,
+            "eddy_summary_available_all": true,
+            "wall_s": 12.936173439025879
+          },
+          {
+            "dx_um": 3.0,
+            "n_stages": 5,
+            "floor_over_field": 0.9483999462865645,
+            "floor_um": 65.43959629377295,
+            "wall_up_um": 63.55002608989504,
+            "wall_down_um": 66.17412237366726,
+            "wall_asymmetry": 1.041291820715546,
+            "j_field_mA_cm2": 11.588978540223414,
+            "k_first_cm_s": 6.501680419318854e-05,
+            "eddy_summary_available_all": true,
+            "wall_s": 21.57146692276001
+          },
+          {
+            "dx_um": 3.0,
+            "n_stages": 9,
+            "floor_over_field": 0.948548376643482,
+            "floor_um": 65.44983798840026,
+            "wall_up_um": 63.58227618441117,
+            "wall_down_um": 66.19694955666156,
+            "wall_asymmetry": 1.041122676462021,
+            "j_field_mA_cm2": 11.588978540223414,
+            "k_first_cm_s": 6.538733421172832e-05,
+            "eddy_summary_available_all": true,
+            "wall_s": 38.0907883644104
+          }
+        ],
+        "spread_defined": true,
+        "spread_floor_over_field": 0.004774406437638046,
+        "min_floor_over_field": 0.9483999462865645,
+        "max_floor_over_field": 0.9531743527242026,
+        "wall_s": 126.95410346984863
+      }
+    ],
+    "notes": [
+      "spread = max - min of the final floor_over_field over the whole (dx, n_stages) grid",
+      "predict_site marches floor += floor_over_field * dT with the conformal midpoint geometry dep = t_field * 0.5 * (1 + previous ratio) [J]"
+    ]
+  },
+  "tau_clamp": {
+    "id": "trench1_narrow",
+    "dx_um": 4.0,
+    "shear_rate_s": 59.27776448719644,
+    "grid_shape": [
+      40,
+      145
+    ],
+    "degenerate_requested_pair": true,
+    "requested_max_rel_diff": 0.0,
+    "max_rel_diff": 0.8097857459720302,
+    "max_rel_diff_sig": 0.2507165188001455,
+    "sig_threshold_frac": 0.05,
+    "benign_threshold": 0.05,
+    "tau_clamp_benign": false,
+    "interpretation": "requested u_lid_lb pair is degenerate: both clamp to u_lid_lb = 0.006656 with tau = 2 (TAU_MAX), so the requested comparison shows no difference by construction. The unclamped pair at the same Re (tau 1.18 vs 1.85) gives a velocity field that differs by 5.5 % mean and 25.1 % on cells above 5 % of the trench speed (max 81.0 % at a near-stagnant corner). The effect on the floor/field flux ratio is NOT measured here. tau_clamp_benign = false (threshold 5 % on significant cells), i.e. the clamp does alter the trench flow at this Re.",
+    "pairs": [
+      {
+        "label": "requested u_lid_lb 0.05 vs 0.1",
+        "note": "",
+        "tau": [
+          2.0,
+          2.0
+        ],
+        "u_lid_lb": [
+          0.006655748995053636,
+          0.006655748995053636
+        ],
+        "n_cells": 1254,
+        "max_rel_diff": 0.0,
+        "mean_rel_diff": 0.0,
+        "max_rel_diff_sig": 0.0,
+        "n_cells_sig": 1153,
+        "sig_threshold_frac": 0.05,
+        "max_abs_diff_cm_s": 0.0,
+        "u_max_trench_cm_s": 0.05889459138373527,
+        "re": [
+          0.21298396784171636,
+          0.21298396784171636
+        ],
+        "re_clamped": [
+          true,
+          true
+        ],
+        "steps": [
+          1500,
+          1500
+        ],
+        "converged": [
+          true,
+          true
+        ]
+      },
+      {
+        "label": "unclamped pair, u_lid_lb 0.002995 vs 0.00599",
+        "note": "same Re, tau differs because nu_lb is below the TAU_MAX clamp",
+        "tau": [
+          1.175,
+          1.85
+        ],
+        "u_lid_lb": [
+          0.0029950870477741362,
+          0.0059901740955482724
+        ],
+        "n_cells": 1254,
+        "max_rel_diff": 0.8097857459720302,
+        "mean_rel_diff": 0.05498046958303878,
+        "max_rel_diff_sig": 0.2507165188001455,
+        "n_cells_sig": 1157,
+        "sig_threshold_frac": 0.05,
+        "max_abs_diff_cm_s": 0.0027733099635160706,
+        "u_max_trench_cm_s": 0.058740883336870206,
+        "re": [
+          0.21298396784171636,
+          0.21298396784171636
+        ],
+        "re_clamped": [
+          false,
+          false
+        ],
+        "steps": [
+          3000,
+          2000
+        ],
+        "converged": [
+          true,
+          true
+        ]
+      }
+    ],
+    "wall_s": 8.58449935913086
+  },
+  "particle_cross_check": {
+    "settings": {
+      "width_um": 120.0,
+      "depth_um": 60.0,
+      "dx_um": 6.0,
+      "height_um": 90.0,
+      "delta_um": 128.0,
+      "delta_note": "delta_um = 128 is a SHEAR input only: G = shear_from_delta(delta_um, D) (7.41 1/s) is chosen so the Leveque layer fits the 90 um domain; it is not the Nernst-consistent delta of this case. The delta realised by the continuum solution is delta_eff_um = 102.6 um (D (1 - c_wall) / flux on the field plane), and the surface depletion actually imposed is c_wall_field = 0.692.",
+      "shear_rate_s": 7.409720560899555,
+      "use_flow": true,
+      "scheme": "upwind",
+      "T_C": 22.0,
+      "D_cm2_s": 4.083403976806167e-06,
+      "k_cm_s": 0.00017736897329516762,
+      "c_wall_target": 0.7,
+      "n_ref_per_um2": 0.25,
+      "t_burn_s": 30.0,
+      "t_sample_s": 30.0,
+      "seed": 0,
+      "grid_shape": [
+        27,
+        60
+      ],
+      "lbm_steps": 1000,
+      "lbm_converged": true,
+      "lbm_tau": 2.0
+    },
+    "continuum": {
+      "field": 0.00012269761684074155,
+      "floor": 9.032353342612269e-05,
+      "wall": 0.00010023472890793292,
+      "floor_over_field": 0.7361474146915207,
+      "wall_over_field": 0.8169248229004733,
+      "k_cm_s": 0.00017736897329516762,
+      "balance_error": 0.0007680663050840133,
+      "delta_eff_um": 102.58135163593066
+    },
+    "particles": {
+      "field": 0.00012233397461513938,
+      "floor": 8.877824315848897e-05,
+      "wall": 9.530914159136905e-05,
+      "floor_over_field": 0.7257039055404177,
+      "wall_over_field": 0.7790897164194166,
+      "field_counts": 2202.0,
+      "floor_counts": 861.0,
+      "wall_counts": 772.0,
+      "n_particles_mean": 7901.1331584632,
+      "steps": 12962,
+      "dt_s": 0.004628891025807151,
+      "P_abs": 0.01058473265083577,
+      "particle_wall_s": 14.381230400002096
+    },
+    "depletion": {
+      "field": 0.3082351746122194,
+      "floor": 0.490759112216254,
+      "wall": 0.43488014253131047
+    },
+    "c_wall_field": 0.6917648253877806,
+    "comparisons": {
+      "floor_over_field": {
+        "continuum": 0.7361474146915207,
+        "particles": 0.7257039055404177,
+        "difference": -0.010443509151102925,
+        "particle_se_rel": 0.040194188542021746,
+        "particle_se_abs": 0.02916907960497309,
+        "tolerance": 0.08750723881491927,
+        "agree": true
+      },
+      "wall_over_field": {
+        "continuum": 0.8169248229004733,
+        "particles": 0.7790897164194166,
+        "difference": -0.0378351064810567,
+        "particle_se_rel": 0.041826658894608466,
+        "particle_se_abs": 0.03258671981697218,
+        "tolerance": 0.09776015945091654,
+        "agree": true
+      }
+    },
+    "agree": true,
+    "wall_s": 14.933841705322266
+  },
+  "notes": [
+    "delta = 64 um (central Nernst layer, as validate.py); G = shear_from_delta(delta, D)",
+    "j_field = field_um * 1e-4 / (Mfac * hours * 3600), the field current density implied by the measured field thickness (predict_site, model.py:260)",
+    "single quasi-steady stage at deposit = 0 with flow; no parameter is fitted",
+    "observed order and Richardson extrapolation use the three finest grids of dx_list; non-monotone sequences give NaN, not an exception",
+    "marching spread = max - min of the final floor_over_field over the (dx, n_stages) grid",
+    "LBM tau clamp: _scaling keeps Re matched and clamps tau to [TAU_MIN, TAU_MAX]; the requested u_lid_lb pair is degenerate in this cavity, so an unclamped pair at the same Re is added",
+    "full sweep = both sites, grid dx 8/6/4/3/2, march dx 6/4/3 x stages 3/5/9; --quick exercises every part cheaply"
+  ],
+  "runtime_s": 4697.766802549362,
+  "output_json": "D:\\Workspace\\Semiconductors\\platesim\\platesim\\trenchflow\\convergence.json"
+}

@@ -1,0 +1,185 @@
+{
+  "generated_unix": 1794351851.3069782,
+  "quick": true,
+  "conditions": {
+    "efficiency": 0.82,
+    "delta_um": 64.0,
+    "hours": 0.5,
+    "suppressor": false,
+    "f_open": 0.2,
+    "waveform": "pulse-reverse, 15 mA/cm2 net",
+    "theta": {
+      "delta_um": 64.0,
+      "efficiency": 0.82,
+      "i0_u": 0.002,
+      "k_mix": 1.0
+    },
+    "dx_list": [
+      8.0,
+      6.0
+    ]
+  },
+  "runs": {
+    "trench1_wide": [
+      {
+        "case": "trench1_wide",
+        "dx_um": 8.0,
+        "dx_requested": 8.0,
+        "cfl": 0.5,
+        "hours": 0.5,
+        "t_end_s": 1800.0,
+        "grid": [
+          295,
+          37
+        ],
+        "steps": 21,
+        "field_um": 7.848106,
+        "floor_um": 7.581378,
+        "ratio": 0.9660137108239873,
+        "faraday_um": 8.137041558296135,
+        "faraday_rel_err": 0.0016325971471851108,
+        "field_vs_faraday_rel": -0.035508674279972174,
+        "cu_balance_rel": -6.1e-05,
+        "stop_reason": "recipe_end",
+        "outcome": "incomplete",
+        "wall_s": 1.4615647792816162,
+        "warnings": []
+      },
+      {
+        "case": "trench1_wide",
+        "dx_um": 6.005089058524173,
+        "dx_requested": 6.0,
+        "cfl": 0.5,
+        "hours": 0.5,
+        "t_end_s": 1800.0,
+        "grid": [
+          393,
+          46
+        ],
+        "steps": 21,
+        "field_um": 7.842417,
+        "floor_um": 7.551453,
+        "ratio": 0.9628986828932968,
+        "faraday_um": 8.137041558296135,
+        "faraday_rel_err": 0.001285819914277786,
+        "field_vs_faraday_rel": -0.03620782273082401,
+        "cu_balance_rel": -6.7e-05,
+        "stop_reason": "recipe_end",
+        "outcome": "incomplete",
+        "wall_s": 2.6513686180114746,
+        "warnings": []
+      }
+    ],
+    "trench1_narrow": [
+      {
+        "case": "trench1_narrow",
+        "dx_um": 7.992957746478873,
+        "dx_requested": 8.0,
+        "cfl": 0.5,
+        "hours": 0.5,
+        "t_end_s": 1800.0,
+        "grid": [
+          71,
+          36
+        ],
+        "steps": 21,
+        "field_um": 7.32653,
+        "floor_um": 6.824219,
+        "ratio": 0.9314394399531566,
+        "faraday_um": 8.137041558296135,
+        "faraday_rel_err": 0.0024264837114593707,
+        "field_vs_faraday_rel": -0.09960764640187636,
+        "cu_balance_rel": -4.7e-05,
+        "stop_reason": "recipe_end",
+        "outcome": "incomplete",
+        "wall_s": 0.537670373916626,
+        "warnings": []
+      },
+      {
+        "case": "trench1_narrow",
+        "dx_um": 5.973684210526316,
+        "dx_requested": 6.0,
+        "cfl": 0.5,
+        "hours": 0.5,
+        "t_end_s": 1800.0,
+        "grid": [
+          95,
+          44
+        ],
+        "steps": 21,
+        "field_um": 7.281946,
+        "floor_um": 6.755995,
+        "ratio": 0.9277732902715841,
+        "faraday_um": 8.137041558296135,
+        "faraday_rel_err": 0.003759983235493314,
+        "field_vs_faraday_rel": -0.10508678764511425,
+        "cu_balance_rel": -5.5e-05,
+        "stop_reason": "recipe_end",
+        "outcome": "incomplete",
+        "wall_s": 0.8075196743011475,
+        "warnings": []
+      }
+    ]
+  },
+  "convergence": {
+    "trench1_wide": {
+      "dx_requested": [
+        8.0,
+        6.0
+      ],
+      "dx_um_effective": [
+        8.0,
+        6.005089058524173
+      ],
+      "n_grids": 2,
+      "field_um": {
+        "order": null,
+        "richardson": null,
+        "dx4_minus_extrap": null
+      },
+      "floor_um": {
+        "order": null,
+        "richardson": null,
+        "dx4_minus_extrap": null
+      },
+      "ratio": {
+        "order": null,
+        "richardson": null,
+        "dx4_minus_extrap": null
+      },
+      "note": "fewer than three grids: no order / Richardson estimate"
+    },
+    "trench1_narrow": {
+      "dx_requested": [
+        8.0,
+        6.0
+      ],
+      "dx_um_effective": [
+        7.992957746478873,
+        5.973684210526316
+      ],
+      "n_grids": 2,
+      "field_um": {
+        "order": null,
+        "richardson": null,
+        "dx4_minus_extrap": null
+      },
+      "floor_um": {
+        "order": null,
+        "richardson": null,
+        "dx4_minus_extrap": null
+      },
+      "ratio": {
+        "order": null,
+        "richardson": null,
+        "dx4_minus_extrap": null
+      },
+      "note": "fewer than three grids: no order / Richardson estimate"
+    }
+  },
+  "timestep": {
+    "skipped": true,
+    "reason": "--quick: time-step study runs only in the full sweep"
+  },
+  "wall_s": 5.459697723388672
+}

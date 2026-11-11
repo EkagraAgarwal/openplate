@@ -1,0 +1,1375 @@
+{
+ "task": "plan.md Task 4 - independent FiPy cross-check of the additive-free trench model",
+ "generated": "2026-11-10T19:39:32",
+ "fipy_available": true,
+ "common": {
+  "j_mA_cm2": 15.0,
+  "hours": 4.5,
+  "dx_um": 4.0,
+  "delta_um": 64.0,
+  "efficiency": 1.0,
+  "ohmic": false,
+  "suppressor": false,
+  "k_mix": 0.0,
+  "f_open": 0.2,
+  "units": "SI inside FiPy (m, s, mol/m3, A/m2); platesim cm-based",
+  "I_t": "j * R per unit length in y",
+  "sites": {
+   "narrow": {
+    "d_um": 227.0,
+    "H_um": 88.0
+   },
+   "wide": {
+    "d_um": 944.0,
+    "H_um": 97.0
+   }
+  },
+  "warnings": []
+ },
+ "sites": {
+  "narrow": {
+   "fipy": {
+    "code": "fipy-4.0.3",
+    "field_um": 83.34387783958039,
+    "floor_um": 62.4300485466735,
+    "field_mean_um": 72.14075884432043,
+    "mean_thickness_um": 89.55506156203512,
+    "ratio": 0.7490658002119646,
+    "eta_mV": -105.45131169838412,
+    "t_end_h": 4.5,
+    "steps": 135,
+    "dt_last_s": 120.0,
+    "charge_rel": 0.001391431151903877,
+    "area_dep_m2": 5.075337506566996e-08,
+    "faraday_area_m2": 5.068285336463104e-08,
+    "I_t_A_per_m": 0.085125,
+    "max_current_residual_A_per_m": 0.0,
+    "max_eta_step_mV": 1.1298223115299433,
+    "galvanostat_residual_rel": 3.2605668858301217e-15,
+    "wall_s": 85.28349709510803,
+    "warnings": [],
+    "series": [
+     {
+      "t_h": 0.0333,
+      "dt_s": 120.0,
+      "eta_mV": -104.527,
+      "field_um": 88.535,
+      "floor_um": 0.495,
+      "c_if_min": 0.66202
+     },
+     {
+      "t_h": 0.1,
+      "dt_s": 120.0,
+      "eta_mV": -104.848,
+      "field_um": 89.762,
+      "floor_um": 1.479,
+      "c_if_min": 0.64606
+     },
+     {
+      "t_h": 0.2,
+      "dt_s": 120.0,
+      "eta_mV": -104.841,
+      "field_um": 91.611,
+      "floor_um": 2.953,
+      "c_if_min": 0.65823
+     },
+     {
+      "t_h": 0.2667,
+      "dt_s": 120.0,
+      "eta_mV": -104.915,
+      "field_um": 92.842,
+      "floor_um": 3.935,
+      "c_if_min": 0.65346
+     },
+     {
+      "t_h": 0.3333,
+      "dt_s": 120.0,
+      "eta_mV": -104.9,
+      "field_um": 94.071,
+      "floor_um": 4.915,
+      "c_if_min": 0.64856
+     },
+     {
+      "t_h": 0.4,
+      "dt_s": 120.0,
+      "eta_mV": -104.953,
+      "field_um": 95.304,
+      "floor_um": 5.888,
+      "c_if_min": 0.64991
+     },
+     {
+      "t_h": 0.5,
+      "dt_s": 120.0,
+      "eta_mV": -105.007,
+      "field_um": 97.151,
+      "floor_um": 7.351,
+      "c_if_min": 0.65487
+     },
+     {
+      "t_h": 0.5667,
+      "dt_s": 120.0,
+      "eta_mV": -105.025,
+      "field_um": 98.382,
+      "floor_um": 8.33,
+      "c_if_min": 0.65094
+     },
+     {
+      "t_h": 0.6333,
+      "dt_s": 120.0,
+      "eta_mV": -104.965,
+      "field_um": 99.615,
+      "floor_um": 9.299,
+      "c_if_min": 0.64018
+     },
+     {
+      "t_h": 0.7,
+      "dt_s": 120.0,
+      "eta_mV": -105.027,
+      "field_um": 100.847,
+      "floor_um": 10.264,
+      "c_if_min": 0.64622
+     },
+     {
+      "t_h": 0.8,
+      "dt_s": 120.0,
+      "eta_mV": -105.134,
+      "field_um": 102.697,
+      "floor_um": 11.725,
+      "c_if_min": 0.64783
+     },
+     {
+      "t_h": 0.8667,
+      "dt_s": 120.0,
+      "eta_mV": -104.978,
+      "field_um": 103.931,
+      "floor_um": 12.692,
+      "c_if_min": 0.64254
+     },
+     {
+      "t_h": 0.9333,
+      "dt_s": 120.0,
+      "eta_mV": -104.908,
+      "field_um": 105.162,
+      "floor_um": 13.653,
+      "c_if_min": 0.63605
+     },
+     {
+      "t_h": 1.0333,
+      "dt_s": 120.0,
+      "eta_mV": -104.945,
+      "field_um": 107.01,
+      "floor_um": 15.099,
+      "c_if_min": 0.63649
+     },
+     {
+      "t_h": 1.1,
+      "dt_s": 120.0,
+      "eta_mV": -105.1,
+      "field_um": 108.245,
+      "floor_um": 16.062,
+      "c_if_min": 0.6445
+     },
+     {
+      "t_h": 1.1667,
+      "dt_s": 120.0,
+      "eta_mV": -105.048,
+      "field_um": 109.478,
+      "floor_um": 17.023,
+      "c_if_min": 0.63876
+     },
+     {
+      "t_h": 1.2333,
+      "dt_s": 120.0,
+      "eta_mV": -104.952,
+      "field_um": 110.71,
+      "floor_um": 17.975,
+      "c_if_min": 0.62803
+     },
+     {
+      "t_h": 1.3333,
+      "dt_s": 120.0,
+      "eta_mV": -105.048,
+      "field_um": 112.561,
+      "floor_um": 19.404,
+      "c_if_min": 0.63276
+     },
+     {
+      "t_h": 1.4,
+      "dt_s": 120.0,
+      "eta_mV": -105.098,
+      "field_um": 113.796,
+      "floor_um": 20.363,
+      "c_if_min": 0.64156
+     },
+     {
+      "t_h": 1.4667,
+      "dt_s": 120.0,
+      "eta_mV": -105.056,
+      "field_um": 115.029,
+      "floor_um": 21.314,
+      "c_if_min": 0.63157
+     },
+     {
+      "t_h": 1.5333,
+      "dt_s": 120.0,
+      "eta_mV": -104.991,
+      "field_um": 116.264,
+      "floor_um": 22.257,
+      "c_if_min": 0.62424
+     },
+     {
+      "t_h": 1.6333,
+      "dt_s": 120.0,
+      "eta_mV": -105.12,
+      "field_um": 118.114,
+      "floor_um": 23.685,
+      "c_if_min": 0.63271
+     },
+     {
+      "t_h": 1.7,
+      "dt_s": 120.0,
+      "eta_mV": -105.127,
+      "field_um": 119.351,
+      "floor_um": 24.631,
+      "c_if_min": 0.63286
+     },
+     {
+      "t_h": 1.7667,
+      "dt_s": 120.0,
+      "eta_mV": -105.045,
+      "field_um": 120.586,
+      "floor_um": 25.572,
+      "c_if_min": 0.62717
+     },
+     {
+      "t_h": 1.8667,
+      "dt_s": 120.0,
+      "eta_mV": -105.165,
+      "field_um": 122.436,
+      "floor_um": 26.987,
+      "c_if_min": 0.62975
+     },
+     {
+      "t_h": 1.9333,
+      "dt_s": 120.0,
+      "eta_mV": -105.225,
+      "field_um": 123.673,
+      "floor_um": 27.927,
+      "c_if_min": 0.63293
+     },
+     {
+      "t_h": 2.0,
+      "dt_s": 120.0,
+      "eta_mV": -105.122,
+      "field_um": 124.909,
+      "floor_um": 28.865,
+      "c_if_min": 0.62835
+     },
+     {
+      "t_h": 2.0667,
+      "dt_s": 120.0,
+      "eta_mV": -105.086,
+      "field_um": 126.142,
+      "floor_um": 29.799,
+      "c_if_min": 0.62235
+     },
+     {
+      "t_h": 2.1667,
+      "dt_s": 120.0,
+      "eta_mV": -105.114,
+      "field_um": 127.996,
+      "floor_um": 31.192,
+      "c_if_min": 0.62107
+     },
+     {
+      "t_h": 2.2333,
+      "dt_s": 120.0,
+      "eta_mV": -105.17,
+      "field_um": 129.232,
+      "floor_um": 32.124,
+      "c_if_min": 0.62824
+     },
+     {
+      "t_h": 2.3,
+      "dt_s": 120.0,
+      "eta_mV": -105.555,
+      "field_um": 130.466,
+      "floor_um": 33.055,
+      "c_if_min": 0.61749
+     },
+     {
+      "t_h": 2.3667,
+      "dt_s": 120.0,
+      "eta_mV": -105.09,
+      "field_um": 131.703,
+      "floor_um": 33.974,
+      "c_if_min": 0.61212
+     },
+     {
+      "t_h": 2.4667,
+      "dt_s": 120.0,
+      "eta_mV": -105.144,
+      "field_um": 133.554,
+      "floor_um": 35.359,
+      "c_if_min": 0.61675
+     },
+     {
+      "t_h": 2.5333,
+      "dt_s": 120.0,
+      "eta_mV": -105.288,
+      "field_um": 134.791,
+      "floor_um": 36.284,
+      "c_if_min": 0.62061
+     },
+     {
+      "t_h": 2.6,
+      "dt_s": 120.0,
+      "eta_mV": -105.178,
+      "field_um": 136.029,
+      "floor_um": 37.201,
+      "c_if_min": 0.61457
+     },
+     {
+      "t_h": 2.6667,
+      "dt_s": 120.0,
+      "eta_mV": -105.143,
+      "field_um": 137.265,
+      "floor_um": 38.113,
+      "c_if_min": 0.60853
+     },
+     {
+      "t_h": 2.7667,
+      "dt_s": 120.0,
+      "eta_mV": -105.17,
+      "field_um": 139.119,
+      "floor_um": 39.481,
+      "c_if_min": 0.60748
+     },
+     {
+      "t_h": 2.8333,
+      "dt_s": 120.0,
+      "eta_mV": -105.283,
+      "field_um": 140.358,
+      "floor_um": 40.393,
+      "c_if_min": 0.6157
+     },
+     {
+      "t_h": 2.9,
+      "dt_s": 120.0,
+      "eta_mV": -105.22,
+      "field_um": 141.595,
+      "floor_um": 41.304,
+      "c_if_min": 0.61053
+     },
+     {
+      "t_h": 3.0,
+      "dt_s": 120.0,
+      "eta_mV": -105.098,
+      "field_um": 143.45,
+      "floor_um": 42.658,
+      "c_if_min": 0.596
+     },
+     {
+      "t_h": 3.0667,
+      "dt_s": 120.0,
+      "eta_mV": -105.23,
+      "field_um": 144.688,
+      "floor_um": 43.564,
+      "c_if_min": 0.60728
+     },
+     {
+      "t_h": 3.1333,
+      "dt_s": 120.0,
+      "eta_mV": -105.281,
+      "field_um": 145.925,
+      "floor_um": 44.469,
+      "c_if_min": 0.61166
+     },
+     {
+      "t_h": 3.2,
+      "dt_s": 120.0,
+      "eta_mV": -105.298,
+      "field_um": 147.167,
+      "floor_um": 45.367,
+      "c_if_min": 0.60136
+     },
+     {
+      "t_h": 3.3,
+      "dt_s": 120.0,
+      "eta_mV": -105.129,
+      "field_um": 149.023,
+      "floor_um": 46.704,
+      "c_if_min": 0.59217
+     },
+     {
+      "t_h": 3.3667,
+      "dt_s": 120.0,
+      "eta_mV": -105.313,
+      "field_um": 150.26,
+      "floor_um": 47.605,
+      "c_if_min": 0.60297
+     },
+     {
+      "t_h": 3.4333,
+      "dt_s": 120.0,
+      "eta_mV": -105.329,
+      "field_um": 151.501,
+      "floor_um": 48.496,
+      "c_if_min": 0.60249
+     },
+     {
+      "t_h": 3.5,
+      "dt_s": 120.0,
+      "eta_mV": -105.284,
+      "field_um": 152.74,
+      "floor_um": 49.384,
+      "c_if_min": 0.59805
+     },
+     {
+      "t_h": 3.6,
+      "dt_s": 120.0,
+      "eta_mV": -105.374,
+      "field_um": 154.598,
+      "floor_um": 50.711,
+      "c_if_min": 0.59642
+     },
+     {
+      "t_h": 3.6667,
+      "dt_s": 120.0,
+      "eta_mV": -105.298,
+      "field_um": 155.839,
+      "floor_um": 51.595,
+      "c_if_min": 0.59278
+     },
+     {
+      "t_h": 3.7333,
+      "dt_s": 120.0,
+      "eta_mV": -105.348,
+      "field_um": 157.078,
+      "floor_um": 52.477,
+      "c_if_min": 0.59818
+     },
+     {
+      "t_h": 3.8333,
+      "dt_s": 120.0,
+      "eta_mV": -105.267,
+      "field_um": 158.936,
+      "floor_um": 53.794,
+      "c_if_min": 0.58604
+     },
+     {
+      "t_h": 3.9,
+      "dt_s": 120.0,
+      "eta_mV": -105.35,
+      "field_um": 160.176,
+      "floor_um": 54.665,
+      "c_if_min": 0.59266
+     },
+     {
+      "t_h": 3.9667,
+      "dt_s": 120.0,
+      "eta_mV": -105.299,
+      "field_um": 161.415,
+      "floor_um": 55.541,
+      "c_if_min": 0.58744
+     },
+     {
+      "t_h": 4.0333,
+      "dt_s": 120.0,
+      "eta_mV": -105.504,
+      "field_um": 162.657,
+      "floor_um": 56.413,
+      "c_if_min": 0.5912
+     },
+     {
+      "t_h": 4.1333,
+      "dt_s": 120.0,
+      "eta_mV": -105.275,
+      "field_um": 164.518,
+      "floor_um": 57.709,
+      "c_if_min": 0.58051
+     },
+     {
+      "t_h": 4.2,
+      "dt_s": 120.0,
+      "eta_mV": -105.399,
+      "field_um": 165.757,
+      "floor_um": 58.572,
+      "c_if_min": 0.58757
+     },
+     {
+      "t_h": 4.2667,
+      "dt_s": 120.0,
+      "eta_mV": -105.316,
+      "field_um": 166.997,
+      "floor_um": 59.436,
+      "c_if_min": 0.57741
+     },
+     {
+      "t_h": 4.3333,
+      "dt_s": 120.0,
+      "eta_mV": -105.451,
+      "field_um": 168.239,
+      "floor_um": 60.293,
+      "c_if_min": 0.58565
+     },
+     {
+      "t_h": 4.4333,
+      "dt_s": 120.0,
+      "eta_mV": -105.339,
+      "field_um": 170.099,
+      "floor_um": 61.578,
+      "c_if_min": 0.57801
+     },
+     {
+      "t_h": 4.5,
+      "dt_s": 120.0,
+      "eta_mV": -105.451,
+      "field_um": 171.344,
+      "floor_um": 62.43,
+      "c_if_min": 0.57746
+     }
+    ],
+    "inputs": {
+     "d_um": 227.0,
+     "H_um": 88.0,
+     "j_mA_cm2": 15.0,
+     "hours": 4.5,
+     "T_C": 22.0,
+     "f_open": 0.2,
+     "delta_um": 64.0,
+     "dx_um": 4.0,
+     "max_overburden_um": 140.0,
+     "cfl": 0.5,
+     "dt_max_s": 120.0,
+     "reinit_every": 8,
+     "D_m2_s": 4.083403976806167e-10,
+     "D_cu_m2_s": 2.4465647352090183e-10,
+     "D_choice": "E_mig*D_cu (migration enhanced, as fields.py:303)",
+     "c_bulk_mol_m3": 1022.8810625373746,
+     "i0_A_m2": 20.0,
+     "alpha": 0.5,
+     "Mfac_m3_C": 3.6752671898356525e-11,
+     "omega_m3_mol": 7.0921875e-06,
+     "F_C_mol": 96485.332,
+     "f_RT_per_V": 39.31954538391511,
+     "grid": {
+      "nr": 142,
+      "nz": 84,
+      "dx_um": 3.9964788732394365,
+      "R_um": 567.5,
+      "a_um": 113.5,
+      "H_um": 88.0,
+      "z_lo_um": -15.985915492957748,
+      "z_top_um": 319.718309859155
+     },
+     "bc_cu2": "moving Dirichlet: cells with z >= z_face+delta pinned to c_bulk each step by row elimination on the FiPy matrix (option b; matches sim.py:178-181, a fixed facesTop would be overtaken by the front at ~3.2 h).  FiPy 4.0.3 does not put cell constraints into the matrix, so the plane is imposed explicitly",
+     "diffusion_face": "Hs = 0.5(1+tanh(phi/1.2dx)) smoothed face D (shared with platesim fields.py:40 StepGeom.Hs) instead of upstream's sharp _LevelSetDiffusionVariable, which isolates the solid-side interface cells",
+     "field_series_convention": "series[*].field_um is the ABSOLUTE z of the field surface in um (H + overburden); the summary field_um is the overburden above H",
+     "seed": "sharp-mask signed distance function; platesim additionally rounds the trench-mouth and floor corners with corner_cells=1.0 dx of reinit"
+    }
+   },
+   "platesim": {
+    "code": "platesim-levelset",
+    "field_um": 84.04,
+    "floor_um": 63.858906,
+    "field_mean_um": 72.02431959360852,
+    "mean_thickness_um": 89.42225395078441,
+    "ratio": 0.7598632317943835,
+    "stop_reason": "recipe_end",
+    "t_end_h": 4.5,
+    "steps": 141,
+    "charge_rel": 0.002569928866311688,
+    "max_balance_error": 0.0008120899554385774,
+    "cu_balance_rel": -0.000187,
+    "wall_s": 4.7191853523254395,
+    "warnings": [],
+    "inputs": {
+     "d_um": 227.0,
+     "H_um": 88.0,
+     "j_mA_cm2": 15.0,
+     "hours": 4.5,
+     "T_C": 22.0,
+     "f_open": 0.2,
+     "delta_um": 64.0,
+     "dx_um": 4.0,
+     "max_overburden_um": 140.0,
+     "dt_max_s": 120.0,
+     "params": {
+      "c_bulk": 0.0010228810625373746,
+      "D_cu25": 2.65e-06,
+      "E_mig": 1.6690357373508484,
+      "kappa_22": 0.065,
+      "kappa_per_K": 0.018,
+      "i0_u": 0.002,
+      "alpha_u": 0.5,
+      "i0_s": 1.3e-05,
+      "alpha_s": 0.5,
+      "i0_a": 0.002,
+      "alpha_a": 1.5,
+      "Ea_i0": 35000.0,
+      "T_ref_C": 22.0,
+      "suppressor": false,
+      "s_bulk": 8e-08,
+      "D_s25": 1e-06,
+      "Gamma": 9.2e-12,
+      "k_plus": 2500000000.0,
+      "k_minus": 1000000.0,
+      "theta0": 0.0,
+      "s_transient": true,
+      "k_rd": 0.0,
+      "use_accel": false,
+      "c_acc": 5e-09,
+      "k_acc": 1760000.0,
+      "b_acc": 173.07692307692307,
+      "delta_um": 64.0,
+      "D_t0": 0.001,
+      "k_mix": 0.0,
+      "flow_every": 10,
+      "flow_move_cells": 1.0,
+      "flow_shear_s": null,
+      "efficiency": 1.0,
+      "ohmic": false,
+      "geometry": "trench",
+      "H_um": 88.0,
+      "max_overburden_um": 140.0,
+      "dx_um": 4.0,
+      "corner_cells": 1.0,
+      "eps_fac": 1.2,
+      "n_active_eps": 3.5,
+      "cfl": 0.5,
+      "dt_max": 120.0,
+      "dt_min": 0.001,
+      "reinit_every": 4,
+      "fix_tol_bal": 0.002,
+      "fix_tol_c": 0.003,
+      "fix_tol_theta": 0.01,
+      "fix_maxit": 16,
+      "aa_depth": 5,
+      "fill_stop": 0.995,
+      "verbose": false,
+      "debug_iter": false
+     },
+     "grid": {
+      "nr": 142,
+      "nz": 84,
+      "dx_um": 3.9964788732394365,
+      "R_um": 567.5,
+      "z_lo_um": -15.985915492957748,
+      "z_top_um": 319.718309859155
+     }
+    },
+    "note": "field = overburden at x=R, floor = zero-level height at x=0 (same definitions as the FiPy side)"
+   },
+   "compare": {
+    "field_um": {
+     "fipy": 83.34387783958039,
+     "platesim": 84.04,
+     "diff_um": -0.6961221604196197
+    },
+    "floor_um": {
+     "fipy": 62.4300485466735,
+     "platesim": 63.858906,
+     "diff_um": -1.4288574533265006
+    },
+    "floor_over_field": {
+     "fipy": 0.7490658002119646,
+     "platesim": 0.7598632317943835,
+     "diff": -0.01079743158241897,
+     "abs_diff": 0.01079743158241897
+    },
+    "mean_thickness_um": {
+     "fipy": 89.55506156203512,
+     "platesim": 89.42225395078441
+    },
+    "tol": 0.02,
+    "passed": true
+   }
+  },
+  "wide": {
+   "fipy": {
+    "code": "fipy-4.0.3",
+    "field_um": 88.85213308862558,
+    "floor_um": 75.1519366139316,
+    "field_mean_um": 69.20456708440716,
+    "mean_thickness_um": 89.40456708440716,
+    "ratio": 0.8458090312696406,
+    "eta_mV": -109.57068481341031,
+    "t_end_h": 4.5,
+    "steps": 135,
+    "dt_last_s": 120.0,
+    "charge_rel": 0.00035914335996456437,
+    "area_dep_m2": 2.1084491916954892e-07,
+    "faraday_area_m2": 2.1076922280269444e-07,
+    "I_t_A_per_m": 0.35400000000000004,
+    "max_current_residual_A_per_m": 0.0,
+    "max_eta_step_mV": 0.937133588224559,
+    "galvanostat_residual_rel": 1.1368809221090938e-13,
+    "wall_s": 297.84230518341064,
+    "warnings": [],
+    "series": [
+     {
+      "t_h": 0.0333,
+      "dt_s": 120.0,
+      "eta_mV": -109.121,
+      "field_um": 96.663,
+      "floor_um": 0.566,
+      "c_if_min": 0.63855
+     },
+     {
+      "t_h": 0.1,
+      "dt_s": 120.0,
+      "eta_mV": -109.375,
+      "field_um": 97.991,
+      "floor_um": 1.692,
+      "c_if_min": 0.62185
+     },
+     {
+      "t_h": 0.2,
+      "dt_s": 120.0,
+      "eta_mV": -109.287,
+      "field_um": 99.984,
+      "floor_um": 3.38,
+      "c_if_min": 0.63522
+     },
+     {
+      "t_h": 0.2667,
+      "dt_s": 120.0,
+      "eta_mV": -109.359,
+      "field_um": 101.313,
+      "floor_um": 4.505,
+      "c_if_min": 0.63006
+     },
+     {
+      "t_h": 0.3333,
+      "dt_s": 120.0,
+      "eta_mV": -109.436,
+      "field_um": 102.642,
+      "floor_um": 5.63,
+      "c_if_min": 0.62443
+     },
+     {
+      "t_h": 0.4,
+      "dt_s": 120.0,
+      "eta_mV": -109.302,
+      "field_um": 103.971,
+      "floor_um": 6.751,
+      "c_if_min": 0.62675
+     },
+     {
+      "t_h": 0.5,
+      "dt_s": 120.0,
+      "eta_mV": -109.387,
+      "field_um": 105.965,
+      "floor_um": 8.44,
+      "c_if_min": 0.63234
+     },
+     {
+      "t_h": 0.5667,
+      "dt_s": 120.0,
+      "eta_mV": -109.346,
+      "field_um": 107.295,
+      "floor_um": 9.562,
+      "c_if_min": 0.6241
+     },
+     {
+      "t_h": 0.6333,
+      "dt_s": 120.0,
+      "eta_mV": -109.319,
+      "field_um": 108.624,
+      "floor_um": 10.683,
+      "c_if_min": 0.61583
+     },
+     {
+      "t_h": 0.7,
+      "dt_s": 120.0,
+      "eta_mV": -109.366,
+      "field_um": 109.953,
+      "floor_um": 11.809,
+      "c_if_min": 0.62283
+     },
+     {
+      "t_h": 0.8,
+      "dt_s": 120.0,
+      "eta_mV": -109.363,
+      "field_um": 111.949,
+      "floor_um": 13.491,
+      "c_if_min": 0.62474
+     },
+     {
+      "t_h": 0.8667,
+      "dt_s": 120.0,
+      "eta_mV": -109.375,
+      "field_um": 113.279,
+      "floor_um": 14.612,
+      "c_if_min": 0.61882
+     },
+     {
+      "t_h": 0.9333,
+      "dt_s": 120.0,
+      "eta_mV": -109.438,
+      "field_um": 114.607,
+      "floor_um": 15.739,
+      "c_if_min": 0.62518
+     },
+     {
+      "t_h": 1.0333,
+      "dt_s": 120.0,
+      "eta_mV": -109.42,
+      "field_um": 116.603,
+      "floor_um": 17.416,
+      "c_if_min": 0.62665
+     },
+     {
+      "t_h": 1.1,
+      "dt_s": 120.0,
+      "eta_mV": -109.433,
+      "field_um": 117.933,
+      "floor_um": 18.533,
+      "c_if_min": 0.62116
+     },
+     {
+      "t_h": 1.1667,
+      "dt_s": 120.0,
+      "eta_mV": -109.311,
+      "field_um": 119.262,
+      "floor_um": 19.656,
+      "c_if_min": 0.61126
+     },
+     {
+      "t_h": 1.2333,
+      "dt_s": 120.0,
+      "eta_mV": -109.383,
+      "field_um": 120.592,
+      "floor_um": 20.773,
+      "c_if_min": 0.61743
+     },
+     {
+      "t_h": 1.3333,
+      "dt_s": 120.0,
+      "eta_mV": -109.493,
+      "field_um": 122.588,
+      "floor_um": 22.45,
+      "c_if_min": 0.6227
+     },
+     {
+      "t_h": 1.4,
+      "dt_s": 120.0,
+      "eta_mV": -109.346,
+      "field_um": 123.918,
+      "floor_um": 23.569,
+      "c_if_min": 0.61341
+     },
+     {
+      "t_h": 1.4667,
+      "dt_s": 120.0,
+      "eta_mV": -109.376,
+      "field_um": 125.248,
+      "floor_um": 24.687,
+      "c_if_min": 0.60593
+     },
+     {
+      "t_h": 1.5333,
+      "dt_s": 120.0,
+      "eta_mV": -109.48,
+      "field_um": 126.578,
+      "floor_um": 25.805,
+      "c_if_min": 0.61479
+     },
+     {
+      "t_h": 1.6333,
+      "dt_s": 120.0,
+      "eta_mV": -109.383,
+      "field_um": 128.575,
+      "floor_um": 27.479,
+      "c_if_min": 0.61587
+     },
+     {
+      "t_h": 1.7,
+      "dt_s": 120.0,
+      "eta_mV": -109.425,
+      "field_um": 129.905,
+      "floor_um": 28.597,
+      "c_if_min": 0.60909
+     },
+     {
+      "t_h": 1.7667,
+      "dt_s": 120.0,
+      "eta_mV": -109.38,
+      "field_um": 131.235,
+      "floor_um": 29.712,
+      "c_if_min": 0.61307
+     },
+     {
+      "t_h": 1.8667,
+      "dt_s": 120.0,
+      "eta_mV": -109.415,
+      "field_um": 133.232,
+      "floor_um": 31.386,
+      "c_if_min": 0.61737
+     },
+     {
+      "t_h": 1.9333,
+      "dt_s": 120.0,
+      "eta_mV": -109.473,
+      "field_um": 134.561,
+      "floor_um": 32.505,
+      "c_if_min": 0.61213
+     },
+     {
+      "t_h": 2.0,
+      "dt_s": 120.0,
+      "eta_mV": -109.378,
+      "field_um": 135.893,
+      "floor_um": 33.615,
+      "c_if_min": 0.60076
+     },
+     {
+      "t_h": 2.0667,
+      "dt_s": 120.0,
+      "eta_mV": -109.417,
+      "field_um": 137.224,
+      "floor_um": 34.73,
+      "c_if_min": 0.60968
+     },
+     {
+      "t_h": 2.1667,
+      "dt_s": 120.0,
+      "eta_mV": -109.401,
+      "field_um": 139.22,
+      "floor_um": 36.405,
+      "c_if_min": 0.61175
+     },
+     {
+      "t_h": 2.2333,
+      "dt_s": 120.0,
+      "eta_mV": -109.411,
+      "field_um": 140.552,
+      "floor_um": 37.516,
+      "c_if_min": 0.6037
+     },
+     {
+      "t_h": 2.3,
+      "dt_s": 120.0,
+      "eta_mV": -109.427,
+      "field_um": 141.882,
+      "floor_um": 38.63,
+      "c_if_min": 0.59592
+     },
+     {
+      "t_h": 2.3667,
+      "dt_s": 120.0,
+      "eta_mV": -109.383,
+      "field_um": 143.213,
+      "floor_um": 39.746,
+      "c_if_min": 0.6078
+     },
+     {
+      "t_h": 2.4667,
+      "dt_s": 120.0,
+      "eta_mV": -109.467,
+      "field_um": 145.211,
+      "floor_um": 41.413,
+      "c_if_min": 0.60704
+     },
+     {
+      "t_h": 2.5333,
+      "dt_s": 120.0,
+      "eta_mV": -109.498,
+      "field_um": 146.541,
+      "floor_um": 42.522,
+      "c_if_min": 0.59894
+     },
+     {
+      "t_h": 2.6,
+      "dt_s": 120.0,
+      "eta_mV": -109.422,
+      "field_um": 147.873,
+      "floor_um": 43.634,
+      "c_if_min": 0.60402
+     },
+     {
+      "t_h": 2.6667,
+      "dt_s": 120.0,
+      "eta_mV": -109.471,
+      "field_um": 149.204,
+      "floor_um": 44.745,
+      "c_if_min": 0.61099
+     },
+     {
+      "t_h": 2.7667,
+      "dt_s": 120.0,
+      "eta_mV": -109.422,
+      "field_um": 151.202,
+      "floor_um": 46.408,
+      "c_if_min": 0.59907
+     },
+     {
+      "t_h": 2.8333,
+      "dt_s": 120.0,
+      "eta_mV": -109.395,
+      "field_um": 152.533,
+      "floor_um": 47.519,
+      "c_if_min": 0.59055
+     },
+     {
+      "t_h": 2.9,
+      "dt_s": 120.0,
+      "eta_mV": -109.498,
+      "field_um": 153.864,
+      "floor_um": 48.631,
+      "c_if_min": 0.60536
+     },
+     {
+      "t_h": 3.0,
+      "dt_s": 120.0,
+      "eta_mV": -109.461,
+      "field_um": 155.863,
+      "floor_um": 50.29,
+      "c_if_min": 0.60104
+     },
+     {
+      "t_h": 3.0667,
+      "dt_s": 120.0,
+      "eta_mV": -109.438,
+      "field_um": 157.195,
+      "floor_um": 51.401,
+      "c_if_min": 0.5937
+     },
+     {
+      "t_h": 3.1333,
+      "dt_s": 120.0,
+      "eta_mV": -109.546,
+      "field_um": 158.526,
+      "floor_um": 52.513,
+      "c_if_min": 0.60518
+     },
+     {
+      "t_h": 3.2,
+      "dt_s": 120.0,
+      "eta_mV": -109.499,
+      "field_um": 159.859,
+      "floor_um": 53.617,
+      "c_if_min": 0.606
+     },
+     {
+      "t_h": 3.3,
+      "dt_s": 120.0,
+      "eta_mV": -109.474,
+      "field_um": 161.857,
+      "floor_um": 55.281,
+      "c_if_min": 0.59659
+     },
+     {
+      "t_h": 3.3667,
+      "dt_s": 120.0,
+      "eta_mV": -109.403,
+      "field_um": 163.188,
+      "floor_um": 56.389,
+      "c_if_min": 0.5864
+     },
+     {
+      "t_h": 3.4333,
+      "dt_s": 120.0,
+      "eta_mV": -109.487,
+      "field_um": 164.521,
+      "floor_um": 57.493,
+      "c_if_min": 0.59787
+     },
+     {
+      "t_h": 3.5,
+      "dt_s": 120.0,
+      "eta_mV": -109.536,
+      "field_um": 165.854,
+      "floor_um": 58.601,
+      "c_if_min": 0.60313
+     },
+     {
+      "t_h": 3.6,
+      "dt_s": 120.0,
+      "eta_mV": -109.436,
+      "field_um": 167.853,
+      "floor_um": 60.262,
+      "c_if_min": 0.58865
+     },
+     {
+      "t_h": 3.6667,
+      "dt_s": 120.0,
+      "eta_mV": -109.525,
+      "field_um": 169.186,
+      "floor_um": 61.366,
+      "c_if_min": 0.59973
+     },
+     {
+      "t_h": 3.7333,
+      "dt_s": 120.0,
+      "eta_mV": -109.606,
+      "field_um": 170.518,
+      "floor_um": 62.47,
+      "c_if_min": 0.60438
+     },
+     {
+      "t_h": 3.8333,
+      "dt_s": 120.0,
+      "eta_mV": -109.479,
+      "field_um": 172.518,
+      "floor_um": 64.127,
+      "c_if_min": 0.5915
+     },
+     {
+      "t_h": 3.9,
+      "dt_s": 120.0,
+      "eta_mV": -109.552,
+      "field_um": 173.851,
+      "floor_um": 65.231,
+      "c_if_min": 0.60077
+     },
+     {
+      "t_h": 3.9667,
+      "dt_s": 120.0,
+      "eta_mV": -109.499,
+      "field_um": 175.184,
+      "floor_um": 66.331,
+      "c_if_min": 0.59377
+     },
+     {
+      "t_h": 4.0333,
+      "dt_s": 120.0,
+      "eta_mV": -109.519,
+      "field_um": 176.518,
+      "floor_um": 67.437,
+      "c_if_min": 0.59792
+     },
+     {
+      "t_h": 4.1333,
+      "dt_s": 120.0,
+      "eta_mV": -109.562,
+      "field_um": 178.516,
+      "floor_um": 69.093,
+      "c_if_min": 0.58807
+     },
+     {
+      "t_h": 4.2,
+      "dt_s": 120.0,
+      "eta_mV": -109.53,
+      "field_um": 179.851,
+      "floor_um": 70.19,
+      "c_if_min": 0.59291
+     },
+     {
+      "t_h": 4.2667,
+      "dt_s": 120.0,
+      "eta_mV": -109.547,
+      "field_um": 181.184,
+      "floor_um": 71.295,
+      "c_if_min": 0.59971
+     },
+     {
+      "t_h": 4.3333,
+      "dt_s": 120.0,
+      "eta_mV": -109.583,
+      "field_um": 182.517,
+      "floor_um": 72.401,
+      "c_if_min": 0.59326
+     },
+     {
+      "t_h": 4.4333,
+      "dt_s": 120.0,
+      "eta_mV": -109.551,
+      "field_um": 184.519,
+      "floor_um": 74.046,
+      "c_if_min": 0.59466
+     },
+     {
+      "t_h": 4.5,
+      "dt_s": 120.0,
+      "eta_mV": -109.571,
+      "field_um": 185.852,
+      "floor_um": 75.152,
+      "c_if_min": 0.5891
+     }
+    ],
+    "inputs": {
+     "d_um": 944.0,
+     "H_um": 97.0,
+     "j_mA_cm2": 15.0,
+     "hours": 4.5,
+     "T_C": 22.0,
+     "f_open": 0.2,
+     "delta_um": 64.0,
+     "dx_um": 4.0,
+     "max_overburden_um": 140.0,
+     "cfl": 0.5,
+     "dt_max_s": 120.0,
+     "reinit_every": 8,
+     "D_m2_s": 4.083403976806167e-10,
+     "D_cu_m2_s": 2.4465647352090183e-10,
+     "D_choice": "E_mig*D_cu (migration enhanced, as fields.py:303)",
+     "c_bulk_mol_m3": 1022.8810625373746,
+     "i0_A_m2": 20.0,
+     "alpha": 0.5,
+     "Mfac_m3_C": 3.6752671898356525e-11,
+     "omega_m3_mol": 7.0921875e-06,
+     "F_C_mol": 96485.332,
+     "f_RT_per_V": 39.31954538391511,
+     "grid": {
+      "nr": 590,
+      "nz": 86,
+      "dx_um": 4.0,
+      "R_um": 2360.0,
+      "a_um": 472.0,
+      "H_um": 97.0,
+      "z_lo_um": -16.0,
+      "z_top_um": 328.0
+     },
+     "bc_cu2": "moving Dirichlet: cells with z >= z_face+delta pinned to c_bulk each step by row elimination on the FiPy matrix (option b; matches sim.py:178-181, a fixed facesTop would be overtaken by the front at ~3.2 h).  FiPy 4.0.3 does not put cell constraints into the matrix, so the plane is imposed explicitly",
+     "diffusion_face": "Hs = 0.5(1+tanh(phi/1.2dx)) smoothed face D (shared with platesim fields.py:40 StepGeom.Hs) instead of upstream's sharp _LevelSetDiffusionVariable, which isolates the solid-side interface cells",
+     "field_series_convention": "series[*].field_um is the ABSOLUTE z of the field surface in um (H + overburden); the summary field_um is the overburden above H",
+     "seed": "sharp-mask signed distance function; platesim additionally rounds the trench-mouth and floor corners with corner_cells=1.0 dx of reinit"
+    }
+   },
+   "platesim": {
+    "code": "platesim-levelset",
+    "field_um": 90.1,
+    "floor_um": 75.042146,
+    "field_mean_um": 70.02763649856324,
+    "mean_thickness_um": 89.43012058730348,
+    "ratio": 0.8328762042175362,
+    "stop_reason": "recipe_end",
+    "t_end_h": 4.5,
+    "steps": 141,
+    "charge_rel": 0.0014326987417490056,
+    "max_balance_error": 0.0006548157862810156,
+    "cu_balance_rel": -0.000182,
+    "wall_s": 22.812878847122192,
+    "warnings": [],
+    "inputs": {
+     "d_um": 944.0,
+     "H_um": 97.0,
+     "j_mA_cm2": 15.0,
+     "hours": 4.5,
+     "T_C": 22.0,
+     "f_open": 0.2,
+     "delta_um": 64.0,
+     "dx_um": 4.0,
+     "max_overburden_um": 140.0,
+     "dt_max_s": 120.0,
+     "params": {
+      "c_bulk": 0.0010228810625373746,
+      "D_cu25": 2.65e-06,
+      "E_mig": 1.6690357373508484,
+      "kappa_22": 0.065,
+      "kappa_per_K": 0.018,
+      "i0_u": 0.002,
+      "alpha_u": 0.5,
+      "i0_s": 1.3e-05,
+      "alpha_s": 0.5,
+      "i0_a": 0.002,
+      "alpha_a": 1.5,
+      "Ea_i0": 35000.0,
+      "T_ref_C": 22.0,
+      "suppressor": false,
+      "s_bulk": 8e-08,
+      "D_s25": 1e-06,
+      "Gamma": 9.2e-12,
+      "k_plus": 2500000000.0,
+      "k_minus": 1000000.0,
+      "theta0": 0.0,
+      "s_transient": true,
+      "k_rd": 0.0,
+      "use_accel": false,
+      "c_acc": 5e-09,
+      "k_acc": 1760000.0,
+      "b_acc": 173.07692307692307,
+      "delta_um": 64.0,
+      "D_t0": 0.001,
+      "k_mix": 0.0,
+      "flow_every": 10,
+      "flow_move_cells": 1.0,
+      "flow_shear_s": null,
+      "efficiency": 1.0,
+      "ohmic": false,
+      "geometry": "trench",
+      "H_um": 97.0,
+      "max_overburden_um": 140.0,
+      "dx_um": 4.0,
+      "corner_cells": 1.0,
+      "eps_fac": 1.2,
+      "n_active_eps": 3.5,
+      "cfl": 0.5,
+      "dt_max": 120.0,
+      "dt_min": 0.001,
+      "reinit_every": 4,
+      "fix_tol_bal": 0.002,
+      "fix_tol_c": 0.003,
+      "fix_tol_theta": 0.01,
+      "fix_maxit": 16,
+      "aa_depth": 5,
+      "fill_stop": 0.995,
+      "verbose": false,
+      "debug_iter": false
+     },
+     "grid": {
+      "nr": 590,
+      "nz": 86,
+      "dx_um": 4.0,
+      "R_um": 2360.0,
+      "z_lo_um": -16.0,
+      "z_top_um": 328.0
+     }
+    },
+    "note": "field = overburden at x=R, floor = zero-level height at x=0 (same definitions as the FiPy side)"
+   },
+   "compare": {
+    "field_um": {
+     "fipy": 88.85213308862558,
+     "platesim": 90.1,
+     "diff_um": -1.247866911374416
+    },
+    "floor_um": {
+     "fipy": 75.1519366139316,
+     "platesim": 75.042146,
+     "diff_um": 0.10979061393159384
+    },
+    "floor_over_field": {
+     "fipy": 0.8458090312696406,
+     "platesim": 0.8328762042175362,
+     "diff": 0.012932827052104412,
+     "abs_diff": 0.012932827052104412
+    },
+    "mean_thickness_um": {
+     "fipy": 89.40456708440716,
+     "platesim": 89.43012058730348
+    },
+    "tol": 0.02,
+    "passed": true
+   }
+  }
+ },
+ "summary": {
+  "n_compared": 2,
+  "max_abs_d_ratio": 0.012932827052104412,
+  "passed": true,
+  "tol": 0.02,
+  "runtime_s": 410.7,
+  "passed_by_site": {
+   "narrow": true,
+   "wide": true
+  },
+  "fipy_wall_s": {
+   "narrow": 85.3,
+   "wide": 297.8
+  },
+  "platesim_wall_s": {
+   "narrow": 4.7,
+   "wide": 22.8
+  },
+  "bc_choice": "option (b), a genuinely moving top boundary: cells with z >= z_face+delta are pinned to c_bulk every step (row elimination on the FiPy matrix).  The quasi-steady flux matches platesim's delta-plane Dirichlet, but NOT exactly: the pin sits on the first cell row at or above the plane, so the effective plane is 0-1 dx above platesim's, i.e. 0-6.25 % (mean 0.5 dx = 2 um, 3.1 %) of delta = 64 um at dx 4.  Because the flux scales as 1/delta, that perturbs the surface concentration by ~(j/j_lim)*(0-6.25 %) <~0.7 % of c_bulk (mean ~0.4 %), and floor/field by a few 1e-3.  It is the leading known boundary-condition discretisation term of this comparison, not negligible by construction",
+  "fipy_version": "4.0.3",
+  "notes": [
+   "FiPy 4.0.3 does not apply CellVariable cell constraints to the linear system (fipy/variables/variable.py only masks .value), so the moving Dirichlet is imposed by row elimination instead of var.constrain(...)",
+   "D_face uses platesim's smeared Hs = 0.5(1+tanh(phi/1.2dx)) (fields.py StepGeom.Hs); the upstream sharp _LevelSetDiffusionVariable isolates solid-side interface cells and the implicit sink then drains them to c=0"
+  ],
+  "series_note": "sites.<name>.fipy.series field_um is the ABSOLUTE z of the field surface in um; the summary field_um is the overburden above H (same convention as platesim)"
+ }
+}

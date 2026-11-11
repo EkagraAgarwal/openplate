@@ -1,0 +1,171 @@
+{
+  "id": "braun2019_tsv_sn_dr_parameters",
+  "file": "braun2019_tsv_sn_dr_parameters.json",
+  "source": {
+    "authors": [
+      "T. M. Braun",
+      "D. Josell",
+      "M. Silva",
+      "J. Kildon",
+      "T. P. Moffat"
+    ],
+    "year": 2019,
+    "title": "Effect of Chloride Concentration on Copper Deposition in Through Silicon Vias",
+    "journal": "J. Electrochem. Soc. 166 (1) D3259-D3270",
+    "doi": "10.1149/2.0341901jes",
+    "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC7537470/"
+  },
+  "tag": "[FT] full text (PMC manuscript) read 2026-10-28; Table I transcribed verbatim",
+  "conditions": {
+    "bath": "1 mol/L CuSO4 + 0.5 mol/L H2SO4, 40 umol/L Tetronic 701, NaCl 4-80 umol/L",
+    "temperature_K": 293,
+    "reference_electrode": "SSE",
+    "E_reversible_V_vs_SSE": -0.38,
+    "hydrodynamics": "RDE 25-1600 rpm; filling at 100 rpm (delta=25 um)",
+    "geometry": "annular TSV Ri 4 um, Ro 9.5 um, h 56 um"
+  },
+  "parameters": [
+    {
+      "name": "D_Cu2+",
+      "value": 2.65e-10,
+      "units": "m2/s",
+      "note": "=2.65e-6 cm2/s, Quickenden & Xu"
+    },
+    {
+      "name": "D_Cl-",
+      "value": 9e-10,
+      "units": "m2/s",
+      "note": "fit"
+    },
+    {
+      "name": "D_polyether",
+      "value": 1e-10,
+      "units": "m2/s"
+    },
+    {
+      "name": "D_SO4",
+      "value": 1.07e-10,
+      "units": "m2/s"
+    },
+    {
+      "name": "D_H",
+      "value": 9.31e-09,
+      "units": "m2/s"
+    },
+    {
+      "name": "D_Na",
+      "value": 1.33e-09,
+      "units": "m2/s"
+    },
+    {
+      "name": "C_Cu0",
+      "value": 1000,
+      "units": "mol/m3"
+    },
+    {
+      "name": "C_P0",
+      "value": 0.04,
+      "units": "mol/m3",
+      "note": "40 umol/L"
+    },
+    {
+      "name": "delta@100rpm",
+      "value": 2.5e-05,
+      "units": "m",
+      "note": "omega^-0.5"
+    },
+    {
+      "name": "Gamma_Cl",
+      "value": 1.62e-05,
+      "units": "mol/m2"
+    },
+    {
+      "name": "Gamma_P",
+      "value": 9.2e-08,
+      "units": "mol/m2"
+    },
+    {
+      "name": "k_Cl+",
+      "value": 20,
+      "units": "m3/(mol s)"
+    },
+    {
+      "name": "k_Cl-",
+      "value": 15000000.0,
+      "units": "1/m"
+    },
+    {
+      "name": "k_P+_low",
+      "value": 50,
+      "units": "m3/(mol s)",
+      "note": "LOW-k set; insufficient for 1 mmol/L Cl bottom-up"
+    },
+    {
+      "name": "k_P-_low",
+      "value": 50000.0,
+      "units": "1/m"
+    },
+    {
+      "name": "j0_unsupp",
+      "value": 20,
+      "units": "A/m2",
+      "note": "2.0e-3 A/cm2"
+    },
+    {
+      "name": "j0_supp",
+      "value": 0.13,
+      "units": "A/m2",
+      "note": "1.3e-5 A/cm2; ratio 154"
+    },
+    {
+      "name": "alpha0",
+      "value": 0.5,
+      "units": "-"
+    },
+    {
+      "name": "alpha1",
+      "value": 0.5,
+      "units": "-"
+    },
+    {
+      "name": "Omega",
+      "value": 7.1e-06,
+      "units": "m3/mol"
+    },
+    {
+      "name": "kappa",
+      "value": 15.26,
+      "units": "S/m",
+      "note": "HIGH-acid 1M CuSO4+0.5M H2SO4; not team bath"
+    },
+    {
+      "name": "T",
+      "value": 293,
+      "units": "K"
+    }
+  ],
+  "data": [
+    {
+      "kind": "experiment",
+      "measurement": "breakdown potential vs log[Cl-]",
+      "result": "-60 mV/dec at 1600 rpm; flux-limited deviations at low Cl/low rpm",
+      "tag": "[FT]"
+    },
+    {
+      "kind": "experiment",
+      "measurement": "bottom-up growth 80 umol/L Cl -0.54 V",
+      "result": "21 nm/s ~ 58 mA/cm2; 3/4 fill at 30 min; stall at -0.52 V; voids at -0.56 V",
+      "tag": "[FT]"
+    },
+    {
+      "kind": "experiment",
+      "measurement": "transition depth vs E",
+      "result": "depth increases with [Cl-], shifts up with E in 20 mV steps; model within 20-60 mV (their Fig 7 not tabulated)",
+      "tag": "[FT] text"
+    }
+  ],
+  "units": {
+    "system": "SI base"
+  },
+  "notes": "KB v1.6 LOW-k set source. Distinct from Braun 2020 high-k. No digitisation done; Figs 2,7 candidates (est err depth +-2 um/56 um via, E +-10 mV)."
+}

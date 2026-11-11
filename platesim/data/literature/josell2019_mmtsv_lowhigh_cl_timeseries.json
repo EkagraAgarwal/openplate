@@ -1,0 +1,147 @@
+{
+  "id": "josell2019_mmtsv_lowhigh_cl_timeseries",
+  "file": "josell2019_mmtsv_lowhigh_cl_timeseries.json",
+  "source": {
+    "authors": [
+      "D. Josell",
+      "L. A. Menk",
+      "A. E. Hollowell",
+      "M. Blain",
+      "T. P. Moffat"
+    ],
+    "year": 2019,
+    "title": "Bottom-Up Copper Filling of Millimeter Size Through Silicon Vias",
+    "journal": "J. Electrochem. Soc. 166 (1) D3254-D3265",
+    "doi": "10.1149/2.0321901jes",
+    "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC7542680/"
+  },
+  "tag": "[FT] full text (PMC, OA CC BY-NC-ND) read 2026-10-28",
+  "conditions": {
+    "bath": "1 mol/L CuSO4 + 0.5 mol/L H2SO4 + Tetronic 701 + NaCl (low Cl: 80 umol/L Cl + 40 umol/L TET; high Cl: 1 mmol/L Cl + 25-50 umol/L TET)",
+    "temperature": "room temperature",
+    "hydrodynamics": "helicopter rotation 400 rpm (~40 cm/s at ~1 cm radius); prewet EtOH/IPA vacuum; 2 min -0.40 V mix step",
+    "reference": "SSE",
+    "vias": "125 um dia x ~625 um deep (mm-TSV), ALD Pt seed including re-entrant notch"
+  },
+  "data": [
+    {
+      "kind": "time_series_low_cl",
+      "E_V_vs_SSE": -0.51,
+      "Cl_umol_L": 80,
+      "TET_umol_L": 40,
+      "rpm": 400,
+      "series": [
+        {
+          "t_h": 1,
+          "morphology": "deposition localized at via bottom; sidewall passive-active transition; concave front",
+          "tag": "[FT] fig 1"
+        },
+        {
+          "t_h": 6,
+          "morphology": "upward filling progressed but does not reach mouth",
+          "tag": "[FT] text/fig 2"
+        }
+      ],
+      "note": "their Fig 2 shows multiple times at -0.51 V; individual heights not in text - digitise Fig 2 for h(t) (est. error +-20 um)",
+      "tag": "[FT]"
+    },
+    {
+      "kind": "stepped_protocol_low_cl",
+      "Cl_umol_L": 80,
+      "TET_umol_L": 40,
+      "protocols": [
+        {
+          "steps": "6 h at -0.51",
+          "total_h": 6,
+          "outcome": "insufficient fill"
+        },
+        {
+          "steps": "3x2 h: -0.51,-0.52,-0.53",
+          "total_h": 6,
+          "outcome": "higher sidewall deposit than 6 h at -0.51"
+        },
+        {
+          "steps": "6x1 h: -0.51..-0.56",
+          "total_h": 6,
+          "outcome": "v-notch front deepening"
+        },
+        {
+          "steps": "5x1 h: -0.51..-0.55 then 5 h at -0.56",
+          "total_h": 10,
+          "outcome": "central void: stepped too fast"
+        },
+        {
+          "steps": "5x1.5 h: -0.51..-0.55 then 5 h at -0.56",
+          "total_h": 12.5,
+          "outcome": "VOID-FREE fill (recommended protocol)"
+        },
+        {
+          "steps": "5x3 h: -0.51..-0.55 then 0.75 h at -0.56",
+          "total_h": 15.75,
+          "outcome": "fill indistinguishable from 12.5 h run; halts just below mouth at final -0.56 V"
+        }
+      ],
+      "tag": "[FT]"
+    },
+    {
+      "kind": "time_series_high_cl",
+      "E_V_vs_SSE": -0.6,
+      "Cl_mmol_L": 1,
+      "TET_umol_L": 25,
+      "rpm": 400,
+      "series": [
+        {
+          "tag": "[FT] fig 6 shows several times; growth front convex, max at via middle, cusps at sidewalls, asymmetry from flow"
+        }
+      ],
+      "note": "digitise their Fig 6 for h(t) (est. error +-20 um)"
+    },
+    {
+      "kind": "outcomes_high_cl",
+      "points": [
+        {
+          "E": -0.61,
+          "TET": 35,
+          "t_h": [
+            3,
+            5.75
+          ],
+          "tag": "[FT] fig 7a,b"
+        },
+        {
+          "E": -0.62,
+          "TET": 50,
+          "t_h": [
+            7,
+            12
+          ],
+          "outcome": "active deposition stops before mouth; 12 h still below mouth",
+          "tag": "[FT]"
+        },
+        {
+          "E": "-0.62_then_-0.64",
+          "protocol": "4 h at -0.62, 2 s at -0.8 (re-activation), then 2 h at -0.64",
+          "outcome": "transition moved up; bottom of voided region marks 4 h front",
+          "tag": "[FT]"
+        },
+        {
+          "E": "-0.62_400rpm_then_-0.64_200rpm",
+          "protocol": "4 h at -0.62 @400 rpm then 1.5 h at -0.64 @200 rpm",
+          "outcome": "deposit exits via mouth (rpm reduction helps final fill)",
+          "tag": "[FT]"
+        },
+        {
+          "condition": "100 or 200 rpm from start, -0.60/-0.62/-0.66 V",
+          "outcome": "NO bottom-up initiation: metal-ion transport insufficient",
+          "tag": "[FT]"
+        }
+      ]
+    }
+  ],
+  "units": {
+    "E": "V vs SSE",
+    "t": "h",
+    "Cl": "umol/L or mmol/L"
+  },
+  "notes": "The 12.5 h protocol (5x1.5 h -0.51..-0.55 + 5 h -0.56, low Cl) is the published VOID-FREE recipe for 125x625 um mm-TSV at 400 rpm, ~295 K. Critical negative result for our sim: rotation below ~200 rpm kills bottom-up in 1 mmol/L Cl baths (metal transport starvation) - supports 'never stir zero, fix rpm' rule. Fill fronts at fixed -0.51 V (low Cl) and -0.60 V (high Cl) are the two h(t) series to digitise for model validation."
+}

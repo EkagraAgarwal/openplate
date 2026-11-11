@@ -1,0 +1,93 @@
+{
+  "id": "mass_transfer_anchors_rde_stirring",
+  "file": "mass_transfer_anchors_rde_stirring.json",
+  "source": {
+    "compiled_from": [
+      "T. M. Braun et al 2019 JES 166:D3259 doi 10.1149/2.0341901jes [FT Table I]",
+      "T. M. Braun et al 2020 JES 167:013510 doi 10.1149/2.0102001JES [FT Table I]",
+      "D. Josell et al 2019 JES 166:D3254 doi 10.1149/2.0321901jes [FT text]",
+      "L. A. Menk et al 2019 JES 166:D3066 doi 10.1149/2.0091901jes [FT text + FLUENT]",
+      "A. Avdeef 2022 ADMET DMPK 10:249 doi 10.5599/admet.1568 [AB - DOI verified via Crossref; PDF not retrieved; KB already holds delta ~ rpm^-0.5]",
+      "N. Touabi et al 2015 Int. J. Electrochem. Sci. 10:7227 doi 10.1016/S1452-3981(23)17344-5 [AB - DOI verified; numbers already known to KB]",
+      "T. I. Quickenden & Q. Xu 1996 JES 143:1248 doi 10.1149/1.1836624 [SH via Braun Table I citations]"
+    ]
+  },
+  "tag": "mixed: each item tagged individually",
+  "data": [
+    {
+      "kind": "rde_boundary_layer",
+      "source": "Braun 2019/2020 Table I",
+      "delta_um": 25,
+      "rpm": 100,
+      "scaling": "delta ~ omega^-0.5",
+      "implied_delta_um_400rpm": 12.5,
+      "implied_delta_um_1600rpm": 6.25,
+      "kappa_note": "",
+      "km_Cu_at_100rpm_cm_s": 0.106,
+      "km_Cu_at_400rpm_cm_s": 0.212,
+      "km_calc": "[C] k_m = D/δ with D_Cu = 2.65e-6 cm2/s",
+      "tag": "[FT] delta; [C] k_m"
+    },
+    {
+      "kind": "rde_boundary_layer_large",
+      "source": "Braun 2020 large-TH case",
+      "delta_um": 6.25,
+      "rpm_equiv": 2600,
+      "tag": "[FT]"
+    },
+    {
+      "kind": "d_Cu",
+      "value": 2.65e-06,
+      "units": "cm2/s",
+      "conditions": "~1 M CuSO4, 20-25 C",
+      "source_chain": "Quickenden & Xu 1996 (DOIs 10.1149/1.1836624 verified) via Braun 2019 Table I; used by all NIST S-NDR models",
+      "tag": "[SH] primary not read"
+    },
+    {
+      "kind": "rotating_wafer_flow_speeds",
+      "points": [
+        {
+          "rpm": 100,
+          "radius_cm": 1,
+          "v_cm_s": 10,
+          "source": "Josell 2019 (annular TSV) / Braun 2019 (56 um TSV)",
+          "tag": "[FT]"
+        },
+        {
+          "rpm": 400,
+          "radius_cm": 1,
+          "v_cm_s": 40,
+          "source": "Josell 2019 mm-TSV",
+          "tag": "[FT]"
+        },
+        {
+          "rpm": 400,
+          "radius_cm": 2.5,
+          "v_cm_s": 100,
+          "source": "Menk 2019 D3066 FLUENT lid BC",
+          "tag": "[FT]"
+        }
+      ],
+      "inside_via": "Menk 2019 FLUENT: stacked counter-rotating vortices in upper 1/3; nearly stationary lower 2/3 -> diffusion-dominated fill front",
+      "tag": "[FT]"
+    },
+    {
+      "kind": "levich_reference",
+      "equation": "delta_RDE = 1.61 * D^(1/3) * nu^(1/6) * omega^(-1/2)",
+      "source": "standard Levich; invoked by Avdeef 2022 and by Braun (delta ~ omega^-0.5)",
+      "tag": "[FT] general"
+    },
+    {
+      "kind": "criterion_from_nist",
+      "statement": "2x increase in rotation (100->400 rpm) halves delta and doubles suppressing-additive flux; breakdown potential rotation-independent, REPASSIVATION strongly rotation-dependent (Josell 2018 Fig 4)",
+      "tag": "[FT]"
+    }
+  ],
+  "units": {
+    "delta": "um",
+    "km": "cm/s",
+    "v": "cm/s",
+    "D": "cm2/s"
+  },
+  "notes": "GAP: no published Sh-Re-Sc correlation for a MAGNETIC STIR BAR was found (searched Crossref/web 2026-10-28, multiple phrasings). Best available practice: use delta ~ rpm^-0.5 anchored to RDE values (25 um @ 100 rpm) with team-specific proportionality constant from P2 limiting-current test; magnetic-stirrer proportionality is geometry-specific and irreproducible unless bar/position fixed (KB Cherepanova 2025 note). Ferricyanide limiting-current calibration references exist (Scott & Lobato 2002, Chem. Educator 7:214, doi 10.1007/s00897020579a [AB, not read]) but no stir-bar-specific correlation retrieved."
+}

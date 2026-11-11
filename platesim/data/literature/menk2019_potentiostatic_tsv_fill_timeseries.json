@@ -1,0 +1,116 @@
+{
+  "id": "menk2019_potentiostatic_tsv_fill_timeseries",
+  "file": "menk2019_potentiostatic_tsv_fill_timeseries.json",
+  "source": {
+    "authors": [
+      "L. A. Menk",
+      "D. Josell",
+      "T. P. Moffat",
+      "E. Baca",
+      "M. G. Blain",
+      "A. Smith",
+      "J. Dominguez",
+      "J. McClain",
+      "P. D. Yeh",
+      "A. E. Hollowell"
+    ],
+    "year": 2019,
+    "title": "Bottom-Up Copper Filling of Large Scale Through Silicon Vias for MEMS Technology",
+    "journal": "J. Electrochem. Soc. 166 (1) D3066-D3071",
+    "doi": "10.1149/2.0091901jes",
+    "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC7542679/"
+  },
+  "tag": "[FT] full text (PMC) read 2026-10-28",
+  "conditions": {
+    "bath": "1.25 mol/L CuSO4 + 0.25 mol/L CH3SO3H (MSA) + 1 mmol/L KCl + variable Tetronic 701 (1-50 umol/L)",
+    "temperature": "room temperature",
+    "hydrodynamics": "helicopter-blade rotation 400 rpm; vias ~2.5 cm from spindle axis -> ~100 cm/s tangential at via; FLUENT lid-driven cavity: vortices in upper 1/3, nearly stationary in lower 2/3",
+    "reference": "SSE",
+    "vias": "125 um dia nominal x 600 um deep (AR~5), ALD Pt seed, over-etched notched bottoms, 100 vias per 2x1 cm sample, pitch 250 um",
+    "prewet": "-18 C IPA + rough vacuum ~10 min, direct transfer, 1-2 min open-circuit rotation"
+  },
+  "data": [
+    {
+      "kind": "fill_time_series",
+      "E_V_vs_SSE": -0.64,
+      "rpm": 400,
+      "TET_umol_L": 50,
+      "series": [
+        {
+          "t_h": 2,
+          "fill_height_um": 200,
+          "morphology": "flat growth front, uniform between vias",
+          "tag": "[C] height digitised from stated 100 um/h rate x time; figure not directly measured"
+        },
+        {
+          "t_h": 4,
+          "fill_height_um": 400,
+          "morphology": "front becoming asymmetric (hydrodynamics)",
+          "tag": "[C]"
+        },
+        {
+          "t_h": 6,
+          "fill_height_um": 600,
+          "morphology": "nearly fully filled, void-free",
+          "tag": "[FT] text: 'nearly fully filled within 6 hours'"
+        }
+      ],
+      "growth_rate": "nearly 100 um/h ~ local j approaching 75 mA/cm2",
+      "tag": "[FT] text"
+    },
+    {
+      "kind": "outcome_map",
+      "constant_potential_series_h": 6,
+      "points": [
+        {
+          "E_V_vs_SSE": -0.74,
+          "outcome": "centerline voids"
+        },
+        {
+          "E_V_vs_SSE": -0.7,
+          "outcome": "centerline voids"
+        },
+        {
+          "E_V_vs_SSE": -0.66,
+          "outcome": "void-free (caveat: may be sectioning artifact near notch)"
+        },
+        {
+          "E_V_vs_SSE": -0.64,
+          "outcome": "void-free bottom-up"
+        }
+      ],
+      "tag": "[FT]"
+    },
+    {
+      "kind": "voltammetry",
+      "measurement": "suppression breakdown / repassivation window on Pt RDE 400 rpm, 50 umol/L TET",
+      "breakdown_V": -0.67,
+      "repassivation_V": -0.59,
+      "onset_shift_at_1umol_L_V": -0.18,
+      "repassivation_5umol_L_V": -0.48,
+      "cell_resistance_ohm_cm2": 3,
+      "note": "ohmic slope ~3 ohm*cm2 at ~0.1 A/cm2 -> ~300 mV deviation",
+      "tag": "[FT]"
+    },
+    {
+      "kind": "reference_condition",
+      "E_V_vs_SSE": -0.62,
+      "t_h": 8,
+      "outcome": "complete fill, some internal voiding in several vias",
+      "tag": "[FT]"
+    },
+    {
+      "kind": "negative_control",
+      "condition": "quiescent (no rotation), -0.62 V, 20 h",
+      "outcome": "central seam void in every via (conformal deposition)",
+      "tag": "[FT]"
+    }
+  ],
+  "units": {
+    "height": "um",
+    "time": "h",
+    "E": "V vs SSE",
+    "growth_rate": "um/h"
+  },
+  "notes": "Primary validation series for via-fill model (KB already cites ~6 h at -0.64 V). NOTE: fill heights at 2 h and 4 h are [C] from the stated 100 um/h rate, not measured off Fig 6; for rigorous validation digitise their Fig 6 (est. error +-20 um on 600 um via, i.e. +-3%). Local current density 75 mA/cm2 at bottom is the experimental anchor for bottom j during S-NDR fill at 400 rpm."
+}

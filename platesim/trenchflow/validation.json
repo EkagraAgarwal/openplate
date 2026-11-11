@@ -1,0 +1,486 @@
+{
+  "sites": [
+    {
+      "id": "trench1_wide",
+      "width_um": 944.0,
+      "depth_um": 97.0,
+      "hours": 4.5,
+      "measured": {
+        "field_um": 82.0,
+        "floor_um": 75.0,
+        "field_range_um": [
+          79.0,
+          91.0
+        ],
+        "floor_range_um": [
+          72.0,
+          78.0
+        ],
+        "ratio_best": 0.9146341463414634,
+        "ratio_range": [
+          0.7912087912087912,
+          0.9873417721518988
+        ]
+      },
+      "faraday_ratio": 1.0,
+      "levelset_ratio": 0.9605,
+      "noflow": {
+        "delta_um": 64.0,
+        "shear_rate_s": 59.27776448719644,
+        "dx_um": 6.0,
+        "j_field_mA_cm2": 13.772409279685796,
+        "field_um": 82.0,
+        "floor_um": 69.69333278946387,
+        "wall_up_um": 67.87482711979436,
+        "wall_down_um": 67.8748271197942,
+        "floor_over_field": 0.8499186925544374,
+        "wall_asymmetry": 0.9999999999999977,
+        "k_cm_s": [
+          7.784938353113755e-05,
+          7.519340145043904e-05,
+          7.354667466014073e-05,
+          7.123461894822186e-05,
+          7.12346176967638e-05
+        ],
+        "eddy_first_stage": null,
+        "use_flow": false
+      },
+      "flow": {
+        "delta_um": 64.0,
+        "shear_rate_s": 59.27776448719644,
+        "dx_um": 6.0,
+        "j_field_mA_cm2": 13.772409279685796,
+        "field_um": 82.0,
+        "floor_um": 76.92926157290947,
+        "wall_up_um": 73.01128255110004,
+        "wall_down_um": 79.84151245424924,
+        "floor_over_field": 0.938161726498896,
+        "wall_asymmetry": 1.0935503344756172,
+        "k_cm_s": [
+          7.784609959973589e-05,
+          7.507338444517611e-05,
+          7.259147651664613e-05,
+          7.123225886474325e-05,
+          7.123174174840579e-05
+        ],
+        "eddy_first_stage": {
+          "u_max_in_trench_cm_s": 0.04555409830071074,
+          "has_recirculation": true,
+          "penetration_um": 21.0
+        },
+        "use_flow": true
+      },
+      "sens_delta": [
+        {
+          "delta_um": 45.0,
+          "shear_rate_s": 170.5274106307997,
+          "dx_um": 6.0,
+          "j_field_mA_cm2": 13.772409279685796,
+          "field_um": 82.0,
+          "floor_um": 78.70831033210472,
+          "wall_up_um": 76.52993177382955,
+          "wall_down_um": 80.83567478623046,
+          "floor_over_field": 0.9598574430744478,
+          "wall_asymmetry": 1.056262208950163,
+          "k_cm_s": [
+            7.502588678491599e-05,
+            7.259899713853461e-05,
+            7.119057156276248e-05,
+            7.121186477565174e-05,
+            7.120731692383335e-05
+          ],
+          "eddy_first_stage": {
+            "u_max_in_trench_cm_s": 0.11378819349168928,
+            "has_recirculation": true,
+            "penetration_um": 21.0
+          },
+          "use_flow": true
+        },
+        {
+          "delta_um": 64.0,
+          "shear_rate_s": 59.27776448719644,
+          "dx_um": 6.0,
+          "j_field_mA_cm2": 13.772409279685796,
+          "field_um": 82.0,
+          "floor_um": 76.92926157290947,
+          "wall_up_um": 73.01128255110004,
+          "wall_down_um": 79.84151245424924,
+          "floor_over_field": 0.938161726498896,
+          "wall_asymmetry": 1.0935503344756172,
+          "k_cm_s": [
+            7.784609959973589e-05,
+            7.507338444517611e-05,
+            7.259147651664613e-05,
+            7.123225886474325e-05,
+            7.123174174840579e-05
+          ],
+          "eddy_first_stage": {
+            "u_max_in_trench_cm_s": 0.04555409830071074,
+            "has_recirculation": true,
+            "penetration_um": 21.0
+          },
+          "use_flow": true
+        },
+        {
+          "delta_um": 90.0,
+          "shear_rate_s": 21.31592632884996,
+          "dx_um": 6.0,
+          "j_field_mA_cm2": 13.772409279685796,
+          "field_um": 82.0,
+          "floor_um": 73.83318769696413,
+          "wall_up_um": 68.10676717812647,
+          "wall_down_um": 78.09989289131104,
+          "floor_over_field": 0.9004047280117577,
+          "wall_asymmetry": 1.1467273536423854,
+          "k_cm_s": [
+            8.189981326216145e-05,
+            7.877040104490492e-05,
+            7.678705238893138e-05,
+            7.411399477831499e-05,
+            7.198344649288428e-05
+          ],
+          "eddy_first_stage": {
+            "u_max_in_trench_cm_s": 0.021236309966728123,
+            "has_recirculation": true,
+            "penetration_um": 33.0
+          },
+          "use_flow": true
+        }
+      ],
+      "sens_shear": [
+        {
+          "shear_factor": 0.3,
+          "delta_um": 64.0,
+          "shear_rate_s": 17.783329346158933,
+          "dx_um": 6.0,
+          "j_field_mA_cm2": 13.772409279685796,
+          "field_um": 82.0,
+          "floor_um": 73.5008954724289,
+          "wall_up_um": 67.51082688032007,
+          "wall_down_um": 77.7108021544728,
+          "floor_over_field": 0.8963523838101085,
+          "wall_asymmetry": 1.1510865107938133,
+          "k_cm_s": [
+            7.765150819924663e-05,
+            7.486645871816106e-05,
+            7.269197191728728e-05,
+            7.123464102933393e-05,
+            7.123467538950004e-05
+          ],
+          "eddy_first_stage": {
+            "u_max_in_trench_cm_s": 0.013642820344476676,
+            "has_recirculation": true,
+            "penetration_um": 21.0
+          },
+          "use_flow": true
+        },
+        {
+          "shear_factor": 1.0,
+          "delta_um": 64.0,
+          "shear_rate_s": 59.27776448719644,
+          "dx_um": 6.0,
+          "j_field_mA_cm2": 13.772409279685796,
+          "field_um": 82.0,
+          "floor_um": 76.92926157290947,
+          "wall_up_um": 73.01128255110004,
+          "wall_down_um": 79.84151245424924,
+          "floor_over_field": 0.938161726498896,
+          "wall_asymmetry": 1.0935503344756172,
+          "k_cm_s": [
+            7.784609959973589e-05,
+            7.507338444517611e-05,
+            7.259147651664613e-05,
+            7.123225886474325e-05,
+            7.123174174840579e-05
+          ],
+          "eddy_first_stage": {
+            "u_max_in_trench_cm_s": 0.04555409830071074,
+            "has_recirculation": true,
+            "penetration_um": 21.0
+          },
+          "use_flow": true
+        },
+        {
+          "shear_factor": 3.0,
+          "delta_um": 64.0,
+          "shear_rate_s": 177.83329346158934,
+          "dx_um": 6.0,
+          "j_field_mA_cm2": 13.772409279685796,
+          "field_um": 82.0,
+          "floor_um": 78.85329353741925,
+          "wall_up_um": 76.7475151435284,
+          "wall_down_um": 80.89404679013164,
+          "floor_over_field": 0.9616255309441372,
+          "wall_asymmetry": 1.0540282201820952,
+          "k_cm_s": [
+            7.753379506929411e-05,
+            7.498184713066539e-05,
+            7.261044886056984e-05,
+            7.121129207210849e-05,
+            7.120572913249858e-05
+          ],
+          "eddy_first_stage": {
+            "u_max_in_trench_cm_s": 0.13736076173817516,
+            "has_recirculation": true,
+            "penetration_um": 21.0
+          },
+          "use_flow": true
+        }
+      ],
+      "inside_measured_range": true,
+      "snapshots": [
+        "D:\\Workspace\\Semiconductors\\platesim\\platesim\\trenchflow\\out\\trench1_wide_dep0.npz",
+        "D:\\Workspace\\Semiconductors\\platesim\\platesim\\trenchflow\\out\\trench1_wide_dep40.npz"
+      ]
+    },
+    {
+      "id": "trench1_narrow",
+      "width_um": 227.0,
+      "depth_um": 88.0,
+      "hours": 4.5,
+      "measured": {
+        "field_um": 69.0,
+        "floor_um": 53.0,
+        "field_range_um": [
+          69.0,
+          80.0
+        ],
+        "floor_range_um": [
+          53.0,
+          53.0
+        ],
+        "ratio_best": 0.7681159420289855,
+        "ratio_range": [
+          0.6625,
+          0.7681159420289855
+        ]
+      },
+      "faraday_ratio": 1.0,
+      "levelset_ratio": 0.915,
+      "noflow": {
+        "delta_um": 64.0,
+        "shear_rate_s": 59.27776448719644,
+        "dx_um": 4.0,
+        "j_field_mA_cm2": 11.588978540223414,
+        "field_um": 69.0,
+        "floor_um": 59.02836566042632,
+        "wall_up_um": 58.2220925782195,
+        "wall_down_um": 58.22209257821932,
+        "floor_over_field": 0.8554835602960336,
+        "wall_asymmetry": 0.9999999999999968,
+        "k_cm_s": [
+          6.410673255363769e-05,
+          6.276139136048508e-05,
+          6.155787194221297e-05,
+          6.045106715224721e-05,
+          5.9395448307399554e-05
+        ],
+        "eddy_first_stage": null,
+        "use_flow": false
+      },
+      "flow": {
+        "delta_um": 64.0,
+        "shear_rate_s": 59.27776448719644,
+        "dx_um": 4.0,
+        "j_field_mA_cm2": 11.588978540223414,
+        "field_um": 69.0,
+        "floor_um": 65.6265686575352,
+        "wall_up_um": 63.802224720287185,
+        "wall_down_um": 66.36067119542368,
+        "floor_over_field": 0.9511096906889159,
+        "wall_asymmetry": 1.0400996436464853,
+        "k_cm_s": [
+          6.482429389933133e-05,
+          6.336665420543122e-05,
+          6.196579546126654e-05,
+          6.013795254555738e-05,
+          5.9395465705841827e-05
+        ],
+        "eddy_first_stage": {
+          "u_max_in_trench_cm_s": 0.034071509310954484,
+          "has_recirculation": true,
+          "penetration_um": 18.0
+        },
+        "use_flow": true
+      },
+      "sens_delta": [
+        {
+          "delta_um": 45.0,
+          "shear_rate_s": 170.5274106307997,
+          "dx_um": 4.0,
+          "j_field_mA_cm2": 11.588978540223414,
+          "field_um": 69.0,
+          "floor_um": 66.76272800440798,
+          "wall_up_um": 65.60891747876218,
+          "wall_down_um": 67.33587542828812,
+          "floor_over_field": 0.9675757681798257,
+          "wall_asymmetry": 1.0263220003604687,
+          "k_cm_s": [
+            6.22466839942347e-05,
+            6.102666537531431e-05,
+            5.9396649945851044e-05,
+            5.939593248714199e-05,
+            5.9395849099505574e-05
+          ],
+          "eddy_first_stage": {
+            "u_max_in_trench_cm_s": 0.08564052916695286,
+            "has_recirculation": true,
+            "penetration_um": 14.0
+          },
+          "use_flow": true
+        },
+        {
+          "delta_um": 64.0,
+          "shear_rate_s": 59.27776448719644,
+          "dx_um": 4.0,
+          "j_field_mA_cm2": 11.588978540223414,
+          "field_um": 69.0,
+          "floor_um": 65.6265686575352,
+          "wall_up_um": 63.802224720287185,
+          "wall_down_um": 66.36067119542368,
+          "floor_over_field": 0.9511096906889159,
+          "wall_asymmetry": 1.0400996436464853,
+          "k_cm_s": [
+            6.482429389933133e-05,
+            6.336665420543122e-05,
+            6.196579546126654e-05,
+            6.013795254555738e-05,
+            5.9395465705841827e-05
+          ],
+          "eddy_first_stage": {
+            "u_max_in_trench_cm_s": 0.034071509310954484,
+            "has_recirculation": true,
+            "penetration_um": 18.0
+          },
+          "use_flow": true
+        },
+        {
+          "delta_um": 90.0,
+          "shear_rate_s": 21.31592632884996,
+          "dx_um": 4.0,
+          "j_field_mA_cm2": 11.588978540223414,
+          "field_um": 69.0,
+          "floor_um": 63.41025584180112,
+          "wall_up_um": 60.638891233483236,
+          "wall_down_um": 64.51544459478632,
+          "floor_over_field": 0.9189892150985669,
+          "wall_asymmetry": 1.0639285000508476,
+          "k_cm_s": [
+            6.794584746971576e-05,
+            6.642481160676546e-05,
+            6.487894544110804e-05,
+            6.289048100285932e-05,
+            6.140540298194595e-05
+          ],
+          "eddy_first_stage": {
+            "u_max_in_trench_cm_s": 0.01589376678783975,
+            "has_recirculation": true,
+            "penetration_um": 22.0
+          },
+          "use_flow": true
+        }
+      ],
+      "sens_shear": [
+        {
+          "shear_factor": 0.3,
+          "delta_um": 64.0,
+          "shear_rate_s": 17.783329346158933,
+          "dx_um": 4.0,
+          "j_field_mA_cm2": 11.588978540223414,
+          "field_um": 69.0,
+          "floor_um": 63.44533492626756,
+          "wall_up_um": 60.53615230761584,
+          "wall_down_um": 64.4714300035898,
+          "floor_over_field": 0.9194976076270661,
+          "wall_asymmetry": 1.0650070667850966,
+          "k_cm_s": [
+            6.478395419625389e-05,
+            6.327988993111497e-05,
+            6.181151690225086e-05,
+            6.009817759032867e-05,
+            5.9395448512520495e-05
+          ],
+          "eddy_first_stage": {
+            "u_max_in_trench_cm_s": 0.010221529541377034,
+            "has_recirculation": true,
+            "penetration_um": 18.0
+          },
+          "use_flow": true
+        },
+        {
+          "shear_factor": 1.0,
+          "delta_um": 64.0,
+          "shear_rate_s": 59.27776448719644,
+          "dx_um": 4.0,
+          "j_field_mA_cm2": 11.588978540223414,
+          "field_um": 69.0,
+          "floor_um": 65.6265686575352,
+          "wall_up_um": 63.802224720287185,
+          "wall_down_um": 66.36067119542368,
+          "floor_over_field": 0.9511096906889159,
+          "wall_asymmetry": 1.0400996436464853,
+          "k_cm_s": [
+            6.482429389933133e-05,
+            6.336665420543122e-05,
+            6.196579546126654e-05,
+            6.013795254555738e-05,
+            5.9395465705841827e-05
+          ],
+          "eddy_first_stage": {
+            "u_max_in_trench_cm_s": 0.034071509310954484,
+            "has_recirculation": true,
+            "penetration_um": 18.0
+          },
+          "use_flow": true
+        },
+        {
+          "shear_factor": 3.0,
+          "delta_um": 64.0,
+          "shear_rate_s": 177.83329346158934,
+          "dx_um": 4.0,
+          "j_field_mA_cm2": 11.588978540223414,
+          "field_um": 69.0,
+          "floor_um": 66.99010943125897,
+          "wall_up_um": 65.89833981821324,
+          "wall_down_um": 67.52508727054398,
+          "floor_over_field": 0.9708711511776663,
+          "wall_asymmetry": 1.0246857122170037,
+          "k_cm_s": [
+            6.435083337835106e-05,
+            6.312968869440161e-05,
+            6.144284327059768e-05,
+            6.022254389132233e-05,
+            5.939587060722339e-05
+          ],
+          "eddy_first_stage": {
+            "u_max_in_trench_cm_s": 0.10220777877294021,
+            "has_recirculation": true,
+            "penetration_um": 18.0
+          },
+          "use_flow": true
+        }
+      ],
+      "inside_measured_range": false,
+      "snapshots": [
+        "D:\\Workspace\\Semiconductors\\platesim\\platesim\\trenchflow\\out\\trench1_narrow_dep0.npz",
+        "D:\\Workspace\\Semiconductors\\platesim\\platesim\\trenchflow\\out\\trench1_narrow_dep34.npz"
+      ]
+    }
+  ],
+  "constants": {
+    "D_cm2_s": 4.083403976806167e-06,
+    "c_bulk_mol_cm3": 0.0010228810625373746,
+    "T_C": 22.0,
+    "n_stages": 5,
+    "delta_central_um": 64.0
+  },
+  "notes": [
+    "central Nernst layer delta = 64 um [C]: coupon calibration 78 +/- 22 um at 20 % stir, scaled by (30/20)^-0.5 for the 30 % stir of the trench run",
+    "no free parameters are fitted to the trench data; the measured field thickness is an input that fixes j_field = field_um / (Mfac * hours * 3600)",
+    "measured ratio range = [floor lo / field hi, floor hi / field lo] [M]",
+    "grid height is the Nernst layer delta_um; it is extended to deposit + 2 dx when the late deposit approaches that height [J]",
+    "Faraday/conformal reference gives ratio 1.0 by definition",
+    "stage march: 5 stages, deposit treated as conformal at 0.5*(1 + previous floor/field) [J]"
+  ],
+  "runtime_s": 389.064936876297
+}

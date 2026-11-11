@@ -1,0 +1,130 @@
+{
+  "id": "schmitt2020_ar10_stepped_endpoint",
+  "file": "schmitt2020_ar10_stepped_endpoint.json",
+  "source": {
+    "authors": [
+      "R. P. Schmitt",
+      "L. A. Menk",
+      "E. Baca",
+      "J. E. Bower",
+      "J. A. Romero",
+      "M. B. Jordan",
+      "N. Jackson",
+      "A. E. Hollowell"
+    ],
+    "year": 2020,
+    "title": "Void-free Copper Electrodeposition in High Aspect Ratio, Full Wafer Thickness Through-Silicon Vias with Endpoint Detection",
+    "journal": "J. Electrochem. Soc. 167 (16) 162517",
+    "doi": "10.1149/1945-7111/abd56e",
+    "url": "https://iopscience.iop.org/article/10.1149/1945-7111/abd56e"
+  },
+  "tag": "[FT] full text (IOP OA CC-BY) read 2026-10-28",
+  "conditions": {
+    "bath_optimized": "1 mol/L CuSO4 + 0.5 mol/L H2SO4 + 80 umol/L KCl + 40 umol/L Tetronic 701 (LOW Cl)",
+    "bath_failed": "1.25 mol/L CuSO4 + 0.25 M MSA + 1 mmol/L KCl + 50 umol/L T701: 10:1 vias fully suppressed at -0.62 V, voided at -0.64 V (window too narrow at AR10)",
+    "temperature": "room temperature",
+    "hydrodynamics": "400 rpm helicopter rotation; -18 C IPA vacuum prewet",
+    "reference": "MSE",
+    "vias": "62.5 um dia x 625 um deep (AR10), ALD Pt seed, 625 um full-thickness Si"
+  },
+  "data": [
+    {
+      "kind": "outcome_map_msa_bath",
+      "note": "5:1 vias (125x600) in MSA bath: -0.60 sporadic, -0.62 seam voids, -0.64 VOID-FREE, -0.70 keyhole",
+      "points_5AR": [
+        {
+          "E_mV_MSE": -600,
+          "outcome": "sporadic (some vias suppressed)"
+        },
+        {
+          "E_mV_MSE": -620,
+          "outcome": "uniform fill with seam voids"
+        },
+        {
+          "E_mV_MSE": -640,
+          "outcome": "void-free (ideal)"
+        },
+        {
+          "E_mV_MSE": -700,
+          "outcome": "keyhole voids (breakdown too high)"
+        }
+      ],
+      "points_10AR": [
+        {
+          "E_mV_MSE": -600,
+          "outcome": "almost fully suppressed"
+        },
+        {
+          "E_mV_MSE": -620,
+          "outcome": "almost fully suppressed"
+        },
+        {
+          "E_mV_MSE": -640,
+          "outcome": "large voids (over-activated)"
+        }
+      ],
+      "tag": "[FT]"
+    },
+    {
+      "kind": "potentiostatic_low_cl",
+      "E_mV_MSE": [
+        -520,
+        -540,
+        -570
+      ],
+      "result": "deposition initiates at bottom / center / top respectively; current decays ~1 h (Tetronic diffusion time scale ~1 h)",
+      "tag": "[FT]"
+    },
+    {
+      "kind": "stepped_protocol_void_free",
+      "Cl_umol_L": 80,
+      "TET_umol_L": 40,
+      "steps": "-500 to -560 mV MSE in 10 mV increments; 2 h per step EXCEPT step 5 (-540 mV) extended to 5 h",
+      "total_time_h": 17,
+      "total_time_note": "5x2h + 5h + 2x2h = 10+5+4 = 17 h (steps -500..-530, -540 x5h, -550, -560)",
+      "outcome": "VOID-FREE by cross-section AND X-ray CT (5 um resolution)",
+      "competing_protocols": [
+        {
+          "steps": "10 mV, 45 min intervals",
+          "outcome": "large voids"
+        },
+        {
+          "steps": "10 mV, 1 h",
+          "outcome": "voids"
+        },
+        {
+          "steps": "10 mV, 1.5 h",
+          "outcome": "reduced voids but still some"
+        },
+        {
+          "steps": "10 mV, 2 h (no extension)",
+          "outcome": "minor seam voids near top (CT only)"
+        },
+        {
+          "steps": "5 mV, 1 h (equivalent to 10 mV/2h)",
+          "outcome": "similar to 10 mV/2 h"
+        },
+        {
+          "steps": "2 h with step-5 extended to 5 h",
+          "outcome": "void-free"
+        }
+      ],
+      "tag": "[FT]"
+    },
+    {
+      "kind": "endpoint_detection",
+      "observation": "current local minimum marks deposition completion; subsequent rise = field overplating",
+      "tag": "[FT]"
+    },
+    {
+      "kind": "partial_fill_stops",
+      "note": "their Fig 5: samples stopped after steps 2,5,6,7 of the 2 h/10 mV protocol show bottom-up initiation, v-shaped front by step 5, seam void by step 7",
+      "tag": "[FT]"
+    }
+  ],
+  "units": {
+    "E": "mV vs MSE",
+    "t": "h"
+  },
+  "notes": "Priority paper from user list. AR10 counterpart to Menk 2019. KEY: 17 h total with 5 h dwell at -540 mV for void-free AR10 fill (matches KB v1.4 '5 h hold at the critical step, 17-19 h'). Directly supports the KB staged-ramp recipe shape (long dwell at the critical step, finish at lower rpm per their Fig 7f). Endpoint = current minimum is a cheap in-situ observable for platesim. Note KB §5 cites this as '17-19 h' from poster; paper confirms 17 h for the void-free variant."
+}

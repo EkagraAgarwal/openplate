@@ -1,0 +1,212 @@
+{
+  "id": "braun2020_through_hole_parameters",
+  "file": "braun2020_through_hole_parameters.json",
+  "source": {
+    "authors": [
+      "T. M. Braun",
+      "D. Josell",
+      "J. John",
+      "T. P. Moffat"
+    ],
+    "year": 2020,
+    "title": "Editors' Choice - Simulation of Copper Electrodeposition in Through-Hole Vias",
+    "journal": "J. Electrochem. Soc. 167 (1) 013510",
+    "doi": "10.1149/2.0102001JES",
+    "url": "https://iopscience.iop.org/article/10.1149/2.0102001JES"
+  },
+  "tag": "[FT] full text (IOP open access) read 2026-10-28; Table I transcribed verbatim",
+  "conditions": {
+    "bath": "0.88 mol/L CuSO4 + 0.18 mol/L H2SO4 + 20 umol/L NaCl + 40 umol/L polyether",
+    "temperature_K": 298,
+    "hydrodynamics": "fixed delta=25 um (~160 rpm equiv); large-TH case delta=6.25 um (~2600 rpm RDE equiv)",
+    "reference": "vs reversible Cu/Cu2+"
+  },
+  "parameters": [
+    {
+      "name": "R_TH small",
+      "value": 5,
+      "units": "um"
+    },
+    {
+      "name": "H AR4",
+      "value": 40,
+      "units": "um"
+    },
+    {
+      "name": "R_cell",
+      "value": 15,
+      "units": "um"
+    },
+    {
+      "name": "delta",
+      "value": 25,
+      "units": "um"
+    },
+    {
+      "name": "L",
+      "value": 0.25,
+      "units": "cm"
+    },
+    {
+      "name": "C_Cu0",
+      "value": 0.88,
+      "units": "mol/L"
+    },
+    {
+      "name": "C_Cl0",
+      "value": 20,
+      "units": "umol/L"
+    },
+    {
+      "name": "C_P0",
+      "value": 40,
+      "units": "umol/L"
+    },
+    {
+      "name": "D_Cu2+",
+      "value": 2.65e-06,
+      "units": "cm2/s"
+    },
+    {
+      "name": "D_Cl-",
+      "value": 9e-06,
+      "units": "cm2/s"
+    },
+    {
+      "name": "D_polyether",
+      "value": 1e-06,
+      "units": "cm2/s"
+    },
+    {
+      "name": "Gamma_Cl",
+      "value": 1.62e-05,
+      "units": "mol/m2"
+    },
+    {
+      "name": "Gamma_P",
+      "value": 9.2e-08,
+      "units": "mol/m2"
+    },
+    {
+      "name": "k_Cl+",
+      "value": 20,
+      "units": "m3/(mol s)"
+    },
+    {
+      "name": "k_Cl-",
+      "value": 15000000.0,
+      "units": "1/m"
+    },
+    {
+      "name": "k_P+_HIGH",
+      "value": 2500,
+      "units": "m3/(mol s)",
+      "note": "= 2.5e9 cm3/(mol s); bottom-up set"
+    },
+    {
+      "name": "k_P-_HIGH",
+      "value": 10000000.0,
+      "units": "1/m",
+      "note": "= 1e5 /cm"
+    },
+    {
+      "name": "j0_unsupp",
+      "value": 20,
+      "units": "A/m2"
+    },
+    {
+      "name": "j0_supp",
+      "value": 0.13,
+      "units": "A/m2"
+    },
+    {
+      "name": "alpha0",
+      "value": 0.5,
+      "units": "-"
+    },
+    {
+      "name": "alpha1",
+      "value": 0.5,
+      "units": "-"
+    },
+    {
+      "name": "Omega",
+      "value": 7.1e-06,
+      "units": "m3/mol"
+    },
+    {
+      "name": "kappa",
+      "value": 7.5,
+      "units": "S/m",
+      "note": "0.88 M CuSO4 + 0.18 M H2SO4 @298 K; ref Newman Electrochemical Systems; = 0.075 S/cm, closest lit anchor to team 8 g/L acid bath (acid still 2.2x higher)"
+    },
+    {
+      "name": "T",
+      "value": 298,
+      "units": "K"
+    }
+  ],
+  "data": [
+    {
+      "kind": "simulation_milestone",
+      "case": "potentiostatic stepped AR4 10x40 um delta 25 um",
+      "waveform_V": [
+        {
+          "E": -0.12,
+          "t_min": 12
+        },
+        {
+          "E": -0.14,
+          "t_min": 22
+        },
+        {
+          "E": -0.16,
+          "t_min": 30
+        },
+        {
+          "E": -0.18,
+          "t_min": 40
+        }
+      ],
+      "milestones": {
+        "impingement_min": 15.53,
+        "full_fill_min": 40
+      },
+      "tag": "[FT]"
+    },
+    {
+      "kind": "simulation_milestone",
+      "case": "galvanostatic -2.4 mA/cm2 projected, AR2 & AR4",
+      "milestones": {
+        "AR2_impingement_min": 12.67,
+        "AR4_impingement_min": 16.95,
+        "AR2_full_fill_min": 60,
+        "AR4_full_fill_min": 80
+      },
+      "check_C": "86 uC per TH / (2.4 mA/cm2 * 7.07e-6 cm2) ~ 84 min: model assumes ~100% efficiency",
+      "tag": "[FT]"
+    },
+    {
+      "kind": "simulation_milestone",
+      "case": "galvanostatic -9.6 mA/cm2 AR4 / potentiostatic -0.16 V AR4",
+      "result": "pinch-off void from Cu2+ depletion",
+      "tag": "[FT]"
+    },
+    {
+      "kind": "simulation_milestone",
+      "case": "large TH 85x150 um galvanostatic -1.5 mA/cm2 delta 6.25 um",
+      "milestones": {
+        "impingement_min": 165,
+        "front_levels_min": 210,
+        "peak_j_center_min": 300,
+        "growth_um_first_5h": 110,
+        "growth_um_last_5h": 22
+      },
+      "tag": "[FT]"
+    }
+  ],
+  "units": {
+    "system": "SI base"
+  },
+  "notes": "Best published HIGH-k (bottom-up) parameter set + only complete through-hole butterfly fill time series. Milestones are model outputs: regression targets, not bath calibration truth."
+}

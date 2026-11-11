@@ -1,0 +1,99 @@
+{
+  "id": "menk_hollowell2019_galvanostatic_tsv",
+  "file": "menk_hollowell2019_galvanostatic_tsv.json",
+  "source": {
+    "authors": [
+      "L. A. Menk",
+      "E. Baca",
+      "M. G. Blain",
+      "J. McClain",
+      "J. Dominguez",
+      "A. Smith",
+      "A. E. Hollowell"
+    ],
+    "year": 2019,
+    "title": "Galvanostatic Plating with a Single Additive Electrolyte for Bottom-Up Filling of Copper in Mesoscale TSVs",
+    "journal": "J. Electrochem. Soc. 166 (1) D3226-D3233",
+    "doi": "10.1149/2.0271901jes",
+    "url": "https://iopscience.iop.org/article/10.1149/2.0271901jes"
+  },
+  "tag": "[FT] full text (IOP open access) read 2026-10-28",
+  "conditions": {
+    "bath": "1.25 mol/L CuSO4 + 0.25 mol/L MSA + 1 mmol/L KCl + 50 umol/L Tetronic 701",
+    "temperature": "room temperature (~295 K nominal)",
+    "hydrodynamics": "die rotated 400 rpm on RDE rod (helicopter-blade mount); pre-wet: -18 C IPA under rough vacuum, direct transfer, 2 min at 400 rpm at -0.40 V to mix",
+    "reference": "SSE",
+    "vias": "100 um dia x 600 um deep (AR5), ALD Pt 60 nm seed + 300 nm Al2O3 liner, SOI substrate",
+    "tool": "BioLogic SP-200"
+  },
+  "data": [
+    {
+      "kind": "potentiostatic_series",
+      "E_V_vs_SSE": -0.64,
+      "sample_via_areas_cm2": [
+        0.0123,
+        0.073,
+        0.123
+      ],
+      "via_counts": [
+        100,
+        600,
+        1000
+      ],
+      "result": "all void-free fill; chronoamperometry measured (their Fig 4, curves not tabulated); effective j based on via bottom area only",
+      "tag": "[FT]"
+    },
+    {
+      "kind": "galvanostatic_series",
+      "duration_h": 3,
+      "current_densities_mA_cm2": [
+        80,
+        100,
+        160,
+        320
+      ],
+      "area_basis": "via bottom area",
+      "outcomes": {
+        "80": "small voids within vias",
+        "100": "small voids within vias",
+        "160": "best fill profile, void-free",
+        "320": "significant field plating (suppressor overcome)"
+      },
+      "tag": "[FT]"
+    },
+    {
+      "kind": "galvanostatic_scaling",
+      "j_mA_cm2": 160,
+      "via_counts": [
+        100,
+        400,
+        900
+      ],
+      "via_areas_cm2": [
+        0.012,
+        0.048,
+        0.096
+      ],
+      "result": "void-free fill on all sizes; voltage within breakdown window",
+      "tag": "[FT]"
+    },
+    {
+      "kind": "chronopotentiometry",
+      "with_suppressor": "0.5-10 mA/cm2 for 2 h; nucleation needs slightly more negative E; 0.5 mA/cm2 shows destabilization/re-stabilization fluctuations; E varies only ~50 mV across j range; at 0.5 mA/cm2 minimum E ~ -0.6 V (SSE) near breakdown",
+      "without_suppressor": "E varies >100 mV across same j range",
+      "tag": "[FT] text"
+    },
+    {
+      "kind": "cv",
+      "measurement": "S-NDR with 6-100 umol/L Tetronic 701",
+      "result": "characteristic S-NDR shape confirms bottom-up capability",
+      "tag": "[FT] text"
+    }
+  ],
+  "units": {
+    "j": "mA/cm2 (via-bottom basis)",
+    "E": "V vs SSE",
+    "t": "min or h"
+  },
+  "notes": "KEY calibration dataset for galvanostatic fill: 160 mA/cm2 (via-bottom basis, 400 rpm, ~295 K) is the void-free optimum for 100x600 um vias in 3 h. Voltages ~ breakdown potential (~-0.6 V SSE). Current density basis is via bottom area - important when mapping to platesim. Chronoamperometry curves in their Fig 4 could be digitised later (est. error +-2 mA/cm2, +-0.5 V)."
+}

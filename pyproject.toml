@@ -1,0 +1,15 @@
+[project]
+name = "platesim"
+version = "0.1.0"
+description = "OpenPlate: open-source electroplating simulator (current distribution, mass transfer, efficiency, feature fill) with a desktop app"
+readme = "README.md"
+license = {file = "LICENSE"}
+requires-python = ">=3.11"
+dependencies = ["numpy", "scipy", "fastapi", "uvicorn", "scikit-fmm", "contourpy", "scikit-fem", "gmsh", "tifffile", "scikit-image", "emcee"]
+
+[tool.setuptools.packages.find]
+include = ["platesim*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["slow: long-running validation tests"]

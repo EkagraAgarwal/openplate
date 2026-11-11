@@ -1,0 +1,452 @@
+{
+ "model": "coupon_pipeline_validation",
+ "version": 1,
+ "created": "2026-11-10T02:32:38-0500",
+ "quick": false,
+ "resolution": "coarse",
+ "leave_one_out": {
+  "rows": [
+   {
+    "id": 1,
+    "setup": "base",
+    "j_mA_cm2": 9.0,
+    "t_min": 60.0,
+    "stir_pct": 20.0,
+    "measured_um": 6.6,
+    "pred_loo_um": 6.4586949173471115,
+    "pred_full_um": 6.478347173075206,
+    "resid_loo_um": 0.1413050826528881,
+    "resid_full_um": 0.12165282692479362,
+    "theta_loo": {
+     "delta0_um": 77.8217,
+     "n_exp": 0.5,
+     "rpm_per_pct": 15.383,
+     "f_back": 0.40352,
+     "L0_um": 0.99159,
+     "kappa_scale": 1.23173,
+     "sigma_um": 1.87482,
+     "flow_dir": "+x"
+    },
+    "budget_hit": false,
+    "fit_rms_um": 1.741,
+    "fit_n_fev": 23,
+    "fit_runtime_s": 48.1
+   },
+   {
+    "id": 2,
+    "setup": "base",
+    "j_mA_cm2": 18.0,
+    "t_min": 60.0,
+    "stir_pct": 20.0,
+    "measured_um": 12.0,
+    "pred_loo_um": 13.851969850452086,
+    "pred_full_um": 13.912401606790677,
+    "resid_loo_um": -1.851969850452086,
+    "resid_full_um": -1.9124016067906773,
+    "theta_loo": {
+     "delta0_um": 77.53921,
+     "n_exp": 0.5,
+     "rpm_per_pct": 15.41924,
+     "f_back": 0.40751,
+     "L0_um": 1.03705,
+     "kappa_scale": 1.15838,
+     "sigma_um": 1.75368,
+     "flow_dir": "+x"
+    },
+    "budget_hit": false,
+    "fit_rms_um": 1.404,
+    "fit_n_fev": 44,
+    "fit_runtime_s": 90.1
+   },
+   {
+    "id": 3,
+    "setup": "base",
+    "j_mA_cm2": 6.0,
+    "t_min": 120.0,
+    "stir_pct": 20.0,
+    "measured_um": 7.3,
+    "pred_loo_um": 8.853060036924095,
+    "pred_full_um": 8.852609692622515,
+    "resid_loo_um": -1.5530600369240952,
+    "resid_full_um": -1.5526096926225152,
+    "theta_loo": {
+     "delta0_um": 77.82627,
+     "n_exp": 0.5,
+     "rpm_per_pct": 15.38211,
+     "f_back": 0.4035,
+     "L0_um": 0.9715,
+     "kappa_scale": 1.23178,
+     "sigma_um": 1.87437,
+     "flow_dir": "+x"
+    },
+    "budget_hit": false,
+    "fit_rms_um": 1.467,
+    "fit_n_fev": 36,
+    "fit_runtime_s": 67.3
+   },
+   {
+    "id": 4,
+    "setup": "base",
+    "j_mA_cm2": 6.0,
+    "t_min": 120.0,
+    "stir_pct": 20.0,
+    "measured_um": 8.0,
+    "pred_loo_um": 8.852814864835155,
+    "pred_full_um": 8.852609692622515,
+    "resid_loo_um": -0.852814864835155,
+    "resid_full_um": -0.8526096926225151,
+    "theta_loo": {
+     "delta0_um": 77.82386,
+     "n_exp": 0.5,
+     "rpm_per_pct": 15.38253,
+     "f_back": 0.40351,
+     "L0_um": 0.97174,
+     "kappa_scale": 1.23176,
+     "sigma_um": 1.87469,
+     "flow_dir": "+x"
+    },
+    "budget_hit": false,
+    "fit_rms_um": 1.505,
+    "fit_n_fev": 28,
+    "fit_runtime_s": 37.1
+   },
+   {
+    "id": 5,
+    "setup": "base",
+    "j_mA_cm2": 18.0,
+    "t_min": 30.0,
+    "stir_pct": 20.0,
+    "measured_um": 6.3,
+    "pred_loo_um": 6.470250803395338,
+    "pred_full_um": 6.470230803395339,
+    "resid_loo_um": -0.17025080339533805,
+    "resid_full_um": -0.1702308033953388,
+    "theta_loo": {
+     "delta0_um": 77.82175,
+     "n_exp": 0.5,
+     "rpm_per_pct": 15.38292,
+     "f_back": 0.40352,
+     "L0_um": 0.97192,
+     "kappa_scale": 1.23174,
+     "sigma_um": 1.87481,
+     "flow_dir": "+x"
+    },
+    "budget_hit": false,
+    "fit_rms_um": 1.52,
+    "fit_n_fev": 20,
+    "fit_runtime_s": 21.9
+   },
+   {
+    "id": 6,
+    "setup": "base",
+    "j_mA_cm2": 24.0,
+    "t_min": 30.0,
+    "stir_pct": 20.0,
+    "measured_um": 8.7,
+    "pred_loo_um": 8.913419181716746,
+    "pred_full_um": 8.913316296375356,
+    "resid_loo_um": -0.21341918171674656,
+    "resid_full_um": -0.21331629637535698,
+    "theta_loo": {
+     "delta0_um": 77.82189,
+     "n_exp": 0.5,
+     "rpm_per_pct": 15.38267,
+     "f_back": 0.4035,
+     "L0_um": 0.97184,
+     "kappa_scale": 1.23175,
+     "sigma_um": 1.8747,
+     "flow_dir": "+x"
+    },
+    "budget_hit": false,
+    "fit_rms_um": 1.52,
+    "fit_n_fev": 22,
+    "fit_runtime_s": 22.5
+   },
+   {
+    "id": 7,
+    "setup": "imp1",
+    "j_mA_cm2": 12.0,
+    "t_min": 30.0,
+    "stir_pct": 30.0,
+    "measured_um": 5.0,
+    "pred_loo_um": 6.789352694299953,
+    "pred_full_um": 6.788570406470278,
+    "resid_loo_um": -1.7893526942999527,
+    "resid_full_um": -1.7885704064702779,
+    "theta_loo": {
+     "delta0_um": 77.8245,
+     "n_exp": 0.5,
+     "rpm_per_pct": 15.38234,
+     "f_back": 0.4035,
+     "L0_um": 0.97116,
+     "kappa_scale": 1.23171,
+     "sigma_um": 1.87391,
+     "flow_dir": "+x"
+    },
+    "budget_hit": false,
+    "fit_rms_um": 1.449,
+    "fit_n_fev": 44,
+    "fit_runtime_s": 72.5
+   },
+   {
+    "id": 8,
+    "setup": "imp1",
+    "j_mA_cm2": 12.0,
+    "t_min": 60.0,
+    "stir_pct": 30.0,
+    "measured_um": 11.0,
+    "pred_loo_um": 14.872085538907118,
+    "pred_full_um": 14.549080812940556,
+    "resid_loo_um": -3.8720855389071183,
+    "resid_full_um": -3.5490808129405558,
+    "theta_loo": {
+     "delta0_um": 78.72665,
+     "n_exp": 0.5,
+     "rpm_per_pct": 15.22613,
+     "f_back": 0.4485,
+     "L0_um": 0.65147,
+     "kappa_scale": 1.2472,
+     "sigma_um": 1.6508,
+     "flow_dir": "+x"
+    },
+    "budget_hit": false,
+    "fit_rms_um": 1.191,
+    "fit_n_fev": 58,
+    "fit_runtime_s": 109.3
+   }
+  ],
+  "rms_loo_um": 1.76275390702074,
+  "rms_full_um": 1.6837109515123718,
+  "max_abs_loo_um": 3.8720855389071183,
+  "mean_bias_loo_um": -1.2702059859847004,
+  "faraday_rms_um": 7.237936515333636,
+  "max_nfev": 25,
+  "time_budget_s": 300.0,
+  "resolution": "coarse",
+  "n_fits": 8,
+  "theta_full": {
+   "delta0_um": 77.82173,
+   "n_exp": 0.5,
+   "rpm_per_pct": 15.383,
+   "f_back": 0.40353,
+   "L0_um": 0.97194,
+   "kappa_scale": 1.23174,
+   "sigma_um": 1.87484,
+   "flow_dir": "+x"
+  },
+  "calibration_found": true,
+  "calibration_created": "2026-10-28T07:26:16+00:00",
+  "fit_log": [
+   {
+    "id": 1,
+    "rms_um": 1.741,
+    "n_fev": 23,
+    "runtime_s": 48.1,
+    "budget_hit": false,
+    "error": null
+   },
+   {
+    "id": 2,
+    "rms_um": 1.404,
+    "n_fev": 44,
+    "runtime_s": 90.1,
+    "budget_hit": false,
+    "error": null
+   },
+   {
+    "id": 3,
+    "rms_um": 1.467,
+    "n_fev": 36,
+    "runtime_s": 67.3,
+    "budget_hit": false,
+    "error": null
+   },
+   {
+    "id": 4,
+    "rms_um": 1.505,
+    "n_fev": 28,
+    "runtime_s": 37.1,
+    "budget_hit": false,
+    "error": null
+   },
+   {
+    "id": 5,
+    "rms_um": 1.52,
+    "n_fev": 20,
+    "runtime_s": 21.9,
+    "budget_hit": false,
+    "error": null
+   },
+   {
+    "id": 6,
+    "rms_um": 1.52,
+    "n_fev": 22,
+    "runtime_s": 22.5,
+    "budget_hit": false,
+    "error": null
+   },
+   {
+    "id": 7,
+    "rms_um": 1.449,
+    "n_fev": 44,
+    "runtime_s": 72.5,
+    "budget_hit": false,
+    "error": null
+   },
+   {
+    "id": 8,
+    "rms_um": 1.191,
+    "n_fev": 58,
+    "runtime_s": 109.3,
+    "budget_hit": false,
+    "error": null
+   }
+  ],
+  "runtime_s": 474.6,
+  "notes": [
+   "resid = measured - predicted (same sign convention as calibrate.py)",
+   "each fit starts from the saved full-data theta; the held-out run is absent from both the DOE rows and the SEM points (filtered on run_id) [C]",
+   "one SEM point set is small (8 points: 6 on run 1, 2 on run 2): removing run 1 also removes its 6 SEM constraints, so that LOO theta is weaker than the full fit [J]",
+   "means only: the LOO test does not check the position-resolved prediction shape, only the coupon mean thickness [J]"
+  ]
+ },
+ "leave_setup_out": {
+  "rows": [
+   {
+    "id": 7,
+    "setup": "imp1",
+    "j_mA_cm2": 12.0,
+    "t_min": 30.0,
+    "stir_pct": 30.0,
+    "measured_um": 5.0,
+    "pred_loo_um": 7.156954650654409,
+    "pred_full_um": 6.788570406470278,
+    "resid_loo_um": -2.1569546506544093,
+    "resid_full_um": -1.7885704064702779,
+    "theta_loo": {
+     "delta0_um": 78.68467,
+     "n_exp": 0.5,
+     "rpm_per_pct": 15.22805,
+     "f_back": 0.44645,
+     "L0_um": 0.60377,
+     "kappa_scale": 1.2569,
+     "sigma_um": 1.5662,
+     "flow_dir": "+x"
+    },
+    "budget_hit": false
+   },
+   {
+    "id": 8,
+    "setup": "imp1",
+    "j_mA_cm2": 12.0,
+    "t_min": 60.0,
+    "stir_pct": 30.0,
+    "measured_um": 11.0,
+    "pred_loo_um": 14.917679301308818,
+    "pred_full_um": 14.549080812940556,
+    "resid_loo_um": -3.9176793013088176,
+    "resid_full_um": -3.5490808129405558,
+    "theta_loo": {
+     "delta0_um": 78.68467,
+     "n_exp": 0.5,
+     "rpm_per_pct": 15.22805,
+     "f_back": 0.44645,
+     "L0_um": 0.60377,
+     "kappa_scale": 1.2569,
+     "sigma_um": 1.5662,
+     "flow_dir": "+x"
+    },
+    "budget_hit": false
+   }
+  ],
+  "rms_um": 3.162330190925928,
+  "rms_full_um": 2.8102454266206047,
+  "max_abs_um": 3.9176793013088176,
+  "mean_bias_um": -3.0373169759816134,
+  "n_base_runs": 6,
+  "n_imp_runs": 2,
+  "n_base_sem_points": 8,
+  "fit_rms_um": 1.1,
+  "fit_n_fev": 80,
+  "theta_base": {
+   "delta0_um": 78.68467,
+   "n_exp": 0.5,
+   "rpm_per_pct": 15.22805,
+   "f_back": 0.44645,
+   "L0_um": 0.60377,
+   "kappa_scale": 1.2569,
+   "sigma_um": 1.5662,
+   "flow_dir": "+x"
+  },
+  "budget_hit": false,
+  "max_nfev": 25,
+  "time_budget_s": 300.0,
+  "runtime_s": 129.8,
+  "notes": [
+   "fit uses only setup == 'base' (untaped 1:1 anode, no baffles, 20 % stir); the imp1 runs (taped, baffles, 5x5 cm anode, 30 % stir) are never seen [C]",
+   "reverse direction (imp1 -> base) is not attempted: 2 runs < 6 parameters [J]",
+   "the base-only fit cannot identify the imp1-specific hardware (f_back_imp is fixed at 0 and the anode size is a constant), so this tests how far the shared physics (flow + O2 + L0) extrapolates across a hardware change [J]"
+  ]
+ },
+ "trench_coupon": {
+  "run": {
+   "setup": "imp1",
+   "j_mA_cm2": 15.0,
+   "t_min": 270.0,
+   "stir_pct": 30.0,
+   "T_C": 22.0
+  },
+  "pred": {
+   "mean_um": 87.1089881184134,
+   "min_um": 55.79654,
+   "max_um": 217.67683,
+   "p5_um": 57.18776,
+   "p50_um": 76.57404,
+   "p95_um": 157.26254,
+   "max_min_ratio": 3.901260364890009,
+   "faraday_um": 89.30899271300638,
+   "apparent_eff": 0.9753663709805498,
+   "edge_center_ratio": 2.159183674950565,
+   "std_over_mean_pct": 35.234,
+   "n_grid_points": 1681
+  },
+  "measured": {
+   "min_um": 39.5,
+   "max_um": 91.0,
+   "sites_um": [
+    39.5,
+    69.0,
+    82.0
+   ],
+   "faraday_um": 89.3
+  },
+  "inside_range": {
+   "no_trench": false,
+   "narrow_trench": true,
+   "wide_trench": true,
+   "all": false
+  },
+  "theta": {
+   "delta0_um": 77.82173,
+   "n_exp": 0.5,
+   "rpm_per_pct": 15.383,
+   "f_back": 0.40353,
+   "L0_um": 0.97194,
+   "kappa_scale": 1.23174,
+   "sigma_um": 1.87484,
+   "flow_dir": "+x"
+  },
+  "calibration_found": true,
+  "calibration_created": "2026-10-28T07:26:16+00:00",
+  "resolution": "coarse",
+  "notes": [
+   "the positions of the SEM sites on the coupon are NOT known, so only the predicted min-max range can be compared with the measured range (39.5-91 um); a site inside/outside the range is not a point-wise test [J]",
+   "the trench run was pulse-reverse (9/0.5/0.5 ms) while this coupon model is DC: PR changes the local concentration at the trench mouth and is expected to raise the trench-mouth thickness relative to DC [J]",
+   "the model has no trench geometry: it predicts the planar coupon field, so 69-91 um next to the trenches is compared with the planar field maximum, not with a feature-fill solution [J]",
+   "predicted percentiles are over the coupon face grid (endpoint-inclusive, 41x41 at the coarse mesh), not area-weighted [C]",
+   "the predicted max sits on the endpoint-inclusive boundary/corner nodes, where the cell solve has an edge singularity: the p5-p95 band is the robust non-uniformity measure, the min-max ratio is the pessimistic one [C]",
+   "Faraday at 100 % = 89.3 um [C]; the measured coupon spans ~2.1-2.3x, i.e. the field non-uniformity dominates"
+  ]
+ },
+ "runtime_s": 604.9
+}

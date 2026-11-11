@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.venv-*/
+.pytest_cache/
+build/
+dist/
+
+# Desktop app
+app/node_modules/
+app/out/
+app/dist/
+
+# Generated outputs and private experimental data
+*.npz
+*.log
+*.pptx
+*.docx
+planar_doe.json
+sem_measurements.json
+trench_sem.json
+metadata_summary.json
+manual_lines.json
+platesim/imaging/previews/
+platesim/trenchflow/out/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

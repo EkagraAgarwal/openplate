@@ -1,0 +1,51 @@
+{
+  "id": "bath_conductivity_anchors",
+  "file": "bath_conductivity_anchors.json",
+  "source": {
+    "compiled_from": [
+      "T. M. Braun et al 2019 JES 166:D3259 doi 10.1149/2.0341901jes [FT Table I]",
+      "T. M. Braun et al 2020 JES 167:013510 doi 10.1149/2.0102001JES [FT Table I]",
+      "L. A. Menk et al 2019 JES 166:D3066 doi 10.1149/2.0091901jes [FT text: voltammetric slope]"
+    ]
+  },
+  "tag": "[FT] transcribed from published tables; secondhand one level (their tables cite primary conductivity literature)",
+  "data": [
+    {
+      "kind": "conductivity_point",
+      "bath": "1 mol/L CuSO4 + 0.5 mol/L H2SO4",
+      "T_K": 293,
+      "kappa_S_m": 15.26,
+      "kappa_S_cm": 0.1526,
+      "provenance": "Braun 2019 Table I; their ref = their ref [1]",
+      "relevance": "HIGH-acid NIST bath; upper bound vs team 8 g/L acid",
+      "tag": "[FT] table, [SH] primary"
+    },
+    {
+      "kind": "conductivity_point",
+      "bath": "0.88 mol/L CuSO4 + 0.18 mol/L H2SO4",
+      "T_K": 298,
+      "kappa_S_m": 7.5,
+      "kappa_S_cm": 0.075,
+      "provenance": "Braun 2020 Table I; cited to Newman, Electrochemical Systems (textbook)",
+      "relevance": "LOW-acid (17.6 g/L H2SO4, ~56 g/L Cu) - closest published anchor to team bath (8 g/L H2SO4, 65 g/L Cu); team KB [C] estimate 0.065 S/cm @22 C sits ~20% below, consistent with further acid dilution",
+      "tag": "[FT] table, [SH] primary"
+    },
+    {
+      "kind": "area_specific_resistance",
+      "bath": "1.25 mol/L CuSO4 + 0.25 mol/L CH3SO3H (MSA)",
+      "value_ohm_cm2": 3,
+      "context": "local voltammetric slope at ~0.1 A/cm2, 400 rpm helicopter cell; implies ~300 mV IR drop at 0.1 A/cm2",
+      "relevance": "cell-level check for MSA variant; not directly convertible to kappa without cell geometry",
+      "tag": "[FT] text"
+    },
+    {
+      "kind": "cross_check_note",
+      "content": "KB v1.6 kappa = 0.065 S/cm (22 C), 0.086 S/cm (40 C) is [C] +/-20%. The Braun 2020 low-acid value 0.075 S/cm @298 K independently supports the 22 C magnitude. No direct measurement for 65 g/L Cu + 8 g/L H2SO4 vs T was found in accessible literature; MEASURE IT (P2 cell resistance gives kappa via R = L/(kappa*A))."
+    }
+  ],
+  "units": {
+    "kappa": "S/m and S/cm",
+    "T": "K"
+  },
+  "notes": "GAP: no measured kappa(T) series for a 65 g/L Cu / 8 g/L H2SO4 bath found. Conductivity of CuSO4-H2SO4-H2O mixtures was measured by Hotlos & Jaskula 1988 (Hydrometallurgy 21:1, doi 10.1016/0304-386X(88)90012-6, densities+viscosities, [AB] not read) - likely also contains conductivity; not retrieved. Recommendation: treat kappa as a to-measure parameter with prior N(0.075 S/cm, 20%) at 22 C."
+}
