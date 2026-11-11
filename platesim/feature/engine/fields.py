@@ -239,6 +239,61 @@ class StepGeom:
             F_w = np.zeros(0)
         return F_r, F_z, F_w
 
+    def mac_face_fluxes(self, ufx, ufz):
+        """Signed volume fluxes F [cm2/s] of every stencil face, oriented p -> q, taken DIRECTLY from the
+        staggered (MAC) face velocities of a flow solver such as platesim.trenchflow.stokes.solve_stokes.
+
+        No interpolation and no Hs weighting: the face velocity is already the face-normal MAC unknown, so
+        the discrete divergence of the resulting flux set is the discrete divergence of the velocity field
+        (which the Stokes solver makes ~1e-14 in every open cell).  ufx has the engine orientation
+        (nr, nz): ufx[i, j] is the x-face between cells (i-1, j) and (i, j), i.e. between (ir, jr) and
+        (ir+1, jr) it is ufx[ir+1, jr]; ufz (nr, nz+1): ufz[i, m] is the z-face between rows m-1 and m,
+        i.e. between (iz, jz) and (iz, jz+1) it is ufz[iz, jz+1].  Both index conventions are the
+        transposed CavityGrid layout documented in trenchflow.stokes._layout, and the faces of cells that
+        touch a solid cell (psi <= 0) are exactly 0 in the MAC field.
+
+        The face measure is the same geometric factor face_fluxes uses (geo * dx for planar trench_full,
+        where geo = 1) but WITHOUT the Hs face weight (the Stokes field is sharp).  The wrap face p -> q
+        points in -x, so F_w = -ufx[0, jw] * dx * geo.  The returned F_top (one value per active top cell
+        ptop, positive = leaving the species domain upward) is the flux through the z-face between rows
+        jt and jt+1, which the species stencil truncates at the Dirichlet plane."""
+        g = self.g
+        dx = g.dx
+        F_r = ufx[self.ir + 1, self.jr] * dx * self.geo_r
+        F_z = ufz[self.iz, self.jz + 1] * dx * self.geo_z
+        if g.periodic_x and self.jw.size:
+            F_w = -ufx[0, self.jw] * dx * self.geo_w
+        else:
+            F_w = np.zeros(0)
+        geo_top_z = g.AZ[self.itop, 0] / dx
+        F_top = ufz[self.itop, self.jt + 1] * dx * geo_top_z
+        return F_r, F_z, F_w, F_top
+
+    def mac_advection(self, ufx, ufz):
+        """Conservative advection operator from the MAC face velocities, with the open top boundary.
+
+        Returns (adv, adv_bc, F_top):
+          * adv = adv_matrix(F_r, F_z, F_w, form='divergence') plus the outflow diagonal: every top cell
+            with F_top > 0 loses  F_top * c_P  through the Dirichlet plane, so +F_top is added to its
+            diagonal (row sum = full discrete flux divergence, including the plane).
+          * adv_bc = rhs source of the inflow top cells: F_top < 0 brings bulk fluid in, |F_top| times the
+            species bulk value (the caller scales it: 1 for the normalised Cu2+/suppressor unknowns,
+            c_bulk / c_h_bulk for the absolute tertiary species).
+          * F_top as in mac_face_fluxes (per active top cell).
+        With these terms the operator preserves a uniform field exactly: (adv @ 1 - adv_bc) == 0 in
+        every row, because the interior flux divergence of a top cell is -F_top."""
+        F_r, F_z, F_w, F_top = self.mac_face_fluxes(ufx, ufz)
+        adv = self.adv_matrix(F_r, F_z, F_w, form="divergence")
+        diag = np.zeros(self.n)
+        rhs = np.zeros(self.n)
+        if F_top.size:
+            out = F_top > 0
+            diag[self.ptop[out]] = F_top[out]
+            rhs[self.ptop[~out]] = -F_top[~out]
+        if np.any(diag):
+            adv = adv + sp.diags(diag)
+        return adv, rhs, F_top
+
     def adv_matrix(self, F_r, F_z, F_w, form="gradient"):
         """First-order upwind advection operator (CSR), non-symmetric.
 
@@ -519,15 +574,21 @@ class StepSolver:
     PHI_SC = 0.05        # V   weights for the Anderson least-squares norm
     V_SC = 0.05
 
-    def __init__(self, geo: StepGeom, p, ph, Dt, reuse=None, flow=None):
+    def __init__(self, geo: StepGeom, p, ph, Dt, reuse=None, flow=None, flow_faces=None):
         """reuse: LU factors (c, s, phi) of the previous step; valid when the active cell set is unchanged, they
         then serve as preconditioners (refinement) for the slightly different matrices of this step.
         flow: (ux, uz) cell-centred velocities (nr, nz) in cm/s for the resolved cavity flow
-        ('trench_full'); the advective operator is added to the Cu2+ and suppressor equations."""
+        ('trench_full'); the advective operator is added to the Cu2+ and suppressor equations.
+        flow_faces: (ufx, ufz) MAC face velocities in the engine orientation (nr, nz) / (nr, nz+1);
+        required by flow_solver='stokes', which then uses the conservative divergence-form operator of
+        StepGeom.mac_advection (plus its open-top rhs adv_bc) instead of the interpolated face fluxes."""
         self.geo, self.p, self.ph = geo, p, ph
         self.kin = Kinetics(ph, p)
         self.Dt = Dt
         self.flow = flow
+        self.flow_faces = flow_faces
+        self.adv_bc = None                  # rhs source of the open-top inflow (stokes MAC path only)
+        self.adv_top = None                 # top-plane z-face flux per active top cell (stokes path only)
         self.tertiary = p.transport == "tertiary"
         g = geo.g
         lu_c = lu_s = lu_p = None
@@ -542,7 +603,10 @@ class StepSolver:
         if g.periodic_x:
             # non-symmetric advection-diffusion: general LU (no symmetric mode), no cross-step LU reuse
             ux, uz = (np.zeros((g.nr, g.nz)), np.zeros((g.nr, g.nz))) if flow is None else flow
-            adv = geo.adv_matrix(*geo.face_fluxes(ux, uz), form=p.adv_form)
+            if p.flow_solver == "stokes" and flow_faces is not None:
+                adv, self.adv_bc, self.adv_top = geo.mac_advection(*flow_faces)
+            else:
+                adv = geo.adv_matrix(*geo.face_fluxes(ux, uz), form=p.adv_form)
             self.adv = adv                                # exposed for the sim.py Cu2+ balance
             self.cs_c = CachedGen(geo, self._base(Kc, adv))
             self.cs_s = CachedGen(geo, self._base(Ks, adv))
@@ -577,7 +641,10 @@ class StepSolver:
         adv = None
         if g.periodic_x:
             ux, uz = (np.zeros((g.nr, g.nz)), np.zeros((g.nr, g.nz))) if self.flow is None else self.flow
-            adv = geo.adv_matrix(*geo.face_fluxes(ux, uz), form=p.adv_form)
+            if p.flow_solver == "stokes" and self.flow_faces is not None:
+                adv, self.adv_bc, self.adv_top = geo.mac_advection(*self.flow_faces)
+            else:
+                adv = geo.adv_matrix(*geo.face_fluxes(ux, uz), form=p.adv_form)
         self.adv = adv
         zero = np.zeros((g.nr, g.nz))
         A0, self.bc_c = geo.sg_operator(zero, ph.z_cu, self.D_cu_a, ph.f_RT,
@@ -687,6 +754,8 @@ class StepSolver:
                                   p.k_minus * duty_f, b_ex)
                 extra = w * p.Gamma * p.k_plus * (1 - th_new)          # sink = Gamma k_plus s (1-theta)
                 rhs = self.bc_s.copy()
+                if self.adv_bc is not None:                   # bulk normalised: s_bulk -> 1
+                    rhs = rhs + self.adv_bc
                 if p.s_transient:
                     extra = extra + geo.vh / dt
                     rhs += geo.vh / dt * s_old
@@ -702,7 +771,10 @@ class StepSolver:
             gu, gs = kin.cath(V_new - phi_new, acc)
             ci = (1 - th_new) * gu + th_new * gs
             extra = p.efficiency * duty_f * w * ci / (2 * F * p.c_bulk)  # Cu2+ sink, time-averaged over PR cycle
-            ct_new = np.clip(self.cs_c.solve(extra, self.bc_c + rev_src), 0.0, 3.0)
+            rhs_c = self.bc_c + rev_src
+            if self.adv_bc is not None:                       # open-top inflow, bulk normalised to 1
+                rhs_c = rhs_c + self.adv_bc
+            ct_new = np.clip(self.cs_c.solve(extra, rhs_c), 0.0, 3.0)
             diag['bal'] = (np.dot(w * ci, ct_new) / ctrl['I_t'] - 1.0) if galvano else 0.0
             return np.concatenate([th_new, s_new, ct_new, phi_new / self.PHI_SC, [V_new / self.V_SC]])
 
@@ -723,6 +795,8 @@ class StepSolver:
                                   p.k_minus * duty_f, b_ex)
                 extra = w * p.Gamma * p.k_plus * (1 - th_new)
                 rhs = self.bc_s.copy()
+                if self.adv_bc is not None:                   # bulk normalised: s_bulk -> 1
+                    rhs = rhs + self.adv_bc
                 if p.s_transient:
                     extra = extra + geo.vh / dt
                     rhs += geo.vh / dt * s_old
@@ -745,11 +819,17 @@ class StepSolver:
                 A, bc = geo.sg_operator(phi_g, ph.z_cu, self.D_cu_a, ph.f_RT,
                                         chi_max=p.tertiary_chi_max, adv=self.adv)
                 self.sg_c.base = A
-                c_cu = np.maximum(self.sg_c.solve(sink, bc * p.c_bulk + rev_src_abs), self.c_floor)
+                rhs_cu = bc * p.c_bulk + rev_src_abs
+                if self.adv_bc is not None:                   # absolute concentration: bulk = c_bulk
+                    rhs_cu = rhs_cu + self.adv_bc * p.c_bulk
+                c_cu = np.maximum(self.sg_c.solve(sink, rhs_cu), self.c_floor)
                 Ah, bch = geo.sg_operator(phi_g, ph.z_h, self.D_h_a, ph.f_RT,
                                           chi_max=p.tertiary_chi_max, adv=self.adv)
                 self.sg_h.base = Ah
-                c_h = np.maximum(self.sg_h.solve(np.zeros(n), bch * self.cb[1]), self.c_floor)
+                rhs_h = bch * self.cb[1]
+                if self.adv_bc is not None:                   # absolute concentration: bulk = c_h_bulk
+                    rhs_h = rhs_h + self.adv_bc * self.cb[1]
+                c_h = np.maximum(self.sg_h.solve(np.zeros(n), rhs_h), self.c_floor)
                 # ---- electroneutrality closes the sulfate pool (majority inert anion, no flux BC)
                 c_s = np.maximum(-(ph.z_cu * c_cu + ph.z_h * c_h) / ph.z_so4, self.c_floor)
                 ct_w = np.clip(c_cu / p.c_bulk, 0.0, 3.0)

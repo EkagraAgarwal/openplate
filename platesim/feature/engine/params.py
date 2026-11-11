@@ -126,6 +126,17 @@ class Params:
     # 'divergence': legacy conservative form +div(Hs u c) (column sums zero).  Kept only for comparison;
     #   it is not discretely stable against the LBM flux imbalance and re-introduces the ripple.
     adv_form: str = "gradient"                 # 'gradient' | 'divergence'
+    # ---- solver for the resolved cavity flow (trench_full only; see sim.ViaSim.cavity_flow)
+    # 'lbm' (default, bit-identical legacy path): platesim.trenchflow.cavity_lbm, cell-centred velocities
+    #   interpolated to the faces by StepGeom.face_fluxes and discretised according to adv_form above.
+    # 'stokes': platesim.trenchflow.stokes.solve_stokes, whose MAC face velocities are discretely
+    #   divergence free.  The advective operator of every advected species is then ALWAYS the conservative
+    #   'divergence' form built directly from those face fluxes (StepGeom.mac_face_fluxes: no
+    #   interpolation, no Hs weighting) plus the open-top boundary flux through the Dirichlet plane, so
+    #   adv_form is IGNORED for this path (it only selects the LBM discretisation).  With that operator the
+    #   Cu2+ balance closes (cu_balance_rel) because the advective net influx through the plane is counted.
+    # The flow itself is only used for geometry='trench_full' (periodic x); otherwise both solvers are idle.
+    flow_solver: str = "lbm"                   # 'lbm' | 'stokes'
     # ---- growth
     efficiency: float = 1.0                    # current efficiency for growth velocity and Cu2+ sink/source
     # ---- model switches
@@ -193,6 +204,7 @@ class Phys:
 
 TRANSPORTS = ("enhanced", "tertiary")
 ADV_FORMS = ("gradient", "divergence")
+FLOW_SOLVERS = ("lbm", "stokes")
 
 
 def derive(p: Params, T_C: float) -> Phys:
@@ -204,6 +216,8 @@ def derive(p: Params, T_C: float) -> Phys:
         raise ValueError(f"transport must be one of {TRANSPORTS}, got {p.transport!r}")
     if p.adv_form not in ADV_FORMS:
         raise ValueError(f"adv_form must be one of {ADV_FORMS}, got {p.adv_form!r}")
+    if p.flow_solver not in FLOW_SOLVERS:
+        raise ValueError(f"flow_solver must be one of {FLOW_SOLVERS}, got {p.flow_solver!r}")
     tertiary = p.transport == "tertiary"
     D_H = p.D_H25 * fD
     D_so4 = p.D_SO425 * fD
