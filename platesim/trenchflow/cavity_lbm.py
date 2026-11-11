@@ -18,6 +18,12 @@ Scheme (all [J]):
 Units: lattice units inside the solver, cm/s and um outside (geometry.Conventions). The converged
 lattice field is rescaled by (u_top / u_lid_lb); for a Reynolds-matched steady laminar flow that is the
 exact similarity scaling, and it is also exact for Stokes flow where inertia is negligible [C].
+
+Sign of the driving: G = 0 is the only resting case. For G < 0 the flow is the mirror image of the G > 0
+flow: the Reynolds scaling uses |G| (identical Re, tau, u_lid), the lid is driven in -x, and the lattice
+field is mirror-mapped back (ux -> -ux[:, ::-1], uz -> uz[:, ::-1]). Solving the mirrored geometry with
+the lid in +x and mapping back is exact by symmetry (bit-identical mirror), and it leaves every
+arithmetic operation of the G > 0 path untouched.
 """
 from __future__ import annotations
 
@@ -103,10 +109,13 @@ def _scaling(grid, shear_rate_s, nu_cm2_s, u_lid_lb, tau_guess):
     (Re ~ 0.05-200, N_H ~ 20-70) the required tau is almost always > TAU_MAX: a lattice cannot be
     viscous enough at u_lid <= 0.1, so tau is clamped at TAU_MAX and u_lid is lowered to keep Re. With
     Re << 1 the flow is the Stokes solution, which does not vary with Re at all, so the clamp is benign.
+
+    Only |shear_rate_s| enters: Re, tau and u_lid are identical for +G and -G, and the returned
+    ``u_top`` is the speed magnitude at z = height_um (the caller re-applies the sign).
     """
     h_um = grid.height_um - grid.deposit_um
     h_cm = max(h_um, 1e-12) * 1e-4
-    u_top = shear_rate_s * h_cm                      # cm/s at z = height_um
+    u_top = abs(float(shear_rate_s)) * h_cm      # cm/s at z = height_um (speed magnitude)
     n_h = float(max(1, int(np.count_nonzero(grid.z_um >= grid.deposit_um))))
     re = u_top * h_cm / nu_cm2_s
     nu_min = (TAU_MIN - 0.5) / 3.0
@@ -144,11 +153,19 @@ def solve_flow(grid: CavityGrid, shear_rate_s: float, nu_cm2_s: float = 0.0114, 
     nu_cm2_s: kinematic viscosity, default 0.0114 cm2/s [J: dilute CuSO4/H2SO4, ~22 C].
     tau: fallback/initial guess only; the relaxation time used is the one from _scaling().
     Returns a FlowField with ux, uz in cm/s, exactly 0.0 in solid cells.
+
+    shear_rate_s == 0 (or non-finite) gives a fluid at rest. A negative shear rate gives the mirror
+    image of the positive-shear flow: the same speed magnitude with the lid moving in -x. The scaling
+    uses |G|, the lattice problem is solved on the mirrored geometry with the lid in +x, and the field
+    is mapped back (ux -> -ux[:, ::-1], uz -> uz[:, ::-1]).
     """
     t0 = time.time()
-    sc = _scaling(grid, shear_rate_s, nu_cm2_s, u_lid_lb, tau)
+    sc = _scaling(grid, abs(shear_rate_s), nu_cm2_s, u_lid_lb, tau)
     u_lid = sc["u_lid_lb"]
-    u_top = sc["u_top"]
+    u_top = sc["u_top"]                          # speed magnitude at z = height_um
+    mirror = bool(np.isfinite(shear_rate_s) and shear_rate_s < 0.0)
+    if mirror:
+        u_top = -u_top                           # report the lid speed with the sign of G
     nz, nx = grid.shape
 
     key = dict(steps=0, tau=sc["tau"], u_lid_lb=u_lid, re=sc["re"], re_sim=sc["re_sim"],
@@ -156,19 +173,22 @@ def solve_flow(grid: CavityGrid, shear_rate_s: float, nu_cm2_s: float = 0.0114, 
                nu_lb=sc["nu_lb"], re_clamped=sc["re_clamped"], n_fluid_rows=sc["n_fluid_rows"],
                scheme="D2Q9-BGK/srt, halfway bounce-back, lid momentum correction")
 
-    if not np.isfinite(u_top) or u_top <= 0.0:            # no driving: trivially at rest
+    if not np.isfinite(shear_rate_s) or shear_rate_s == 0.0:      # no driving: trivially at rest
         z = np.zeros(grid.shape)
         return FlowField(grid=grid, ux=z.copy(), uz=z.copy(), shear_rate_s=float(shear_rate_s),
                          converged=True, info=dict(key, wall_s=time.time() - t0, residual=0.0))
 
-    # lattice domain: the grid plus one virtual solid row for the moving lid at z = height_um
+    # lattice domain: the grid plus one virtual solid row for the moving lid at z = height_um.
+    # G < 0 is solved on the x-mirrored geometry with the lid still moving in +x; the feedback is a
+    # pure index reversal of the solid mask, so the negative-shear result is the exact mirror of the
+    # positive-shear one (the lattice scheme is reflection-equivariant about x).
     solid = np.ones((nz + 1, nx), bool)
-    solid[:nz] = grid.solid
+    solid[:nz] = grid.solid[:, ::-1] if mirror else grid.solid
     zz = np.broadcast_to(grid.z_um[:, None], grid.shape)
 
     # start from the analytic Couette profile of the open region (exact solution without the trench)
     ux0 = np.zeros((nz + 1, nx))
-    ux0[:nz] = np.where(grid.solid, 0.0,
+    ux0[:nz] = np.where(solid[:nz], 0.0,
                         u_lid * np.clip(zz, 0.0, grid.height_um) / max(grid.height_um, 1e-30))
     f = _equilibrium(np.ones_like(ux0), ux0, np.zeros_like(ux0))
     ux_prev, uz_prev = ux0[:nz], np.zeros(grid.shape)
@@ -191,10 +211,14 @@ def solve_flow(grid: CavityGrid, shear_rate_s: float, nu_cm2_s: float = 0.0114, 
             break
 
     # lattice -> physical: exact similarity scaling for a Reynolds-matched steady laminar flow
-    scale = u_top / u_lid
-    ux_cm = np.where(grid.solid, 0.0, ux_prev * scale)
-    uz_cm = np.where(grid.solid, 0.0, uz_prev * scale)
-    speed = np.where(grid.solid, 0.0, np.hypot(ux_prev, uz_prev))
+    scale = sc["u_top"] / u_lid                  # speed magnitude (sign is carried by ux_f/uz_f)
+    if mirror:                                   # mirror back into the original x orientation
+        ux_f, uz_f = -ux_prev[:, ::-1], uz_prev[:, ::-1]
+    else:
+        ux_f, uz_f = ux_prev, uz_prev
+    ux_cm = np.where(grid.solid, 0.0, ux_f * scale)
+    uz_cm = np.where(grid.solid, 0.0, uz_f * scale)
+    speed = np.where(grid.solid, 0.0, np.hypot(ux_f, uz_f))
     key.update(steps=steps, wall_s=time.time() - t0, residual=residual, converged=converged,
                max_mach=float(speed.max() * np.sqrt(3.0)), dx_um=grid.dx_um)
     return FlowField(grid=grid, ux=ux_cm, uz=uz_cm, shear_rate_s=float(shear_rate_s),
@@ -213,7 +237,7 @@ def penetration_depth_um(flow: FlowField, frac: float = 0.01) -> float:
         return 0.0
     ix = int(np.argmin(np.abs(g.x_um - 0.5 * g.pitch_um)))       # trench centre column
     speed = np.hypot(flow.ux[:, ix], flow.uz[:, ix])
-    thresh = frac * flow.shear_rate_s * 100.0 * 1e-4              # cm/s
+    thresh = frac * abs(flow.shear_rate_s) * 100.0 * 1e-4         # cm/s (speed magnitude)
     rows = np.nonzero((g.z_um < 0.0) & (~g.solid[:, ix]))[0]
     for iz in rows[np.argsort(-g.z_um[rows])]:                    # scan downwards from z = 0
         if speed[iz] < thresh:
@@ -222,16 +246,20 @@ def penetration_depth_um(flow: FlowField, frac: float = 0.01) -> float:
 
 
 def eddy_summary(flow: FlowField) -> dict:
-    """Trench-interior speed, recirculation flag and outer-flow penetration depth."""
+    """Trench-interior speed, recirculation flag and outer-flow penetration depth.
+
+    Recirculation is flow *opposite to the lid*, so the threshold is sign(G) * ux < -1e-3 |u_top|; the
+    flag is therefore identical for +G and -G (the two flows are mirror images)."""
     g = flow.grid
     below = (g.z_um[:, None] < 0.0) & (~g.solid)
     if not below.any():
         return {"u_max_in_trench_cm_s": 0.0, "has_recirculation": False, "penetration_um": 0.0}
     speed = np.hypot(flow.ux, flow.uz)
+    sign = float(np.sign(flow.shear_rate_s))                     # lid direction for the recirculation test
     u_top = abs(flow.shear_rate_s) * (g.height_um - g.deposit_um) * 1e-4
     return {
         "u_max_in_trench_cm_s": float(speed[below].max()),
-        "has_recirculation": bool((flow.ux[below] < -1e-3 * u_top).any()),
+        "has_recirculation": bool((sign * flow.ux[below] < -1e-3 * u_top).any()),
         "penetration_um": float(penetration_depth_um(flow)),
     }
 

@@ -1,13 +1,13 @@
 """Tests for platesim.trenchflow.cavity_lbm (D2Q9 shear flow over a periodic trench).
 
-Small grids only (dx = 8 um) so the whole module runs in a few seconds.
+Small grids only (dx = 4-8 um) so the whole module runs in a few seconds.
 Analytic reference: Couette flow u_x = G z over a flat wall, with the no-slip plane at z = 0 and the
 first fluid row centre at z = dx/2 (halfway bounce-back).
 """
 import numpy as np
 
 from platesim.trenchflow.cavity_lbm import eddy_summary, penetration_depth_um, solve_flow
-from platesim.trenchflow.geometry import flat_grid, trench_grid
+from platesim.trenchflow.geometry import CavityGrid, flat_grid, trench_grid
 
 
 def test_couette_linear_profile():
@@ -84,3 +84,80 @@ def test_deep_narrow_cavity_recirculates():
     pen = penetration_depth_um(flow)
     assert pen == s["penetration_um"]
     assert 0.0 < pen < g.depth_um, f"penetration {pen} um vs depth {g.depth_um} um"
+
+
+# --- sign of the driving: negative shear reverses the cavity flow, it does not stop it -----------
+
+def _symmetric_trench(dx_um: float = 6.0) -> CavityGrid:
+    """Small trench symmetric about the periodic domain centre, so x -> -x is a pure index reversal."""
+    g = trench_grid(width_um=48, depth_um=28, height_um=100, dx_um=dx_um)
+    assert np.array_equal(g.solid[:, ::-1], g.solid), "test grid is not mirror symmetric"
+    assert abs(0.5 * g.pitch_um - (g.x_left_um + 0.5 * g.width_um)) < 1e-12
+    return g
+
+
+def test_zero_shear_is_at_rest():
+    """G = 0 is the only resting case."""
+    g = _symmetric_trench()
+    flow = solve_flow(g, 0.0)
+    assert flow.converged
+    assert np.all(flow.ux == 0.0) and np.all(flow.uz == 0.0)
+    assert flow.shear_rate_s == 0.0
+    assert flow.info["u_top_cm_s"] == 0.0
+    assert flow.info["steps"] == 0
+
+
+def test_negative_shear_reverses_the_flow_exactly():
+    """-G is the mirror image of +G: ux -> -ux[:, ::-1], uz -> uz[:, ::-1], same Re/tau/u_lid."""
+    g = _symmetric_trench()
+    shear = 50.0
+    pos = solve_flow(g, shear)
+    neg = solve_flow(g, -shear)
+    assert pos.converged and neg.converged
+    scale = max(np.abs(pos.ux).max(), np.abs(pos.uz).max(), 1e-30)
+    dev_x = float(np.abs(neg.ux + pos.ux[:, ::-1]).max() / scale)
+    dev_z = float(np.abs(neg.uz - pos.uz[:, ::-1]).max() / scale)
+    assert dev_x < 1e-10, f"ux mirror error {dev_x:.2e} of max|u|"
+    assert dev_z < 1e-10, f"uz mirror error {dev_z:.2e} of max|u|"
+    # Reynolds matching is done with |G|, so the lattice parameters are identical
+    for k in ("tau", "u_lid_lb", "re", "re_sim", "nu_lb", "re_clamped", "n_fluid_rows"):
+        assert neg.info[k] == pos.info[k], k
+    # ... while the reported driving keeps the sign of G
+    assert neg.shear_rate_s == -shear and pos.shear_rate_s == shear
+    assert neg.info["u_top_cm_s"] == -pos.info["u_top_cm_s"] < 0.0
+
+
+def test_negative_shear_is_not_at_rest_and_flows_in_minus_x():
+    """A negative shear drives the lid in -x: the field is not at rest and the far field follows -G."""
+    g = _symmetric_trench()
+    shear = 50.0
+    flow = solve_flow(g, -shear)
+    assert flow.converged
+    u_top = shear * (g.height_um - g.deposit_um) * 1e-4               # cm/s, magnitude
+    assert np.abs(flow.ux).max() > 0.5 * u_top, "negative shear returned a nearly resting fluid"
+    assert np.abs(flow.uz).max() > 1e-3 * u_top, "no reverse cell: the cavity flow did not turn over"
+
+    # far field (topmost fluid row) is the analytic Couette value with the sign of G
+    top = ~g.solid[-1]
+    assert top.sum() > 3
+    u_top_row = flow.ux[-1, top]
+    assert np.all(u_top_row < 0.0)
+    exact = -shear * g.z_um[-1] * 1e-4
+    dev = abs(float(u_top_row.mean()) - exact) / abs(exact)
+    assert dev < 0.02, f"far-field error {dev:.2%} of the analytic Couette value"
+    assert flow.info["u_top_cm_s"] < 0.0
+
+
+def test_negative_shear_recirculation_matches_positive():
+    """eddy_summary detects recirculation as flow against the lid, so +G and -G agree."""
+    g = _symmetric_trench()
+    pos = eddy_summary(solve_flow(g, 50.0))
+    neg = eddy_summary(solve_flow(g, -50.0))
+    assert pos["has_recirculation"], "expected an eddy in the trench for +G"
+    assert neg["has_recirculation"] == pos["has_recirculation"]
+    assert neg["has_recirculation"] is True
+    ref = max(pos["u_max_in_trench_cm_s"], 1e-30)
+    assert abs(neg["u_max_in_trench_cm_s"] - pos["u_max_in_trench_cm_s"]) <= 1e-10 * ref
+    assert abs(neg["penetration_um"] - pos["penetration_um"]) <= 1e-9 * max(g.depth_um, 1.0)
+    assert 0.0 < neg["penetration_um"] <= g.depth_um
+
