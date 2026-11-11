@@ -5,8 +5,10 @@ Small cases only (dx = 8 um, 2 stages) so the module runs in a few seconds.
 import numpy as np
 import pytest
 
+from platesim.feature.engine import dc, run_case
 from platesim.feature.engine.params import Params, derive
-from platesim.trenchflow.model import (model_constants, predict_site, shear_from_delta, solve_k, stage)
+from platesim.trenchflow.model import (model_constants, predict_site, shear_from_delta, solve_k, stage,
+                                       stage_fields)
 from platesim.trenchflow.geometry import trench_grid
 from platesim.trenchflow.transport import region_means
 
@@ -16,6 +18,11 @@ D = float(PH.D_c)
 
 SMALL = dict(width_um=160.0, depth_um=80.0, delta_um=80.0, shear_rate_s=50.0, j_field_mA_cm2=15.0,
              deposit_um=0.0, dx_um=8.0)
+
+# cheap synthetic site: 60 x 30 um trench, default trenchflow pitch (60 + 4 * 30 = 180 um)
+SITE = {"id": "synth60", "width_um": 60.0, "depth_um": 30.0, "T_C": 22.0, "hours": 0.5,
+        "field_um": {"lo": 6.0, "hi": 8.0, "best": 7.0},
+        "floor_um": {"lo": 5.5, "hi": 6.5, "best": 6.0}}
 
 
 def _delta_from_gamma(G, D_, L=2.0):
@@ -83,3 +90,64 @@ def test_predict_site_keys_and_bound():
     # j_field from the measured field thickness: field_um*1e-4 / (Mfac * hours * 3600)
     _, _, mfac = model_constants(22.0)
     assert abs(out["j_field_mA_cm2"] - 8.0e-4 / (mfac * 0.5 * 3600.0) * 1e3) < 1e-9
+
+
+def test_default_constants_equal_explicit_ph_exactly():
+    """No-ph defaults are bit-identical to passing ph = derive(Params(), 22.0)."""
+    ph = derive(Params(), 22.0)
+    assert model_constants(22.0) == model_constants(22.0, p=Params(), ph=ph)
+    a = stage(**SMALL, use_flow=True)
+    b = stage(**SMALL, use_flow=True, p=Params(), ph=ph)
+    assert a == b
+
+    oa = predict_site(SITE, 20.0, n_stages=2, dx_um=8.0)
+    ob = predict_site(SITE, 20.0, n_stages=2, dx_um=8.0, p=Params(), ph=ph)
+    assert oa == ob
+
+
+def test_efficiency_changes_mfac_and_j_field_by_inverse_factor():
+    """Params(efficiency=0.8) -> Mfac * 0.8, so the field current from field_um scales by 1/0.8."""
+    p08 = Params(efficiency=0.8)
+    ph08 = derive(p08, 22.0)
+    D0, cb0, m0 = model_constants(22.0)
+    D1, cb1, m1 = model_constants(22.0, p=p08, ph=ph08)
+    assert D1 == D0 and cb1 == cb0                     # efficiency only enters Mfac
+    assert m1 == pytest.approx(0.8 * m0, rel=1e-15)
+
+    base = predict_site(SITE, 20.0, n_stages=2, dx_um=8.0)
+    eff8 = predict_site(SITE, 20.0, n_stages=2, dx_um=8.0, p=p08, ph=ph08)
+    assert eff8["j_field_mA_cm2"] / base["j_field_mA_cm2"] == pytest.approx(1.0 / 0.8, rel=1e-12)
+
+
+def test_d_source_reports_which_diffusivity_was_used():
+    """D_source names the transport path; tertiary keeps the lumped migration on the 1-D model."""
+    default = stage(**SMALL, use_flow=False)
+    assert default["D_source"] == "enhanced:ph.D_c"
+    assert "D_source" in stage_fields(**SMALL, use_flow=False)
+    assert "D_source" in predict_site(SITE, 20.0, n_stages=2, dx_um=8.0)
+
+    tp = Params(transport="tertiary")
+    ph_t = derive(tp, 22.0)
+    assert ph_t.D_c == ph_t.D_cu                      # the engine drops migration on this path
+    tert = stage(**SMALL, use_flow=False, p=tp, ph=ph_t)
+    assert "tertiary" in tert["D_source"]
+    # no potential field in the 1-D quick model -> E_mig*D_cu, i.e. the same D as the default path
+    assert model_constants(22.0, p=tp, ph=ph_t)[0] == model_constants(22.0)[0]
+    assert {k: v for k, v in tert.items() if k != "D_source"} == \
+        {k: v for k, v in default.items() if k != "D_source"}
+
+
+def test_start_floor_over_field_matches_feature_engine():
+    """At the start of plating the no-flow quick model agrees with trench_full within 0.05.
+
+    Measured on this host: feature engine 0.96336, trenchflow 0.92950, difference 0.0339 (0.05 h of DC
+    at 10 mA/cm2, dx 8, delta 20, 60 x 30 um trench, f_open 0.2).
+    """
+    delta, j = 20.0, 10.0
+    p = Params(geometry="trench_full", H_um=30.0, dx_um=8.0, delta_um=delta, k_mix=0.0,
+               suppressor=False, ohmic=False, flow_shear_s=0.0, max_overburden_um=0.0)
+    res = run_case(60.0, 22.0, dc(j, 0.05), p, f_open=0.2, label="a7_xcheck")
+    s = res["series"]
+    fe = s["floor_height_um"][-1] / s["face_thickness_um"][-1]
+    tf = stage_fields(60.0, 30.0, delta, 0.0, j, 0.0, T_C=22.0, dx_um=8.0, use_flow=False)
+    assert abs(fe - tf["floor_over_field"]) <= 0.05, (fe, tf["floor_over_field"])
