@@ -21,6 +21,31 @@ Galvanostatic: total cathode current is pinned to I_total by keeping the cathode
 potential as an unknown (gauge phi_cathode = 0, solve phi_anode = V_cell) with the
 extra Newton row  \int_cathode j dA = I_total.  Charge neutrality then gives
 \int_anode j dA = I_total automatically.
+
+Optional thin-seed sheet resistance (terminal effect), OFF by default
+--------------------------------------------------------------------
+The base model treats the coupon metal as equipotential (phi_cathode = 0).  With
+`seed_R_sq = R_s` (ohm/sq) the PVD Cu seed on the coupon front face carries an
+in-plane metal potential V_m(s) obeying the thin-film (sheet) equation
+
+    div_s( (1/R_s) grad_s V_m ) = -j(s),      V_m = 0 on the clip edge,
+                                              dV_m/dn = 0 on the other edges
+
+where j is the local cathodic current density (A/cm2, positive into the metal).
+SIGN CONVENTION (this is the easy place to get it wrong): the cathodic current
+enters the film over the whole face and leaves through the clip, so V_m rises
+away from the clip and is non-negative; for uniform j0 on a strip of length L
+fed at one end, V_m(x) = R_s j0 x (2L - x) / 2, i.e. V_m(L) = R_s j0 L^2 / 2 > 0.
+The local cathode overpotential therefore becomes
+
+    eta_c = V_m(s) - phi_l          (base model: eta_c = 0 - phi_l, V_m = 0)
+
+so the far-from-clip region is less cathodic and plates thinner, as observed
+early in plating.  V_m is a nodal offset on the coupon front nodes only; it is
+solved by a fixed-point loop around the unchanged Newton solve (inner solve ->
+j on the front face -> 2-D sheet Poisson on a structured grid -> relax -> repeat).
+With seed_R_sq = None no offset is applied and the result is bit-identical to the
+equipotential model.
 """
 from __future__ import annotations
 
@@ -154,8 +179,16 @@ def _v_hint(I: float, gap: float, kappa: float, area: float, i0: float,
 def _solve_core(cm: CellMesh, kappa: float, I_total: float, i0: float,
                 ac: float, aa: float, f: float, jlim: np.ndarray, gap: float,
                 taped: bool = True, on_iter=None, tol: float = 1e-7,
-                max_iter: int = 60) -> SimpleNamespace:
-    """Newton solve of the augmented (phi_l, V_cell) system. phi_cathode fixed at 0."""
+                max_iter: int = 60, vm: np.ndarray | None = None,
+                phi0: tuple[np.ndarray, float] | None = None) -> SimpleNamespace:
+    """Newton solve of the augmented (phi_l, V_cell) system. phi_cathode fixed at 0.
+
+    `vm` (optional, nodal, V) is the seed metal potential on the coupon front face:
+    it replaces the cathode overpotential eta_c = -phi_l by eta_c = vm - phi_l
+    (vm is zero off the front face).  `vm=None` reproduces the equipotential model
+    bit-for-bit.  d eta_c / d phi_l is still -1, so the Jacobian is unchanged.
+    `phi0=(phi, phi_a)` warm-starts the Newton iteration.
+    """
     if I_total <= 0:
         raise ValueError("I_total must be positive")
     m = cm.mesh
@@ -186,9 +219,20 @@ def _solve_core(cm: CellMesh, kappa: float, I_total: float, i0: float,
     x0 = np.clip(m.p[0], 0.0, gap)
     phi = (_v_hint(I_total, gap, kappa, A_cath, i0, ac, aa, f)) * x0 / max(gap, 1e-12)
     phi_a = float(_v_hint(I_total, gap, kappa, A_cath, i0, ac, aa, f))
+    if phi0 is not None:
+        phi, phi_a = np.array(phi0[0], dtype=float), float(phi0[1])
+
+    if vm is None:
+        def _eta_c(phi_v):
+            return -phi_v
+    else:
+        vm_v = np.asarray(vm, dtype=float)
+
+        def _eta_c(phi_v):
+            return vm_v - phi_v           # eta_c = V_m - phi_l on the front face
 
     def residual(phi_v, pa_v):
-        eta_c = -phi_v
+        eta_c = _eta_c(phi_v)
         eta_a = pa_v - phi_v
         Fc = asm(_cath_flux, fb_c, eta=eta_c, jlim=jlim, **kw)
         Fa = asm(_anode_flux, fb_a, eta=eta_a, **kw)
@@ -208,7 +252,7 @@ def _solve_core(cm: CellMesh, kappa: float, I_total: float, i0: float,
         if Rn < tol:
             converged = True
             break
-        eta_c = -phi
+        eta_c = _eta_c(phi)
         eta_a = phi_a - phi
         Gc = asm(_cath_mass, fb_c, eta=eta_c, jlim=jlim, **kw)
         Ga = asm(_anode_mass, fb_a, eta=eta_a, **kw)
@@ -243,7 +287,7 @@ def _solve_core(cm: CellMesh, kappa: float, I_total: float, i0: float,
         raise RuntimeError(f"Newton did not converge in {max_iter} iterations (residual {Rn:.3e})")
 
     # ---- converged state
-    eta_c = -phi
+    eta_c = _eta_c(phi)
     eta_a = phi_a - phi
     Fc = asm(_cath_flux, fb_c, eta=eta_c, jlim=jlim, **kw)
     Fa = asm(_anode_flux, fb_a, eta=eta_a, **kw)
@@ -332,6 +376,89 @@ def _uniformity(j: np.ndarray, half_w: float, half_h: float) -> dict:
     }
 
 
+# --------------------------------------------------- seed sheet resistance (terminal effect)
+
+_CLIP_EDGES = ("top", "bottom", "left", "right")
+
+
+def _sheet_poisson(j_grid: np.ndarray, R_sq: float, hx: float, hz: float,
+                   clip_edge: str = "top") -> np.ndarray:
+    """Metal potential V_m(s) on the coupon front-face grid, in volts.
+
+    Solves the thin-film equation  div_s((1/R_s) grad_s V_m) = -j  on the
+    rectangle with V_m = 0 on the clip edge and zero flux on the other three
+    edges (finite differences on the structured (nz, nx) grid, direct sparse
+    solve; `j_grid` is the cathodic current density into the metal, A/cm2).
+
+    Sign: current enters the film everywhere and leaves through the clip, so
+    V_m >= 0 and grows with distance from the clip (max at the far edge/corner).
+    """
+    if clip_edge not in _CLIP_EDGES:
+        raise ValueError(f"clip_edge must be one of {_CLIP_EDGES}, got {clip_edge!r}")
+    nz, nx = j_grid.shape
+    n = nz * nx
+    ihx2, ihz2 = 1.0 / (hx * hx), 1.0 / (hz * hz)
+    clip_x = clip_edge in ("left", "right")
+    clip_z = clip_edge in ("top", "bottom")
+    clip_lo = clip_edge in ("bottom", "left")
+    rhs = -R_sq * np.maximum(j_grid, 0.0).ravel().copy()
+
+    rows: list[int] = []
+    cols: list[int] = []
+    vals: list[float] = []
+
+    def idx(i, j):
+        return i * nx + j
+
+    for i in range(nz):
+        for j in range(nx):
+            k = idx(i, j)
+            on_clip = ((clip_x and j == (0 if clip_lo else nx - 1))
+                       or (clip_z and i == (0 if clip_lo else nz - 1)))
+            if on_clip:                        # Dirichlet V_m = 0 at the clip edge
+                rows.append(k)
+                cols.append(k)
+                vals.append(1.0)
+                rhs[k] = 0.0
+                continue
+            off: dict[int, float] = {}
+            if j > 0:
+                off[idx(i, j - 1)] = ihx2
+            if j < nx - 1:
+                off[idx(i, j + 1)] = ihx2
+            if i > 0:
+                off[idx(i - 1, j)] = ihz2
+            if i < nz - 1:
+                off[idx(i + 1, j)] = ihz2
+            if j == 0 and nx > 1:              # mirror ghost node = zero flux
+                off[idx(i, 1)] = off.get(idx(i, 1), 0.0) + ihx2
+            if j == nx - 1 and nx > 1:
+                off[idx(i, nx - 2)] = off.get(idx(i, nx - 2), 0.0) + ihx2
+            if i == 0 and nz > 1:
+                off[idx(1, j)] = off.get(idx(1, j), 0.0) + ihz2
+            if i == nz - 1 and nz > 1:
+                off[idx(nz - 2, j)] = off.get(idx(nz - 2, j), 0.0) + ihz2
+            rows.append(k)
+            cols.append(k)
+            vals.append(-float(sum(off.values())))
+            for k2, a in off.items():
+                rows.append(k)
+                cols.append(k2)
+                vals.append(a)
+
+    from scipy.sparse import csc_matrix as _csc
+    A = _csc((vals, (rows, cols)), shape=(n, n))
+    return spsolve(A, rhs).reshape(nz, nx)
+
+
+def _grid_to_nodes(xy_nodes: np.ndarray, v_grid: np.ndarray,
+                   gx: np.ndarray, gz: np.ndarray) -> np.ndarray:
+    """Interpolate a (nz, nx) face grid back to (y, z) front-face node coords."""
+    itp = RegularGridInterpolator((gz, gx), v_grid, bounds_error=False,
+                                  fill_value=None)       # linear extrapolation
+    return itp(np.column_stack([xy_nodes[:, 1], xy_nodes[:, 0]]))
+
+
 def _delta_to_jlim(cm: CellMesh, bath: Bath, delta_um: float, delta_map,
                    ) -> tuple[np.ndarray, list[str]]:
     """Nodal limiting-current-density field (A/cm2, inf = no limitation)."""
@@ -403,6 +530,9 @@ class CellResult:
     n_nodes: int
     n_elems: int
     n_newton: int
+    seed_R_sq: float | None         # sheet resistance used (ohm/sq); None = equipotential
+    vm_max_mV: float                # largest metal-potential drop on the front face
+    n_seed_iter: int                # outer fixed-point iterations (0 when disabled)
     mesh_time_s: float
     solve_time_s: float
     domain: str
@@ -443,8 +573,19 @@ def _cached_mesh(geom: CellGeometry, resolution: str) -> CellMesh:
 def solve_cell(geom: CellGeometry, bath: Bath, I_total_A: float, t_s: float = 3600,
                efficiency: float = 1.0, delta_um: float = 60.0,
                delta_map: dict | None = None, suppressed: bool = True,
-               resolution: str = "coarse", *, progress=None) -> CellResult:
-    """Solve the 3-D beaker cell at galvanostatic total current `I_total_A`."""
+               resolution: str = "coarse", *, seed_R_sq: float | None = None,
+               clip_edge: str = "top", clip_R_ohm: float = 0.0,
+               progress=None) -> CellResult:
+    """Solve the 3-D beaker cell at galvanostatic total current `I_total_A`.
+
+    `seed_R_sq` (ohm/sq) enables the thin-seed terminal-effect correction: the
+    coupon front face gets a metal potential V_m(s) from the sheet equation
+    div_s((1/R_s) grad_s V_m) = -j, V_m = 0 on the `clip_edge` ("top" | "bottom"
+    | "left" | "right") and zero flux elsewhere; the front-face overpotential
+    becomes eta_c = V_m - phi_l.  None (default) keeps the metal equipotential.
+    `clip_R_ohm` adds I_total * clip_R_ohm to V_cell (lumped clip contact, no
+    effect on the current distribution).
+    """
     t_start = time.perf_counter()
     if progress:
         progress(0.05, f"meshing beaker cell ({resolution})")
@@ -461,23 +602,71 @@ def solve_cell(geom: CellGeometry, bath: Bath, I_total_A: float, t_s: float = 36
         if progress:
             progress(0.15 + 0.6 * min(it, 40) / 40, f"Newton iteration {it} (residual {rn:.2e})")
 
+    # ---- front-face grid + node set (also used by the seed fixed point below)
+    m = cm.mesh
+    bnd = m.boundary_facets()
+    fverts = m.facets[:, bnd[cm.groups["cath_front"]]]
+    front_nodes = np.unique(fverts)
+    xy = np.column_stack([m.p[1, front_nodes], m.p[2, front_nodes]])   # (beaker y, z)
+    x_grid = np.linspace(-geom.coupon_w / 2, geom.coupon_w / 2, GRID_N)
+    z_grid = np.linspace(geom.coupon_center_z - geom.coupon_h / 2,
+                         geom.coupon_center_z + geom.coupon_h / 2, GRID_N)
+
     t_solve = time.perf_counter()
-    core = _solve_core(cm, bath.kappa, I_total_A, i0, bath.alpha_c, bath.alpha_a,
-                       bath.f_RT, jlim, geom.gap, taped=geom.taped, on_iter=on_iter)
+    if seed_R_sq is None:
+        core = _solve_core(cm, bath.kappa, I_total_A, i0, bath.alpha_c, bath.alpha_a,
+                           bath.f_RT, jlim, geom.gap, taped=geom.taped,
+                           on_iter=on_iter)
+        vm_nodes, n_seed, vm_max_V = None, 0, 0.0
+    else:
+        if clip_edge not in _CLIP_EDGES:
+            raise ValueError(f"clip_edge must be one of {_CLIP_EDGES}, got {clip_edge!r}")
+        if seed_R_sq <= 0:
+            raise ValueError("seed_R_sq must be > 0 ohm/sq (use None for equipotential)")
+        hx = float(x_grid[1] - x_grid[0])
+        hz = float(z_grid[1] - z_grid[0])
+        vm_nodes = np.zeros(m.p.shape[1])
+        phi0, n_seed, vm_max_V = None, 0, 0.0
+        alpha, prev_step = 1.0, np.inf
+        for it in range(1, 31):
+            core = _solve_core(cm, bath.kappa, I_total_A, i0, bath.alpha_c,
+                               bath.alpha_a, bath.f_RT, jlim, geom.gap,
+                               taped=geom.taped, on_iter=on_iter,
+                               vm=vm_nodes, phi0=phi0)
+            phi0 = (core.phi, core.phi_a)
+            j_faces = np.maximum(_grid_interp(xy, core.jc_nodes[front_nodes],
+                                              x_grid, z_grid), 0.0)       # A/cm2
+            vm_new = _grid_to_nodes(xy, _sheet_poisson(j_faces, seed_R_sq, hx, hz,
+                                                       clip_edge), x_grid, z_grid)
+            vm_old = vm_nodes[front_nodes].copy()
+            step = float(np.abs(vm_new - vm_old).max()) if vm_old.size else 0.0
+            if step > prev_step:                 # oscillating -> under-relax
+                alpha = max(0.25, 0.5 * alpha)
+            prev_step = step
+            vm_nodes[front_nodes] = vm_old + alpha * (vm_new - vm_old)
+            dvm = float(np.abs(vm_nodes[front_nodes] - vm_old).max()) if vm_old.size else 0.0
+            n_seed = it
+            if progress:
+                progress(0.15 + 0.6 * min(it, 20) / 20,
+                         f"seed fixed point {it} (d V_m {dvm:.2e} V)")
+            if dvm < 1e-6:
+                break
+        else:
+            warnings.append("seed sheet-resistance fixed point did not reach 1e-6 V "
+                            "in 30 iterations")
+        vm_max_V = float(np.max(vm_nodes[front_nodes])) if front_nodes.size else 0.0
+        warnings.append(f"seed terminal effect: R_s = {seed_R_sq:g} ohm/sq, clip on the "
+                        f"{clip_edge} edge, max metal drop {vm_max_V * 1e3:.2f} mV")
+        if not geom.taped:
+            warnings.append("seed_R_sq is applied as a nodal metal-potential offset on the "
+                            "coupon front face only; the untaped back/sidewall facets share "
+                            "their perimeter nodes and inherit part of that offset")
     solve_time = time.perf_counter() - t_solve
     if progress:
         progress(0.85, "post-processing: j map on coupon face")
 
-    # ---- regular grid j(x, y) on the coupon front face
-    m = cm.mesh
-    bnd = core.bnd
-    fverts = m.facets[:, bnd[cm.groups["cath_front"]]]
-    front_nodes = np.unique(fverts)
-    xy = np.column_stack([m.p[1, front_nodes], m.p[2, front_nodes]])   # (beaker y, z)
+    # ---- regular grid j(x, y) on the coupon front face (corrected j when seeded)
     j_nodes_mA = core.jc_nodes[front_nodes] * 1e3
-    x_grid = np.linspace(-geom.coupon_w / 2, geom.coupon_w / 2, GRID_N)
-    z_grid = np.linspace(geom.coupon_center_z - geom.coupon_h / 2,
-                         geom.coupon_center_z + geom.coupon_h / 2, GRID_N)
     j_grid = _grid_interp(xy, j_nodes_mA, x_grid, z_grid)
     j_grid = np.maximum(j_grid, 0.0)
     th_grid = thickness_um(j_grid, t_s, efficiency)
@@ -486,7 +675,7 @@ def solve_cell(geom: CellGeometry, bath: Bath, I_total_A: float, t_s: float = 36
 
     # ---- overpotentials, ohmic drop, Wagner number
     eta_bar_c, eta_bar_a = core.eta_bar_c, core.eta_bar_a
-    V_cell = float(core.phi_a)
+    V_cell = float(core.phi_a) + I_total_A * clip_R_ohm
     V_ohm = V_cell - eta_bar_a + eta_bar_c
     g_mean = abs(float(_cath_dj(np.array([eta_bar_c]), np.array([core.jlim_cath_mean]),
                                 i0, bath.alpha_c, bath.alpha_a, bath.f_RT)[0]))
@@ -524,6 +713,7 @@ def solve_cell(geom: CellGeometry, bath: Bath, I_total_A: float, t_s: float = 36
         front_area_cm2=core.A_front, cathode_area_cm2=core.A_cath,
         anode_area_cm2=core.A_anode,
         n_nodes=cm.n_nodes, n_elems=cm.n_elems, n_newton=core.n_iter,
+        seed_R_sq=seed_R_sq, vm_max_mV=float(vm_max_V * 1e3), n_seed_iter=n_seed,
         mesh_time_s=mesh_time, solve_time_s=solve_time, domain=cm.domain,
         warnings=warnings,
     )
