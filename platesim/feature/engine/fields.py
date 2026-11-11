@@ -145,8 +145,13 @@ class StepGeom:
         g = self.g
         Gr = self.Hf_r * 0.5 * (D[self.ir, self.jr] + D[self.ir + 1, self.jr]) * self.geo_r
         Gz = self.Hf_z * 0.5 * (D[self.iz, self.jz] + D[self.iz, self.jz + 1]) * self.geo_z
-        diag = (np.bincount(self.pr, Gr, n) + np.bincount(self.qr, Gr, n)
-                + np.bincount(self.pz, Gz, n) + np.bincount(self.qz, Gz, n))
+        # float accumulator: np.bincount returns int64 when its index array is empty, and adding bc (float)
+        # to that would be an illegal cast.  The summation order is unchanged, so the sum is bit-identical.
+        diag = np.zeros(n)
+        diag += np.bincount(self.pr, Gr, n)
+        diag += np.bincount(self.qr, Gr, n)
+        diag += np.bincount(self.pz, Gz, n)
+        diag += np.bincount(self.qz, Gz, n)
         Gw = np.zeros(0)
         if g.periodic_x:
             jw = self.jw

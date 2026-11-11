@@ -61,7 +61,17 @@ class ViaSim:
     # ------------------------------------------------------------------ geometry diagnostics
     def face_height(self, psi=None):
         if self.g.f_open >= 0.999:                 # 1-D slab test geometry: flat interface
-            return 0.0 if self.g.periodic_x else self.g.H   # trench_full: initial_psi puts the wall at z = 0
+            if not self.g.periodic_x:
+                return self.g.H                    # via / trench slab test: the wall is the top of the domain
+            # trench_full flat slab: initial_psi puts the wall at z = 0, so the interface height must be read
+            # from psi instead of being pinned at 0.  A pinned delta plane stays behind the rising front, the
+            # rows below it lose their electrolyte, and the active set of StepGeom collapses (empty bincounts
+            # in K_data) as soon as the front has grown past the plane.
+            psi = self.psi if psi is None else psi
+            g = self.g
+            zs = [z for z in (column_crossing(psi[i], g.zc[0], upper=True)[1] for i in range(g.nr))
+                  if z is not None]
+            return float(np.mean(zs)) if zs else 0.0
         psi = self.psi if psi is None else psi
         g = self.g
         if g.periodic_x:
