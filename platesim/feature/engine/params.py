@@ -147,6 +147,9 @@ class Params:
     n_active_eps: float = 3.5                  # solve where psi > -n_active_eps * eps
     cfl: float = 0.5
     dt_max: float = 120.0                      # s
+    dt_adapt: bool = False                     # adaptive ceiling: dt_max_eff in [dt_max, dt_max_adapt]
+    dt_max_adapt: float = 900.0                # s, absolute ceiling of the adaptive dt_max controller
+    dt_tol: float = 2e-3                       # target relative per-step change of the interface speed
     dt_min: float = 1e-3
     reinit_every: int = 4
     fix_tol_bal: float = 2e-3                  # galvanostatic balance tolerance inside the iteration

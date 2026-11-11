@@ -26,6 +26,23 @@ def recipe_delta_max(recipe: Recipe, p: Params):
     return dm
 
 
+def dt_change_measure(v_new, v_old):
+    """Relative change of the extended interface speed between two accepted steps (adaptive dt controller).
+
+    The measure is the 92nd percentile of the cell-wise |v_new - v_old| over the interface band, divided by
+    max|v_new|: a robust high percentile of the relative change, i.e. all but the noisiest few percent of
+    the band cells changed by less than this fraction of the peak front speed.  The maximum (or a higher
+    percentile) is dominated by single-cell discretisation artefacts -- band edges and the concave trench
+    corner, where the normal extension of the velocity jumps by one stencil between steps -- which already
+    at the fixed dt_max reach ~2.5e-3 and would pin the controller at the fixed ceiling; a mean (or a low
+    percentile) is instead dominated by the smooth extended band far from the front and lets dt run to the
+    ceiling.  vext is what the level set is advected with, so its per-step change is exactly the quantity a
+    too-large dt integrates inaccurately, and unlike the floor/field current ratio it is defined on every
+    geometry (via, trench, trench_full)."""
+    den = max(float(np.abs(v_new).max()), 1e-30)
+    return float(np.percentile(np.abs(v_new - v_old), 92.0)) / den
+
+
 class ViaSim:
     def __init__(self, d_um, T_C, params: Params, f_open, recipe: Recipe):
         self.p, self.ph = params, derive(params, T_C)
@@ -248,12 +265,18 @@ class ViaSim:
         bounds = np.concatenate([[0.0], np.cumsum([s.duration_s for s in recipe.steps])])
         t, k = 0.0, 0
         dt_prev, vmax_prev = None, None
+        # adaptive dt ceiling (p.dt_adapt, OFF by default): dt_max_eff lives in [p.dt_max, p.dt_max_adapt] and
+        # starts at the fixed p.dt_max, so the disabled path is bit-identical (dt_max_eff == p.dt_max there).
+        dt_max_eff = float(p.dt_max)
+        vext_prev, psi_prev = None, None    # previous accepted step: extended speed + level set (change measure)
         growth = 1.6                        # dt growth factor chosen by the iteration-count controller
         lu_reuse = None                     # LU factors carried from step to step while the active set is unchanged
         flow_cache = None                   # (ux, uz, z_face, G, step) of the last LBM solve (trench_full)
         series = {key: [] for key in ('t_s', 'V', 'eta_floor', 'eta_face', 'I_total', 'fill_fraction',
                                       'face_thickness_um', 'floor_height_um', 'void_volume_frac', 'theta_floor',
                                       'theta_face', 'c_floor', 'bal', 'it', 'dt_s', 'attempts')}
+        if p.dt_adapt:                         # extra key ONLY when the adaptive ceiling is enabled: other code
+            series['dt_max_eff'] = []          # and the default-series tests read the keys above unchanged
         if g.periodic_x:                       # trench_full only: field/floor statistics of the whole pitch
             series.update({key: [] for key in ('field_mean_um', 'field_min_um', 'field_max_um', 'field_std_um',
                                                'floor_mean_um', 'floor_min_um', 'floor_max_um',
@@ -311,7 +334,8 @@ class ViaSim:
             else:
                 ctrl = dict(mode='V', V_set=step.V_mV * 1e-3, I_t=1.0, duty_f=1.0, duty_r=0.0, rr=0.0, pr=False)
             # ---- predicted time step
-            dt_pred = min(p.dt_max, t_end_step - t)
+            dt_max_used = dt_max_eff
+            dt_pred = min(dt_max_used, t_end_step - t)
             if vmax_prev:
                 dt_pred = min(dt_pred, p.cfl * g.dx / vmax_prev)
             dt_pred = min(dt_pred, 5.0 if dt_prev is None else dt_prev * growth)
@@ -351,6 +375,27 @@ class ViaSim:
             vmax_prev = max(vmax, 1e-12)
             dt = min(dt_pred, p.cfl * g.dx / max(vmax, 1e-30), t_end_step - t)
             dt = max(dt, min(p.dt_min, t_end_step - t))
+            # ---- adaptive ceiling (p.dt_adapt): scale dt_max_eff for the NEXT step by how much the solution
+            # moved in this one.  Measure: the relative change of the extended interface speed vext over the
+            # interface band (|psi| <= 2 dx of the current AND the previous step), see dt_change_measure().
+            # vext is what the level set is advected with, so it measures exactly the quantity whose per-step
+            # change a too-large dt integrates inaccurately, and it is available on every geometry (via,
+            # trench, trench_full).  The observed change grows roughly linearly with dt, so it is first
+            # scaled to the next candidate ceiling (dt_max_eff / dt); the controller then reacts to the step
+            # it is about to allow instead of lagging one step behind (which would overshoot the transient).
+            # Factor = sqrt(dt_tol / change) clipped to [0.5, 2]; dt_max_eff stays in
+            # [p.dt_max, p.dt_max_adapt], and the CFL clip and the iteration-count growth limit keep
+            # applying on top, so a step is never longer than the CFL allows and the ceiling never drops
+            # below the known-safe fixed p.dt_max.
+            if p.dt_adapt:
+                if vext_prev is not None:
+                    m = (np.abs(self.psi) <= 2 * g.dx) & (np.abs(psi_prev) <= 2 * g.dx)
+                    if m.any():
+                        change = dt_change_measure(vext[m], vext_prev[m]) * (dt_max_eff / max(dt, p.dt_min))
+                        fac = float(np.clip(math.sqrt(p.dt_tol / max(change, 1e-12)), 0.5, 2.0))
+                        dt_max_eff = float(np.clip(dt_max_eff * fac, p.dt_max, p.dt_max_adapt))
+                vext_prev = vext.copy()
+                psi_prev = self.psi.copy()
             # ---- Cu2+ mass balance, independent of the level set: moles entering through the top Dirichlet
             # plane of the Cu2+ field of this step.  K_data builds bc for u_bulk = 1, so the top-row Dirichlet
             # coupling is bc_c and the influx per unit driving concentration is bc_c (1 - ct_top).  Computed
@@ -399,6 +444,8 @@ class ViaSim:
             series['it'].append(info['it'])
             series['dt_s'].append(dt)
             series['attempts'].append(attempt + 1)
+            if p.dt_adapt:
+                series['dt_max_eff'].append(dt_max_used)
             if g.periodic_x:                   # trench_full: whole-pitch front statistics (see field_floor_metrics)
                 for key, val in self.field_floor_metrics(z_plane).items():
                     series[key].append(val)
