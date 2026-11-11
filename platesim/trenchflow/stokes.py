@@ -13,9 +13,13 @@ Discretisation
   takes the fractional weight 0, 0.5 or 1 (the average over its two cells), which is what makes the
   stencil exactly reflection-symmetric. At a vertical wall the wall plane coincides with the
   neighbouring x-face, so it is a plain Dirichlet node. The momentum stencil stays compact.
-- Pressure lives in every open cell; the null space is fixed by replacing the continuity row of one
-  open cell with p = 0 (a pure gauge pin, no continuity equation is lost), which makes the matrix
-  non-singular for SuperLU.
+- Pressure lives in every open cell; its null space is fixed by replacing the continuity row of ONE open
+  cell PER CONNECTED FLUID REGION with p = 0 (a pure gauge pin, no continuity equation is lost), which
+  makes the matrix non-singular for SuperLU. Regions are 4-connected with a periodic x seam, because a
+  sealed void pocket (a disconnected fluid bubble the feature engine can leave inside the deposit) has
+  its own constant-pressure null space; without its own pin that block is singular. A region with no
+  contact with the lid has no driving term and comes out at u = w = 0 to round-off. One region -> the
+  pinned cell is the same as the single-gauge code, so those results stay bit-identical.
 - Non-dimensionalisation: x by dx, u by the lid speed |u_top|, and p by nu*|u_top|/dx. The viscosity
   then drops out of the Stokes momentum equation entirely (as it must for Stokes similarity), and the
   assembled matrix has O(1) entries: A = -Laplacian, G = gradient, D = divergence.
@@ -32,11 +36,76 @@ import time
 
 import numpy as np
 import scipy.sparse as sp
+from scipy import ndimage
 from scipy.sparse.linalg import spsolve
 
 from .geometry import CavityGrid, FlowField
 
 _TINY = 1e-300
+
+# 4-connectivity: N, S, E, W of a cell
+_STRUCT4 = np.array([[False, True, False], [True, True, True], [False, True, False]])
+
+
+def _fluid_regions(fluid):
+    """Label the 4-connected fluid regions, PERIODIC in x. Returns ``(labels, n_regions)``.
+
+    ``scipy.ndimage.label`` only sees the in-grid neighbours, so labels that meet across the x seam
+    (a cell in column nx-1 is a left/right neighbour of the same row in column 0) are merged with a
+    union-find. Labels are 1..n_regions, 0 on solid cells.
+    """
+    lab, n = ndimage.label(fluid, structure=_STRUCT4)
+    n = int(n)
+    if n < 2:
+        return lab, n
+    parent = np.arange(n + 1)
+
+    def find(a):
+        while parent[a] != a:
+            parent[a] = parent[parent[a]]
+            a = parent[a]
+        return int(a)
+
+    merged = False
+    for a, b in zip(lab[:, 0].tolist(), lab[:, -1].tolist()):
+        if a and b:
+            ra, rb = find(a), find(b)
+            if ra != rb:
+                parent[rb] = ra
+                merged = True
+    if not merged:
+        return lab, n
+    remap = np.zeros(n + 1, np.int64)
+    nxt = 0
+    for i in range(1, n + 1):
+        r = find(i)
+        if remap[r] == 0:
+            nxt += 1
+            remap[r] = nxt
+        remap[i] = remap[r]
+    return remap[lab], int(nxt)
+
+
+def _region_pins(id_p, labels, n_regions):
+    """Pressure unknown of the gauge cell of every connected fluid region (exactly one pin per region).
+
+    The region that owns the legacy gauge cell is pinned at that same cell. The single-gauge code used
+    ``id_p == flat index of the first open cell`` as the pin, which is the (f0+1)-th open cell because
+    ``id_p`` is only contiguous from 0 -- keeping it means a one-region grid assembles the identical
+    matrix and stays bit-identical. Every other region is pinned at its FIRST cell in row-major order
+    (bottom row up, then +x), which is where the legacy cell sits when the fluid is one region.
+    """
+    if n_regions <= 0:
+        return np.zeros(0, np.int64)
+    flat_lab = labels.reshape(-1)
+    order = np.flatnonzero(flat_lab)                     # ascending flat index of the open cells
+    ids = id_p.reshape(-1)[order]                        # 0 .. n_open-1 in that same order
+    first = np.unique(flat_lab[order], return_index=True)[1]
+    pins = {int(flat_lab[order[i]]): int(ids[i]) for i in first}
+    f0 = int(order[0])                                   # legacy pin: the cell with id_p == f0
+    if f0 < ids.size:
+        pins[int(flat_lab[order[f0]])] = f0
+    return np.array([pins[lab] for lab in sorted(pins)], np.int64)
 
 
 def _solid_fraction(solid, passes: int = 2):
@@ -74,12 +143,13 @@ def _layout(grid: CavityGrid, diffuse: bool = False) -> dict:
     id_w[open_w] = np.arange(np.count_nonzero(open_w), dtype=np.int64)
 
     # pressure unknown in every open cell; the gauge is fixed later by replacing the continuity row
-    # of one open cell with p = 0 (see _assemble), so no continuity equation is lost.
+    # of ONE cell per connected fluid region with p = 0 (see _assemble), so no continuity equation is
+    # lost and every region's constant-pressure null space is removed.
     id_p = np.full((nz, nx), -1, np.int64)
     open_p = fluid.copy()
-    first = np.flatnonzero(open_p.reshape(-1))
     id_p[open_p] = np.arange(np.count_nonzero(open_p), dtype=np.int64)
-    pin = int(first[0]) if first.size else -1
+    labels, n_regions = _fluid_regions(open_p)
+    pins = _region_pins(id_p, labels, n_regions)
 
     nu = int(np.count_nonzero(open_u))
     nw = int(np.count_nonzero(open_w))
@@ -90,7 +160,8 @@ def _layout(grid: CavityGrid, diffuse: bool = False) -> dict:
                 open_u=open_u, open_w=open_w, open_p=open_p,
                 id_u=id_u, id_w=id_w, id_p=id_p, nu=nu, nw=nw, np=np_,
                 off_w=nu, off_p=nu + nw, size=nu + nw + np_,
-                pin_row=-(nu + nw + 1) if pin < 0 else nu + nw + pin,
+                labels=labels, n_regions=int(n_regions),
+                pin_rows=np.asarray(pins, np.int64) + (nu + nw),
                 idx_m=idx_m, idx_p=idx_p)
 
 
@@ -218,11 +289,15 @@ def _assemble(lay: dict, u_lid: float, brinkman_K, rec: float | None, uprev):
     r = np.concatenate(rows)
     c = np.concatenate(cols)
     v = np.concatenate(vals)
-    # pressure gauge: replace the continuity row of the pinned cell with p = 0
-    keep = r != lay["pin_row"]
-    r = np.concatenate([r[keep], [lay["pin_row"]]])
-    c = np.concatenate([c[keep], [lay["pin_row"]]])
-    v = np.concatenate([v[keep], [1.0]])
+    # pressure gauge: replace the continuity row of the pinned cell of EVERY fluid region with p = 0
+    pin_rows = lay["pin_rows"]
+    if pin_rows.size:
+        drop = np.zeros(lay["size"], bool)
+        drop[pin_rows] = True
+        keep = ~drop[r]
+        r = np.concatenate([r[keep], pin_rows])
+        c = np.concatenate([c[keep], pin_rows])
+        v = np.concatenate([v[keep], np.ones(pin_rows.size)])
     A = sp.coo_matrix((v, (r, c)), shape=(lay["size"], lay["size"])).tocsr()
     return A, b
 
@@ -291,6 +366,8 @@ def solve_stokes(grid: CavityGrid, shear_rate_s: float, nu_cm2_s: float = 0.0114
 
     info["u_face_x"] (nz, nx) and info["u_face_z"] (nz+1, nx) are the staggered face velocities in
     cm/s; they are discretely divergence-free in the open cells. info["method"] == "stokes_mac".
+    info["n_fluid_regions"] is the number of 4-connected fluid regions (periodic in x) and every one of
+    them gets its own pressure gauge, so a sealed void pocket does not make the matrix singular.
     nu_cm2_s only enters the Oseen term and the reported Reynolds number: the Stokes velocity field is
     independent of viscosity (it only sets the pressure scale).
     """
@@ -315,6 +392,7 @@ def solve_stokes(grid: CavityGrid, shear_rate_s: float, nu_cm2_s: float = 0.0114
                          info=dict(common, steps=0, wall_s=time.time() - t0, residual=0.0,
                                    u_top_cm_s=float(u_top), u_face_x=z.copy(),
                                    u_face_z=np.zeros((nz + 1, nx)), div_max_rel=0.0,
+                                   n_fluid_regions=int(_fluid_regions(fluid)[1]),
                                    converged=True))
 
     diffuse = brinkman_K is not None
@@ -357,6 +435,8 @@ def solve_stokes(grid: CavityGrid, shear_rate_s: float, nu_cm2_s: float = 0.0114
     info = dict(common, steps=steps, wall_s=time.time() - t0, residual=float(residual),
                 u_top_cm_s=float(u_top), u_face_x=uf * u_scale, u_face_z=wf * u_scale,
                 div_max_rel=div_max_rel, oseen_passes=npass, brinkman_K=brinkman_K,
-                mesh=(nz, nx), converged=bool(converged))
+                mesh=(nz, nx), n_fluid_regions=int(lay["n_regions"]),
+                pin_cells=[int(r - lay["off_p"]) for r in lay["pin_rows"]],
+                converged=bool(converged))
     return FlowField(grid=grid, ux=ux, uz=uz, shear_rate_s=shear, converged=bool(converged),
                      info=info)

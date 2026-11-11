@@ -2,6 +2,8 @@
 
 Small cases only (dx = 8 um, 2 stages) so the module runs in a few seconds.
 """
+import time
+
 import numpy as np
 import pytest
 
@@ -151,3 +153,63 @@ def test_start_floor_over_field_matches_feature_engine():
     fe = s["floor_height_um"][-1] / s["face_thickness_um"][-1]
     tf = stage_fields(60.0, 30.0, delta, 0.0, j, 0.0, T_C=22.0, dx_um=8.0, use_flow=False)
     assert abs(fe - tf["floor_over_field"]) <= 0.05, (fe, tf["floor_over_field"])
+
+
+def test_flow_solver_default_lbm_is_unchanged():
+    """The default is 'lbm' and passing flow_solver='lbm' reproduces it exactly."""
+    a = stage_fields(**SMALL)
+    b = stage_fields(**SMALL, flow_solver="lbm")
+    assert a["flow_solver"] == b["flow_solver"] == "lbm"
+    for key in ("floor_over_field", "wall_up_over_field", "wall_down_over_field", "field_flux_cm_s",
+                "k_cm_s"):
+        assert a[key] == b[key], key
+    np.testing.assert_array_equal(a["flow"].ux, b["flow"].ux)
+    np.testing.assert_array_equal(a["flow"].uz, b["flow"].uz)
+    assert a["eddy"] == b["eddy"]
+    assert stage(**SMALL)["flow_solver"] == "lbm"
+    assert predict_site(SITE, 20.0, n_stages=1, dx_um=8.0)["flow_solver"] == "lbm"
+
+
+def test_flow_solver_stokes_small_trench():
+    """flow_solver='stokes' solves the same small trench directly and lands within 0.05 on the ratio.
+
+    60 x 30 um trench, dx 6, delta 64 um, G from shear_from_delta. The two solvers disagree by a few
+    percent on the floor flux (the lattice is the coarser approximation); both stay in [0, 1.02].
+    """
+    delta = 64.0
+    G = shear_from_delta(delta, D)
+    kw = {"width_um": 60.0, "depth_um": 30.0, "delta_um": delta, "shear_rate_s": G,
+          "j_field_mA_cm2": 15.0, "deposit_um": 0.0, "dx_um": 6.0}
+    t0 = time.perf_counter()
+    lbm = stage_fields(**kw)
+    t_lbm = time.perf_counter() - t0
+    t0 = time.perf_counter()
+    st = stage_fields(**kw, flow_solver="stokes")
+    t_st = time.perf_counter() - t0
+    print(f"\nstage_fields timing: lbm {t_lbm * 1e3:.0f} ms, stokes {t_st * 1e3:.0f} ms "
+          f"(grid {st['grid_shape']})")
+    print(f"floor_over_field: lbm {lbm['floor_over_field']:.6f}, stokes {st['floor_over_field']:.6f}")
+
+    assert lbm["flow_solver"] == "lbm"
+    assert st["flow_solver"] == "stokes"
+    assert st["flow"].info["method"] == "stokes_mac"
+    assert st["flow"].info["div_max_rel"] < 1e-10
+    assert 0.0 < st["floor_over_field"] <= 1.02, st["floor_over_field"]
+    assert abs(st["floor_over_field"] - lbm["floor_over_field"]) < 0.05
+    assert st["eddy"] is not None
+    assert set(st["eddy"]) == {"u_max_in_trench_cm_s", "has_recirculation", "penetration_um"}
+    # the switch survives the wrappers: stage() forwards it and reports it
+    s = stage(**kw, flow_solver="stokes")
+    assert s["flow_solver"] == "stokes"
+    assert s["floor_over_field"] == st["floor_over_field"]
+
+
+def test_flow_solver_invalid_name_raises():
+    """Any name other than 'lbm' / 'stokes' raises ValueError in every entry point."""
+    with pytest.raises(ValueError, match="flow_solver"):
+        stage_fields(**SMALL, flow_solver="fd")
+    with pytest.raises(ValueError, match="flow_solver"):
+        stage(**SMALL, flow_solver="navier")
+    with pytest.raises(ValueError, match="flow_solver"):
+        predict_site(SITE, 20.0, n_stages=1, dx_um=8.0, flow_solver="lattice")
+

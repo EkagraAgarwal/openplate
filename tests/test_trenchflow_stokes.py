@@ -4,8 +4,10 @@ Small grids, analytic references: plane Couette over a flat wall, discrete diver
 fluxes, shear sign symmetry, trench eddies, the Stokes lid-driven cavity and a loose LBM comparison.
 """
 import time
+import warnings
 
 import numpy as np
+from scipy.sparse.linalg import MatrixRankWarning
 
 from platesim.trenchflow.geometry import CavityGrid, flat_grid, trench_grid
 from platesim.trenchflow.stokes import solve_stokes
@@ -153,3 +155,87 @@ def test_timing_large_grid():
     print(f"\n{g.shape[1]} x {g.shape[0]} cells: {dt * 1e3:.0f} ms, "
           f"div_max_rel = {flow.info['div_max_rel']:.2e}, wall_s = {flow.info['wall_s']:.3f}")
     assert dt < 1.0, f"solve took {dt:.2f} s"
+
+
+def _pocket_grid(seam=False, bubble=True, npad=4):
+    """60 x 30 um trench (dx 4) with 4 extra all-solid rows under the floor.
+
+    The extra rows put a closed 3 x 3-cell fluid hole (the "void pocket" the feature engine can leave
+    inside the deposit) fully inside Si: padded rows 1-3 are 42-50 um below the wafer plane, i.e.
+    12-20 um below the trench floor, with solid rows 0 and 4-6 around them. Rows 7+ are the trench.
+    ``bubble=False`` returns the identical grid with the hole filled solid (one fluid region).
+    ``seam=True`` moves the hole onto the periodic x seam (columns nx-2 .. 1).
+    """
+    g = trench_grid(width_um=60, depth_um=30, height_um=120, dx_um=4)
+    nx = g.shape[1]
+    solid = np.vstack([np.ones((npad, nx), bool), g.solid])
+    z = np.concatenate([g.z_um[0] - g.dx_um * np.arange(npad, 0, -1), g.z_um])
+    hole = solid.copy()
+    if bubble:
+        if seam:
+            cols = [nx - 2, nx - 1, 0, 1]
+        else:
+            ixc = int(np.argmin(np.abs(g.x_um - 0.5 * g.pitch_um)))
+            cols = list(range(ixc - 1, ixc + 2))
+        hole[1:4, cols] = False
+    grid = CavityGrid(dx_um=g.dx_um, x_um=g.x_um, z_um=z, solid=hole, width_um=g.width_um,
+                      depth_um=g.depth_um, pitch_um=g.pitch_um, height_um=g.height_um)
+    return grid, solid
+
+
+def test_isolated_pocket_is_a_second_region():
+    """A sealed fluid bubble below the trench floor must not make the saddle-point matrix singular.
+
+    The pocket has no lid contact and no driving, so its velocity is exactly zero to round-off, and the
+    main flow is the same as on the identical grid with the pocket filled solid.
+    """
+    gb, solid = _pocket_grid()
+    gr, _ = _pocket_grid(bubble=False)
+    pocket = (~gb.solid) & solid
+    assert pocket.sum() == 9, "test geometry must contain the 3 x 3 hole"
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        fb = solve_stokes(gb, 80.0)
+        fr = solve_stokes(gr, 80.0)
+    rank = [w for w in caught if issubclass(w.category, MatrixRankWarning)]
+    assert not rank, [str(w.message) for w in rank]
+
+    u_top = 80.0 * gb.height_um * 1e-4
+    assert fb.info["n_fluid_regions"] == 2 and fr.info["n_fluid_regions"] == 1
+    assert len(fb.info["pin_cells"]) == 2
+    assert np.isfinite(fb.ux).all() and np.isfinite(fb.uz).all()
+
+    inside = np.hypot(fb.ux, fb.uz)[pocket].max() / u_top
+    assert inside < 1e-12, f"pocket is not at rest: max|u| = {inside:.3e} u_top"
+    scale = max(np.abs(fr.ux).max(), np.abs(fr.uz).max())
+    du = np.abs(fb.ux - fr.ux).max() / scale
+    dw = np.abs(fb.uz - fr.uz).max() / scale
+    assert max(du, dw) < 1e-10, f"pocket changed the main flow: du {du:.3e}, dw {dw:.3e}"
+    assert fb.converged
+    print(f"\npocket: {pocket.sum()} cells at rest (max|u|/u_top = {inside:.1e}); main flow vs filled "
+          f"solid: du = {du:.2e}, dw = {dw:.2e}; regions = {fb.info['n_fluid_regions']}, "
+          f"pins = {fb.info['pin_cells']}")
+
+
+def test_pocket_across_the_x_seam_is_one_region():
+    """A pocket spanning columns nx-1 and 0 is ONE region (4-connectivity is periodic in x), so it needs
+    one gauge, not two: the grid must still report two regions in total and solve cleanly."""
+    gs, solid = _pocket_grid(seam=True)
+    pocket = (~gs.solid) & solid
+    assert pocket.sum() == 12
+    assert np.any(pocket[:, 0]) and np.any(pocket[:, -1])
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        flow = solve_stokes(gs, 80.0)
+    rank = [w for w in caught if issubclass(w.category, MatrixRankWarning)]
+    assert not rank, [str(w.message) for w in rank]
+    assert flow.info["n_fluid_regions"] == 2, flow.info["n_fluid_regions"]
+    assert len(flow.info["pin_cells"]) == 2
+    assert np.isfinite(flow.ux).all() and np.isfinite(flow.uz).all()
+    u_top = 80.0 * gs.height_um * 1e-4
+    inside = np.hypot(flow.ux, flow.uz)[pocket].max() / u_top
+    assert inside < 1e-12, inside
+    print(f"\nseam pocket: {pocket.sum()} cells, regions = {flow.info['n_fluid_regions']}, "
+          f"max|u|/u_top in the pocket = {inside:.1e}, max|ux|/u_top = "
+          f"{np.abs(flow.ux).max() / u_top:.3f}")
+
