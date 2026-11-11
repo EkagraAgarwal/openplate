@@ -44,6 +44,41 @@ def bern(x):
     return out
 
 
+def sg_face_coeffs(g, F):
+    """Exponentially fitted face coefficients (g B(-P), g B(P)) with P = F/g, for the face flux
+
+        N_pq = gp * c_p - gq * c_q,      gp = g B(-P),  gq = g B(P).
+
+    g is the same diffusive face conductance K_data uses (Hf * D_face * geo), F the signed volume flux
+    oriented p -> q.  B(x) = x/(exp x - 1) (B(0) = 1):  P -> 0 gives the plain diffusive flux g(c_p - c_q),
+    P >> 1 gives the upwind flux F c_p, and the row/face sums  gp - gq = g P = F  hold exactly, so a
+    uniform field has zero flux divergence for a discretely divergence-free F.
+
+    B(-P) is evaluated through the identity B(-P) = B(P) + P (one exponential per face, as in
+    sg_operator).  bern() clips its argument to +-50, so B(P) for P -> -inf is replaced by its asymptote
+    -P (the branch where B(-P) -> 0 and the face is fully upwind from q); without that the clipped
+    branch would drive gp = g B(-P) negative for P < -50 and destroy the M-matrix.
+
+    Faces with g == 0 but F != 0 cannot occur on the Stokes path (a MAC face that touches solid carries
+    F = 0); they fall back to pure upwind here instead of dividing by zero."""
+    g = np.asarray(g, dtype=float)
+    F = np.asarray(F, dtype=float)
+    safe = np.where(g > 0.0, g, 1.0)
+    P = F / safe
+    bp = bern(P)                                        # B(P)
+    neg = P < -40.0
+    if np.any(neg):
+        # B(P) = -P / (1 - exp(P))  ->  -P (1 + exp(P)) for P << 0; bern() would clip this to B(-50).
+        bp = np.where(neg, -P * (1.0 + np.exp(np.maximum(P, -700.0))), bp)
+    gp = g * bp + F                                     # g B(-P) = g (B(P) + P)
+    gq = g * bp                                         # g B(P)
+    dead = ~(g > 0.0)
+    if np.any(dead):
+        gp = np.where(dead, np.maximum(F, 0.0), gp)     # upwind fallback
+        gq = np.where(dead, np.maximum(-F, 0.0), gq)
+    return gp, gq
+
+
 # ======================================================================================= geometry for a step
 class StepGeom:
     """Everything that depends only on psi at the start of a step: smoothed indicator, active cells, interface
@@ -284,15 +319,70 @@ class StepGeom:
         every row, because the interior flux divergence of a top cell is -F_top."""
         F_r, F_z, F_w, F_top = self.mac_face_fluxes(ufx, ufz)
         adv = self.adv_matrix(F_r, F_z, F_w, form="divergence")
+        diag, rhs = self.top_advection(F_top)
+        if np.any(diag):
+            adv = adv + sp.diags(diag)
+        return adv, rhs, F_top
+
+    def top_advection(self, F_top):
+        """Open-top advective boundary terms of the Dirichlet plane: (diag, rhs).
+
+        Only the plane is treated this way -- it is a modelling boundary (the delta layer), not a resolved
+        face of the species stencil, so it keeps the upwind face value: an outflow cell (F_top > 0) loses
+        F_top c_P (diagonal), an inflow cell (F_top < 0) gains |F_top| c_bulk (rhs, caller scales the bulk
+        value).  Shared by mac_advection (upwind scheme) and the exponentially fitted operator, which
+        replaces the INTERIOR faces only."""
         diag = np.zeros(self.n)
         rhs = np.zeros(self.n)
         if F_top.size:
             out = F_top > 0
             diag[self.ptop[out]] = F_top[out]
             rhs[self.ptop[~out]] = -F_top[~out]
-        if np.any(diag):
-            adv = adv + sp.diags(diag)
-        return adv, rhs, F_top
+        return diag, rhs
+
+    def sg_advdiff(self, D, F_r, F_z, F_w):
+        """Exponentially fitted (Scharfetter-Gummel) diffusion+advection operator and its Dirichlet vector.
+
+        Every interior stencil face carries the combined flux  N_pq = g B(-P) c_p - g B(P) c_q  with
+        P = F/g and g the K_data diffusive conductance (arithmetic face diffusivity, same face measure),
+        instead of the sum of a separate diffusive conductance g and an upwind advective flux F.  The top
+        Dirichlet plane is unchanged (diffusive coupling bc folded into the diagonal and returned as the
+        rhs vector bc*c_bulk, exactly as K_data); the caller still adds StepGeom.top_advection(F_top).
+
+        Row sums: with c = 1 on every face the interior part contributes exactly F per face (gp - gq =
+        g P = F), i.e. the net flux divergence, which is 0 for a discretely divergence-free MAC field, so
+        a uniform field is preserved exactly (row sum at a top cell = -F_top, cancelled by top_advection).
+        Returns (A, bc) with A CSR including diag(bc)."""
+        D = np.asarray(D, dtype=float)
+        if D.ndim == 0:
+            D = np.full(self.act.shape, float(D))
+        g = self.g
+        n = self.n
+        Gr = self.Hf_r * 0.5 * (D[self.ir, self.jr] + D[self.ir + 1, self.jr]) * self.geo_r
+        Gz = self.Hf_z * 0.5 * (D[self.iz, self.jz] + D[self.iz, self.jz + 1]) * self.geo_z
+        rows, cols, vals = [], [], []
+        for p, q, gf, F in ((self.pr, self.qr, Gr, F_r), (self.pz, self.qz, Gz, F_z)):
+            if p.size == 0:
+                continue
+            Np, Nq = sg_face_coeffs(gf, F)
+            rows.extend([p, p, q, q])
+            cols.extend([p, q, p, q])
+            vals.extend([Np, -Nq, -Np, Nq])
+        if g.periodic_x and self.jw.size:
+            jw = self.jw
+            Gw = self.Hf_w * 0.5 * (D[0, jw] + D[g.nr - 1, jw]) * self.geo_w
+            Np, Nq = sg_face_coeffs(Gw, F_w)
+            rows.extend([self.pw, self.pw, self.qw, self.qw])
+            cols.extend([self.pw, self.qw, self.pw, self.qw])
+            vals.extend([Np, -Nq, -Np, Nq])
+        if vals:
+            A = sp.coo_matrix((np.concatenate(vals), (np.concatenate(rows), np.concatenate(cols))),
+                              shape=(n, n)).tocsr()
+        else:
+            A = sp.csr_matrix((n, n))
+        bc = np.zeros(n)
+        bc[self.ptop] = self.Hs_top * D[self.itop, self.jt] * self.geo_top
+        return (A + sp.diags(bc)).tocsr(), bc
 
     def adv_matrix(self, F_r, F_z, F_w, form="gradient"):
         """First-order upwind advection operator (CSR), non-symmetric.
@@ -600,6 +690,8 @@ class StepSolver:
         Kc, self.bc_c = geo.K_data(ph.D_c + Dt)
         Ks, self.bc_s = geo.K_data(ph.D_s + Dt)
         self.adv = None
+        # adv_scheme only has a meaning on the Stokes (MAC) path; the LBM path keeps upwind + adv_form.
+        self.adv_scheme = p.adv_scheme if (p.flow_solver == "stokes" and flow_faces is not None) else "upwind"
         if g.periodic_x:
             # non-symmetric advection-diffusion: general LU (no symmetric mode), no cross-step LU reuse
             ux, uz = (np.zeros((g.nr, g.nz)), np.zeros((g.nr, g.nz))) if flow is None else flow
@@ -608,8 +700,19 @@ class StepSolver:
             else:
                 adv = geo.adv_matrix(*geo.face_fluxes(ux, uz), form=p.adv_form)
             self.adv = adv                                # exposed for the sim.py Cu2+ balance
-            self.cs_c = CachedGen(geo, self._base(Kc, adv))
-            self.cs_s = CachedGen(geo, self._base(Ks, adv))
+            if self.adv_scheme == "sg":
+                # Exponentially fitted faces: replace K_data + upwind by the SG operator on every interior
+                # face, per species with its own D.  The top plane (Dirichlet diffusion + upwind advection)
+                # is unchanged, so the plane influx counted by sim.py is unchanged.
+                F_r, F_z, F_w, _ = geo.mac_face_fluxes(*flow_faces)
+                top_diag, _ = geo.top_advection(self.adv_top)
+                Ac, self.bc_c = geo.sg_advdiff(ph.D_c + Dt, F_r, F_z, F_w)
+                As, self.bc_s = geo.sg_advdiff(ph.D_s + Dt, F_r, F_z, F_w)
+                self.cs_c = CachedGen(geo, (Ac + sp.diags(top_diag)).tocsr())
+                self.cs_s = CachedGen(geo, (As + sp.diags(top_diag)).tocsr())
+            else:
+                self.cs_c = CachedGen(geo, self._base(Kc, adv))
+                self.cs_s = CachedGen(geo, self._base(Ks, adv))
         else:
             self.cs_c, self.cs_s = CachedSym(geo, Kc, lu=lu_c), CachedSym(geo, Ks, lu=lu_s)
         self.cs_p = None

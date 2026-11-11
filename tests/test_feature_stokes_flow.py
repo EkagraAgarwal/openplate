@@ -20,8 +20,9 @@ import time
 
 import numpy as np
 import pytest
+import scipy.sparse as sp
 
-from platesim.feature.engine.fields import StepGeom
+from platesim.feature.engine.fields import StepGeom, sg_face_coeffs
 from platesim.feature.engine.levelset import UM
 from platesim.feature.engine.params import Params, derive
 from platesim.feature.engine.recipes import pulse_reverse
@@ -167,4 +168,140 @@ def test_default_flow_solver_is_bit_identical_to_lbm():
                                       err_msg=f"series {key!r} differs")
     assert raws[0]["steps"] == raws[1]["steps"]
     assert raws[0]["cu_influx"] == raws[1]["cu_influx"]
+
+
+# ================================================================== C1: exponentially fitted (SG) faces
+def test_adv_scheme_is_validated_and_defaults_to_upwind():
+    """adv_scheme defaults to the legacy 'upwind' path, is validated, and rejects the tertiary transport
+    (that path already uses SG with the migration argument; folding advection in is not implemented)."""
+    assert Params().adv_scheme == "upwind"
+    assert Params(flow_solver="stokes", adv_scheme="sg").adv_scheme == "sg"
+    with pytest.raises(ValueError, match="adv_scheme"):
+        derive(Params(adv_scheme="central"), 22.0)
+    with pytest.raises(NotImplementedError, match="tertiary"):
+        derive(Params(transport="tertiary", adv_scheme="sg"), 22.0)
+    # the flag is inert without the Stokes solver: the LBM path ignores it
+    assert derive(Params(adv_scheme="sg"), 22.0).transport == "enhanced"
+
+
+def test_sg_face_coeffs_reproduce_the_exact_steady_1d_profile():
+    """B(-P) / B(P) is the exact ratio of the steady 1-D advection-diffusion solution, so the discrete
+    chain reproduces c(x) = (exp(Pe x/L) - 1)/(exp(Pe) - 1) at the nodes for any Pe."""
+    n, L, D = 10, 1.0, 1.0
+    dx = L / n
+    x = np.arange(n + 1) * dx
+    for Pe in (0.1, 10.0, 100.0):
+        g = np.full(n, D / dx)
+        F = np.full(n, Pe * D / L)                     # P = F/g = Pe dx/L
+        gp, gq = sg_face_coeffs(g, F)
+        assert np.all(gp >= 0.0) and np.all(gq >= 0.0)
+        np.testing.assert_allclose(gp - gq, F, rtol=1e-13, atol=0.0)   # row sums = flux = g P
+        A = np.zeros((n + 1, n + 1))
+        b = np.zeros(n + 1)
+        A[0, 0] = A[n, n] = 1.0                        # Dirichlet c(0) = 0, c(L) = 1
+        b[n] = 1.0
+        for i in range(1, n):
+            A[i, i - 1], A[i, i], A[i, i + 1] = -gp[i - 1], gq[i - 1] + gp[i], -gq[i]
+        c = np.linalg.solve(A, b)
+        exact = (np.exp(Pe * x / L) - 1.0) / (np.exp(Pe) - 1.0)
+        np.testing.assert_allclose(c, exact, rtol=0.0, atol=1e-10,
+                                   err_msg=f"Pe = {Pe}: SG chain is not exact")
+    # P -> 0 is pure diffusion, P >> 1 the upwind flux
+    gp0, gq0 = sg_face_coeffs(np.array([2.0]), np.array([0.0]))
+    np.testing.assert_allclose([gp0[0], gq0[0]], [2.0, 2.0], rtol=1e-14)
+    gpb, gqb = sg_face_coeffs(np.array([2.0]), np.array([200.0]))
+    np.testing.assert_allclose([gpb[0], gqb[0]], [200.0, 0.0], rtol=0.0, atol=1e-12)
+    # no diffusive conductance but a flux (impossible on the Stokes path): upwind fallback
+    gpd, gqd = sg_face_coeffs(np.array([0.0, 0.0]), np.array([3.0, -3.0]))
+    np.testing.assert_array_equal(gpd, [3.0, 0.0])
+    np.testing.assert_array_equal(gqd, [0.0, 3.0])
+
+
+def test_sg_operator_preserves_a_uniform_field_on_the_stokes_faces():
+    """(A_sg + top outflow) @ 1 == bc + adv_bc to 1e-10 of the largest face flux: every interior row sums to
+    the flux divergence (0 for the divergence-free MAC field) and the top row to -F_top + F_top."""
+    sim, geo, faces = _step0()
+    ph = derive(_params(flow_solver="stokes", adv_scheme="sg"), 22.0)
+    F_r, F_z, F_w, F_top = geo.mac_face_fluxes(*faces)
+    _, adv_bc, top_ret = geo.mac_advection(*faces)
+    np.testing.assert_array_equal(top_ret, F_top)
+    fmax = max(np.abs(F_r).max(), np.abs(F_z).max(), np.abs(F_w).max())
+    Dt = np.zeros((sim.g.nr, sim.g.nz))
+    for D in (ph.D_c + Dt, ph.D_s + Dt):
+        A, bc = geo.sg_advdiff(D, F_r, F_z, F_w)
+        top_diag, top_rhs = geo.top_advection(F_top)
+        A = (A + sp.diags(top_diag)).tocsr()
+        assert A.diagonal().min() > 0.0               # M-matrix, positive diagonal
+        resid = A @ np.ones(geo.n) - (bc + adv_bc)
+        assert np.abs(resid).max() < 1e-10 * fmax, (np.abs(resid).max(), fmax)
+        np.testing.assert_array_equal(top_rhs[geo.ptop], np.maximum(-F_top, 0.0))
+    # the cell Peclet number on the r-faces really is large (the reason for the exponential fit)
+    D = ph.D_c + Dt
+    g_r = geo.Hf_r * 0.5 * (D[geo.ir, geo.jr] + D[geo.ir + 1, geo.jr]) * geo.geo_r
+    P = np.abs(F_r) / np.maximum(g_r, 1e-300)
+    assert P.max() > 10.0, P.max()
+    print(f"\nSG faces: n {geo.n}, max cell Peclet {P.max():.1f}, uniform-field residual "
+          f"{np.abs(A @ np.ones(geo.n) - (bc + adv_bc)).max():.2e}")
+
+
+# ------------------------------------------------------------------ grid convergence (the actual goal)
+_GRID: dict = {}
+
+
+def _run_grid(dx, scheme, hours=1.0):
+    """Narrow-trench Stokes run at dx with the advective scheme, cached per (dx, scheme, hours)."""
+    key = (float(dx), scheme, float(hours))
+    if key not in _GRID:
+        p = _params(flow_solver="stokes", adv_scheme=scheme, dx_um=dx)
+        _GRID[key] = run_case(D_UM, 22.0, _recipe(hours), p, f_open=F_OPEN,
+                              label=f"narrow_{scheme}_dx{dx:g}", out=None)
+    return _GRID[key]
+
+
+def _ratio(res):
+    """floor_mean / field_mean of the final frame (series metrics of the run)."""
+    s = res["series"]
+    return float(s["floor_mean_um"][-1]) / float(s["field_mean_um"][-1])
+
+
+def test_sg_reduces_the_grid_error_of_the_floor_to_field_ratio():
+    """1 h at 15 mA/cm2, G = 59 1/s: the exponentially fitted faces remove the O(dx) numerical diffusion, so
+    the floor/field ratio moves less between dx 8 and dx 4 than with the upwind operator.  Also checks that
+    the Cu2+ balance still closes with 'sg' (the top plane is untouched)."""
+    r = {}
+    for scheme in ("upwind", "sg"):
+        for dx in (8.0, 4.0):
+            res = _run_grid(dx, scheme)
+            r[(scheme, dx)] = _ratio(res)
+            if scheme == "sg":
+                assert abs(res["result"]["cu_balance_rel"]) < 0.005, res["result"]["cu_balance_rel"]
+                assert abs(res["result"]["cu_balance_adv_rel"]
+                           - res["result"]["cu_balance_rel"]) < 1e-5
+    gap_u = abs(r[("upwind", 8.0)] - r[("upwind", 4.0)])
+    gap_s = abs(r[("sg", 8.0)] - r[("sg", 4.0)])
+    print(f"\ngrid convergence (floor/field, 1 h): upwind dx8 {r[('upwind', 8.0)]:.5f} "
+          f"dx4 {r[('upwind', 4.0)]:.5f} (gap {gap_u:.5f}) | sg dx8 {r[('sg', 8.0)]:.5f} "
+          f"dx4 {r[('sg', 4.0)]:.5f} (gap {gap_s:.5f})")
+    assert gap_s < gap_u, (gap_s, gap_u)
+
+
+def test_upwind_scheme_is_bit_identical_to_the_default_stokes_path():
+    """adv_scheme='upwind' is the legacy Stokes operator: the raw series of a 0.1 h run equal those of the
+    default (no adv_scheme given) and those of 'sg' differ, so the switch is actually wired."""
+    rec = _recipe(0.1)
+    raws = {}
+    for kw in ({}, {"adv_scheme": "upwind"}, {"adv_scheme": "sg"}):
+        sim = ViaSim(D_UM, 22.0, _params(flow_solver="stokes", **kw), F_OPEN, rec)
+        raws[kw.get("adv_scheme", "default")] = sim.run("adv_scheme")
+    base, expl, sg = raws["default"]["series"], raws["upwind"]["series"], raws["sg"]["series"]
+    assert set(base) == set(expl) == set(sg)
+    for key in base:
+        np.testing.assert_array_equal(np.asarray(base[key], float), np.asarray(expl[key], float),
+                                      err_msg=f"series {key!r} differs from the explicit 'upwind' run")
+    assert raws["default"]["steps"] == raws["upwind"]["steps"]
+    assert raws["default"]["cu_influx"] == raws["upwind"]["cu_influx"]
+    assert any(not np.array_equal(np.asarray(base[k], float), np.asarray(sg[k], float)) for k in base), \
+        "'sg' produced exactly the upwind series: the scheme is not wired in"
+
+
 
