@@ -12,7 +12,7 @@ import scipy.ndimage as ndi
 from .params import F, Params, derive
 from .levelset import (Grid, initial_psi, reinit, extend, advect, band_average, electrolyte_fraction, column_crossing,
                        contour_lines, curvature_div_n, label_regions, UM)
-from .fields import StepGeom, StepSolver, theta_be
+from .fields import StepGeom, StepSolver, bulk_speciation, theta_be
 from .recipes import Recipe, pr_forward
 
 
@@ -61,8 +61,14 @@ class ViaSim:
             # explicit species state (absolute mol/cm3); Cu2+ stays normalised in st['ctil'] and the Cu
             # snapshot/series keep reading st['ctil'].  StepSolver would create these lazily, so seeding
             # them here makes the initial state explicit and keeps it in the step-backup/reject cycle.
+            # With speciation these stay the LUMPED analytical pools (fully dissociated reference): the
+            # bulk free-Cu fraction and its activity coefficient are applied to the kinetics and the
+            # conductivity, not to the transported state (frozen-speciation approximation, plan v2 D1b).
             self.st['c_h'] = np.full(shp, self.ph.c_h_bulk)
             self.st['c_so4'] = np.full(shp, self.ph.c_so4_bulk)
+        # Bulk bath speciation at setup (plan v2 D1b): None when speciation is off.  Computed once here
+        # for diagnostics/tests; StepSolver reuses the cached result through fields.bulk_speciation.
+        self.spec = bulk_speciation(p, self.ph) if (p.transport == "tertiary" and p.speciation) else None
         ef0 = electrolyte_fraction(self.psi, g)
         self.via_mask = g.via_w > 0.5                                           # boolean: used by the sealing test
         self.cav0 = float((g.vol * ef0 * g.via_w).sum())
@@ -483,8 +489,9 @@ class ViaSim:
                 # shorter step than predicted: redo the (cell-local) coverage update with the true dt
                 acc = (1.0 + p.b_acc * st['theta_a'][act]) if p.use_accel else 1.0
                 b_ex = p.k_rd * ctrl['duty_r'] * out['i_a'] * (1.0 - p.pr_dl_fraction) / 1e-3 if ctrl['pr'] else 0.0
-                th = theta_be(out['th0'], dt, p.k_plus * p.s_bulk * out['s_t'], ph.Mfac * out['ct'] * out['gu'],
-                              ph.Mfac * out['ct'] * out['gs'], p.k_minus * ctrl['duty_f'], b_ex)
+                th = theta_be(out['th0'], dt, p.k_plus * p.s_bulk * out['s_t'],
+                              ph.Mfac * out['ct_react'] * out['gu'],
+                              ph.Mfac * out['ct_react'] * out['gs'], p.k_minus * ctrl['duty_f'], b_ex)
                 st['theta'][act] = th
             # ---- diagnostics before the interface moves
             ef = electrolyte_fraction(self.psi, g)

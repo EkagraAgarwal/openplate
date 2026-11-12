@@ -11,6 +11,8 @@ Interface weights  w_p = V_p |grad Hs|_p  [cm2]  carry all interface fluxes:  to
 Fields per step (fixed-point loop): theta (implicit backward Euler per cell), suppressor s, potential phi with
 the metal potential V (Newton, galvanostatic constraint bordered), Cu2+ concentration c (implicit sink)."""
 from __future__ import annotations
+from functools import lru_cache
+
 import numpy as np
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
@@ -658,6 +660,68 @@ class CachedGen:
         return x if rhs.ndim == 2 else x[:, 0]
 
 
+# ======================================================================================= bulk speciation
+def _speciation_mod():
+    """platesim.core.speciation, imported lazily.
+
+    That module imports feature.engine.params at module scope; importing it from fields at import time
+    would close the cycle  core.speciation -> feature.engine.params -> platesim.feature.__init__ ->
+    engine.run_case -> sim -> fields -> core.speciation.  Deferring keeps the legacy import graph intact.
+    """
+    from ...core import speciation as mod
+    return mod
+
+
+@lru_cache(maxsize=16)
+def _bulk_speciation(c_cu_mol_L, c_acid_mol_L, T_C, Ka2, logK_ip, activity):
+    """Bulk HSO4-/CuSO4^0 speciation of the bath (plan v2 D1b), cached across StepSolver rebuilds.
+
+    Trend-level only: the Davies activity model is outside its validity range at I ~ 0.8 mol/L and
+    log10 K_ip = 2.3 is not verified (see platesim/core/speciation.py).  The StepSolver is rebuilt
+    every time step, so caching keeps this out of the time loop."""
+    return _speciation_mod().speciate(c_cu_mol_L, c_acid_mol_L, T_C=T_C, Ka2=Ka2,
+                                      K_ip=10.0 ** float(logK_ip), activity=activity)
+
+
+def bulk_speciation(p, ph):
+    """Bulk speciation + speciated conductivity of the bath for Params p at Phys temperature ph.T_C.
+
+    Returns dict(spec, kappa [S/cm], kappa_ratio, r_cu, r_so4, r_react).  ``kappa_ratio`` is
+    kappa_speciated / kappa_fully_dissociated at the bulk point, computed with the ENGINE diffusivities
+    (p.D_cu25 / D_H25 / D_SO425 + the Stokes-Einstein T factor), so the ratio is directly the factor by
+    which the tertiary path's local Nernst-Einstein kappa must be rescaled.
+
+    Model error [J]: Davies at I ~ 0.8 mol/L is an extrapolation and log10 K_ip = 2.3 is not verified,
+    so kappa and the free fraction are TREND-LEVEL.  Use activity='ideal'/'bdot' to bracket them.
+
+    Approximation used by the engine (plan v2 D1b): the transported Cu2+ field stays TOTAL copper and
+    the H+/sulfate pools stay lumped, fully dissociated; the bulk free-ion ratios are applied everywhere
+    (frozen speciation).  Local re-equilibration per Picard sweep is NOT implemented.
+
+    TODO(D1b): recompute the speciation from the local (c_Cu_total, c_H_total, c_SO4_total) inside every
+    sweep_ter inner iteration and feed back the local free fraction/gamma to the sink, the diffusion
+    current and _kappa.  That is the stretch goal; until then the bulk ratio is used everywhere.
+    """
+    c_cu_L = p.c_bulk * 1e3                        # mol/L
+    c_acid_L = 0.5 * ph.c_h_bulk * 1e3             # C_H = 2 C_acid
+    D25 = {"cu": p.D_cu25, "h": p.D_H25, "so4": p.D_SO425}   # 25 C; conductivity applies the SE T factor
+    spec = _bulk_speciation(c_cu_L, c_acid_L, float(ph.T_C),
+                            None if p.Ka2 is None else float(p.Ka2),
+                            float(p.logK_ip), str(p.activity))
+    if not spec["converged"]:
+        raise RuntimeError(f"bath speciation did not converge: residual={spec['residual']:.3e} "
+                           f"(T={ph.T_C} C, activity={p.activity}, log10 K_ip={p.logK_ip})")
+    mod = _speciation_mod()
+    k_spec = mod.conductivity(spec, D=D25, T_C=ph.T_C)
+    k_ref = mod.conductivity(mod.dissociated_spec(c_cu_L, c_acid_L, T_C=ph.T_C), D=D25, T_C=ph.T_C)
+    if not (k_spec > 0.0 and k_ref > 0.0):
+        raise RuntimeError(f"non-positive speciated conductivity: k_spec={k_spec}, k_ref={k_ref}")
+    r_cu = spec["c_cu"] / c_cu_L
+    return dict(spec=spec, kappa=k_spec, kappa_ratio=k_spec / k_ref, r_cu=r_cu,
+                r_so4=spec["c_so4"] / spec["c_so4_total"],
+                r_react=float(spec["gamma"]["cu"]) * r_cu)
+
+
 # ======================================================================================= kinetics
 class Kinetics:
     def __init__(self, ph, p):
@@ -803,6 +867,15 @@ class StepSolver:
         self.adv_top = None                 # top-plane z-face flux per active top cell (stokes path only)
         self.tvd_faces = None               # (F_r, F_z, F_w) of the MUSCL deferred correction (tvd only)
         self.tertiary = p.transport == "tertiary"
+        # Plan v2 D1b: bulk speciation state (None = legacy fully dissociated bath).  The transported Cu2+
+        # field stays TOTAL Cu; r_react/r_cu/r_so4 apply the bulk free-ion ratios (frozen-speciation
+        # approximation) to the kinetics, the diffusion current and the conductivity.
+        self.spec = None
+        self.kappa_ratio = 1.0              # kappa(speciated) / kappa(fully dissociated) at the bulk point
+        self.r_react = 1.0                  # reactive Cu: gamma_Cu * c_Cu_free / c_Cu_total
+        self.r_cu = 1.0                     # free Cu2+ / total Cu (diffusion current)
+        self.r_so4 = 1.0                    # free SO4^2- / total sulfate (diffusion current)
+        self.kappa_bulk = 0.0               # speciated bulk conductivity (S/cm), 0 when speciation off
         g = geo.g
         lu_c = lu_s = lu_p = None
         if reuse is not None and reuse[0].shape == geo.act.shape and np.array_equal(reuse[0], geo.act):
@@ -866,6 +939,8 @@ class StepSolver:
         and H+ are solved implicitly and the potential comes from the charge balance
         div(-kappa grad phi - F sum z_i D_i grad c_i) = 0 with kappa evaluated locally."""
         geo, p, ph, g = self.geo, self.p, self.ph, self.geo.g
+        if p.speciation:
+            self._init_speciation()
         self.D_cu_a = ph.D_cu + Dt
         self.D_h_a = ph.D_H + Dt
         self.D_s_a = ph.D_so4 + Dt
@@ -891,7 +966,8 @@ class StepSolver:
         # diffusion-current source: constant-D operators per species (K_data data vectors, CSR order)
         self.kd = [geo.K_data(self.D_cu_a), geo.K_data(self.D_h_a), geo.K_data(self.D_s_a)]
         self.D_n = (self.D_cu_a[geo.act], self.D_h_a[geo.act], self.D_s_a[geo.act])
-        self.kappa_floor = max(1e-3 * ph.kappa_ne, 1e-9)
+        kap0 = self.kappa_bulk if self.spec is not None else ph.kappa_ne
+        self.kappa_floor = max(1e-3 * kap0, 1e-9)
         self.c_floor = 1e-6 * p.c_bulk
         self.c_h_scale = max(ph.c_h_bulk, 1e-3 * p.c_bulk)
         self.cs_p = None
@@ -899,16 +975,33 @@ class StepSolver:
         if reuse is not None and reuse[0].shape == geo.act.shape and np.array_equal(reuse[0], geo.act):
             lu_p = reuse[3]
         if p.ohmic:
-            kp, _ = geo.K_data(np.full((g.nr, g.nz), ph.kappa_ne))
+            kp, _ = geo.K_data(np.full((g.nr, g.nz), kap0))
             self.cs_p = CachedSym(geo, kp, lu=lu_p)
 
+    def _init_speciation(self):
+        """Bulk speciation state from :func:`bulk_speciation`; see its docstring for the approximation."""
+        p, ph = self.p, self.ph
+        sp = bulk_speciation(p, ph)
+        self.spec = sp["spec"]
+        self.kappa_bulk = sp["kappa"]
+        self.kappa_ratio = sp["kappa_ratio"]
+        self.r_cu = sp["r_cu"]
+        self.r_so4 = sp["r_so4"]
+        self.r_react = sp["r_react"]
+
     def _kappa(self, c_cu, c_h, c_s):
-        """Local Nernst-Einstein conductivity (S/cm) on the active cells, floored, full grid."""
+        """Local Nernst-Einstein conductivity (S/cm) on the active cells, floored, full grid.
+
+        With speciation the fully-dissociated local sum is scaled by the bulk speciated ratio
+        kappa_speciated / kappa_dissociated (frozen speciation: ion pairing and HSO4- formation remove
+        carriers everywhere in the same proportion).  Caveat: a scalar rescale keeps the local transport
+        numbers (Cu2+ share of the current) at their fully-dissociated values; a free-ion-resolved kappa
+        would lower the Cu2+ migration share too (see the TODO in bulk_speciation)."""
         geo, ph = self.geo, self.ph
         kap = (ph.z_cu ** 2 * self.D_n[0] * c_cu + ph.z_h ** 2 * self.D_n[1] * c_h
                + ph.z_so4 ** 2 * self.D_n[2] * c_s)
-        kap = np.maximum(F * ph.f_RT * kap, self.kappa_floor)
-        out = np.full(geo.act.shape, ph.kappa_ne)
+        kap = np.maximum(F * ph.f_RT * kap * self.kappa_ratio, self.kappa_floor)
+        out = np.full(geo.act.shape, self.kappa_bulk if self.spec is not None else ph.kappa_ne)
         out[geo.act] = kap
         return out
 
@@ -923,10 +1016,13 @@ class StepSolver:
         potential (research/tertiary_transport_notes.md sect. 3)."""
         geo, ph = self.geo, self.ph
         src = np.zeros(geo.n)
-        for z, c, (kd, bc), cb in ((ph.z_cu, c_cu, self.kd[0], self.cb[0]),
-                                   (ph.z_h, c_h, self.kd[1], self.cb[1]),
-                                   (ph.z_so4, c_s, self.kd[2], self.cb[2])):
-            src -= z * F * (geo.matvec(kd, c) - bc * cb)
+        # Speciation (plan v2 D1b): only the FREE ions carry the diffusion current, so the Cu2+ and
+        # SO4^2- contributions are scaled by their bulk free fractions (frozen speciation; HSO4- carries
+        # no current in this lumped-source model).  r = 1 when speciation is off -> bit-identical.
+        for z, c, (kd, bc), cb, rfree in ((ph.z_cu, c_cu, self.kd[0], self.cb[0], self.r_cu),
+                                          (ph.z_h, c_h, self.kd[1], self.cb[1], 1.0),
+                                          (ph.z_so4, c_s, self.kd[2], self.cb[2], self.r_so4)):
+            src -= z * F * rfree * (geo.matvec(kd, c) - bc * cb)
         return src
 
     def lu_state(self):
@@ -1026,10 +1122,11 @@ class StepSolver:
                 V = ctrl['V_set']
             eta = V - phi
             gu, gs = kin.cath(eta, acc)
+            r_react = self.r_react                   # gamma_Cu * free-Cu fraction (1.0 = legacy)
             if p.suppressor:
                 b_ex = p.k_rd * duty_r * Ia * (1.0 - p.pr_dl_fraction) / 1e-3 if ctrl['pr'] else 0.0
-                th_new = theta_be(th0, dt, p.k_plus * p.s_bulk * s_t, Mf * ct * gu, Mf * ct * gs,
-                                  p.k_minus * duty_f, b_ex)
+                th_new = theta_be(th0, dt, p.k_plus * p.s_bulk * s_t, Mf * ct * r_react * gu,
+                                  Mf * ct * r_react * gs, p.k_minus * duty_f, b_ex)
                 extra = w * p.Gamma * p.k_plus * (1 - th_new)
                 rhs = self.bc_s.copy()
                 if self.adv_bc is not None:                   # bulk normalised: s_bulk -> 1
@@ -1044,6 +1141,8 @@ class StepSolver:
             c_cu, c_h, c_s = ct * p.c_bulk, c_h_old, ter['c_so4']
             phi_w, V_w = phi, V
             for _ in range(max(int(p.tertiary_inner), 1)):
+                # TODO(D1b, stretch): re-speciate locally from (c_Cu, c_H, c_SO4) here and use the local
+                # free fraction / gamma instead of the bulk r_react, r_cu, r_so4 (frozen speciation now).
                 phi_g = np.zeros(geo.act.shape)
                 phi_g[act] = phi_w
                 # ---- kinetics at the current eta fixes the Cu2+ interface sink.  The sink is linear in c
@@ -1052,7 +1151,11 @@ class StepSolver:
                 # extra, which multiplies ctil.
                 gu_w, gs_w = kin.cath(V_w - phi_w, acc)
                 ci = (1 - th_new) * gu_w + th_new * gs_w
-                sink = p.efficiency * duty_f * w * ci / (2 * F * p.c_bulk)
+                # i_loc = ci * (reactive Cu)/(c_bulk) with reactive Cu = r_react * total Cu (bulk-ratio
+                # approximation).  The dissolved species stays TOTAL Cu, so the sink coefficient is
+                # scaled by r_react and multiplies c_Cu_total -- the Cu balance still closes because
+                # i_f = r_react * ct * ci is the current that the deposit and the sink both use.
+                sink = p.efficiency * duty_f * w * ci * r_react / (2 * F * p.c_bulk)
                 A, bc = geo.sg_operator(phi_g, ph.z_cu, self.D_cu_a, ph.f_RT,
                                         chi_max=p.tertiary_chi_max, adv=self.adv)
                 self.sg_c.base = A
@@ -1069,7 +1172,7 @@ class StepSolver:
                 c_h = np.maximum(self.sg_h.solve(np.zeros(n), rhs_h), self.c_floor)
                 # ---- electroneutrality closes the sulfate pool (majority inert anion, no flux BC)
                 c_s = np.maximum(-(ph.z_cu * c_cu + ph.z_h * c_h) / ph.z_so4, self.c_floor)
-                ct_w = np.clip(c_cu / p.c_bulk, 0.0, 3.0)
+                ct_w = np.clip(c_cu / p.c_bulk, 0.0, 3.0) * r_react   # reactive Cu (BV), bulk-ratio approx.
                 if p.ohmic:
                     kp, _ = geo.K_data(self._kappa(c_cu, c_h, c_s))
                     self.cs_p = CachedSym(geo, kp, lu=self.cs_p.lu if self.cs_p is not None else None)
@@ -1084,9 +1187,9 @@ class StepSolver:
             ct_new = np.clip(c_cu / p.c_bulk, 0.0, 3.0)
             gu_w, gs_w = kin.cath(V_w - phi_w, acc)
             ci = (1 - th_new) * gu_w + th_new * gs_w
-            # galvanostatic balance: newton_potential solved sum(w I) = I_t at this ct, so bal is ~0 by
-            # construction here; convergence of the tertiary path rests on d_c / d_th (and ter['d_h']).
-            diag['bal'] = (np.dot(w * ci, ct_new) / ctrl['I_t'] - 1.0) if galvano else 0.0
+            # galvanostatic balance: newton_potential solved sum(w I) = I_t at this reactive ct, so bal is ~0
+            # by construction here; convergence of the tertiary path rests on d_c / d_th (and ter['d_h']).
+            diag['bal'] = (np.dot(w * ci, ct_new * r_react) / ctrl['I_t'] - 1.0) if galvano else 0.0
             return np.concatenate([th_new, s_new, ct_new, phi_w / self.PHI_SC, [V_w / self.V_SC]])
 
         sweep = sweep_ter if self.tertiary else sweep_enh
@@ -1152,12 +1255,13 @@ class StepSolver:
         if not galvano:
             V = ctrl['V_set']
         # ---- final polish of V at fixed phi, c so the currents used for the front motion balance exactly
+        ct_r = ct * self.r_react                 # reactive Cu (bulk-ratio speciation); = ct when off
         if galvano:
-            V = scalar_V_cathodic(kin, w, ct, th, acc, phi, ctrl['I_t'], V0=V)
+            V = scalar_V_cathodic(kin, w, ct_r, th, acc, phi, ctrl['I_t'], V0=V)
         eta = V - phi
         gu, gs = kin.cath(eta, acc)
         ci = (1 - th) * gu + th * gs
-        i_f = ct * ci                                      # forward cathodic current density per cell (A/cm2)
+        i_f = ct_r * ci                            # forward cathodic current density per cell (A/cm2)
         info['I_f'] = float(np.dot(w, i_f))
         st['V'] = V
         if ctrl['pr']:
@@ -1173,7 +1277,8 @@ class StepSolver:
             st['phi'][act] = phi
         info['n_fac'] = (self.cs_c.n_fac + self.cs_s.n_fac + (self.cs_p.n_fac if self.cs_p else 0)
                          + (self.sg_h.n_fac if self.tertiary else 0))
-        return dict(act=act, i_f=i_f, i_a=Ia, th=th, th0=th0, ct=ct, eta=eta, phi=phi, s_t=s_t, gu=gu, gs=gs,
+        return dict(act=act, i_f=i_f, i_a=Ia, th=th, th0=th0, ct=ct, ct_react=ct_r, eta=eta, phi=phi,
+                    s_t=s_t, gu=gu, gs=gs,
                     c_h=ter['c_h'] if self.tertiary else None,
                     c_so4=ter['c_so4'] if self.tertiary else None, info=info)
 
