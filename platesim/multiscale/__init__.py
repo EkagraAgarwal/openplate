@@ -9,12 +9,20 @@ quasi-steady trench flow + transport model (``trenchflow.model.predict_site``).
 the Trench 1 coupon against the measured wide/narrow/flat site thicknesses and
 writes ``multiscale/trench1_prediction.json``.  No parameter is fitted to the
 trench data.
+
+Plan F1 adds the reverse direction (``two_way=True``, default off):
+:func:`effective_area_factor` measures how much extra current one pitch of a
+trench array draws (:func:`coupon_area_map` iterates that back into the coupon
+current map and :func:`rescale_coupon_currents` applies it galvanostatically).
 """
 from .bridge import (
-    DEFAULT_RUN, SIM_CACHE, cache_stats, clear_cache, coupon_centre_z_cm,
-    face_extent_cm, predict_trench, site_conditions,
+    DEFAULT_F_OPEN, DEFAULT_RUN, SIM_CACHE, TWO_WAY_MAX_ITER, TWO_WAY_TOL,
+    cache_stats, clear_cache, coupon_area_map, coupon_centre_z_cm,
+    effective_area_factor, face_extent_cm, predict_trench,
+    rescale_coupon_currents, site_conditions,
 )
 
-__all__ = ["DEFAULT_RUN", "SIM_CACHE", "cache_stats", "clear_cache",
-           "coupon_centre_z_cm", "face_extent_cm", "predict_trench",
-           "site_conditions"]
+__all__ = ["DEFAULT_F_OPEN", "DEFAULT_RUN", "SIM_CACHE", "TWO_WAY_MAX_ITER",
+           "TWO_WAY_TOL", "cache_stats", "clear_cache", "coupon_area_map",
+           "coupon_centre_z_cm", "effective_area_factor", "face_extent_cm",
+           "predict_trench", "rescale_coupon_currents", "site_conditions"]
