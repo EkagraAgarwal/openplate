@@ -11,7 +11,7 @@ import scipy.ndimage as ndi
 
 from .params import F, Params, derive
 from .levelset import (Grid, initial_psi, reinit, extend, advect, band_average, electrolyte_fraction, column_crossing,
-                       contour_lines, curvature_div_n, label_regions, UM)
+                       contour_lines, curvature_div_n, label_regions, volume_correct, NARROW_CELLS, UM)
 from .fields import StepGeom, StepSolver, bulk_speciation, theta_be
 from .recipes import Recipe, pr_forward
 
@@ -53,6 +53,9 @@ class ViaSim:
                       geometry=p.geometry)
         g = self.g
         self.psi = initial_psi(g, p.corner_cells)
+        # Bulk-plane rule C5 'fixed': freeze the INITIAL face height for the whole run, so the delta plane
+        # stays put while the front rises towards it (the run stops 3 dx short, see run()).
+        self.z_face0 = self._face_height_edge() if p.bulk_plane == "fixed" else None
         shp = (g.nr, g.nz)
         self.st = dict(theta=np.full(shp, p.theta0 if p.suppressor else 0.0), theta_a=np.zeros(shp),
                        s=np.ones(shp), ctil=np.ones(shp), phi=np.zeros(shp), phi_r=np.zeros(shp),
@@ -84,7 +87,10 @@ class ViaSim:
         self.void_records: list[dict] = []
 
     # ------------------------------------------------------------------ geometry diagnostics
-    def face_height(self, psi=None):
+    def _face_height_edge(self, psi=None):
+        """Legacy plane height (bulk_plane='edge'): mean of the two field columns at x ~ 0 and x ~ pitch for
+        the periodic trench_full cell, the wall column for the half-domain trench, the domain top for the
+        via, or the mean over all columns of a flat slab.  Bit-identical to the pre-C5 rule."""
         if self.g.f_open >= 0.999:                 # 1-D slab test geometry: flat interface
             if not self.g.periodic_x:
                 return self.g.H                    # via / trench slab test: the wall is the top of the domain
@@ -109,6 +115,39 @@ class ViaSim:
             return float(np.mean(zs)) if zs else g.H
         _, z = column_crossing(psi[-1], self.g.zc[0], upper=True)
         return z if z is not None else self.g.H
+
+    def face_height(self, psi=None):
+        """Height z of the diffusion boundary-layer (delta) plane above the deposit.
+
+        bulk_plane (plan v2 C5) only changes the PERIODIC trench_full cell:
+          'edge'       (default, legacy, bit-identical) mean of the two field columns x ~ 0 / x ~ pitch.
+                       Two columns is a poor sample of the field when the deposit on the shoulder differs
+                       from the field far from the wall, so the plane inherits shoulder structure.
+          'field_mean' mean psi = 0 crossing over EVERY column on the field, i.e. whose x lies outside the
+                       trench opening (|x - x_c| > a, Grid.rc / Grid.x_c / Grid.a).  Falls back to 'edge'
+                       when no such column has a crossing (opening spans the pitch).
+          'fixed'      the INITIAL face height frozen at construction (self.z_face0): the plane does not
+                       follow the front at all, so the delta layer thins as the deposit grows.  Callers
+                       report this frozen height as the plane, not as the front (the front is in the
+                       floor_*_um / field_*_um series keys), and run() stops 3 dx before the front reaches
+                       the plane.
+        Non-periodic geometries (via, trench) ignore the switch: there is a single wall column, and the
+        flat-slab test geometry (f_open >= 0.999) keeps its mean-over-all-columns rule from
+        _face_height_edge for every value."""
+        g, p = self.g, self.p
+        if g.periodic_x and g.f_open < 0.999 and p.bulk_plane != "edge":
+            if p.bulk_plane == "fixed":
+                return self.z_face0
+            psi = self.psi if psi is None else psi
+            off = np.abs(g.rc[:, 0] - g.x_c)        # |x - pitch/2|: the trench opening is |x - x_c| <= a
+            zs = []
+            for i in np.nonzero(off > g.a)[0]:      # field columns only
+                _, z = column_crossing(psi[i], g.zc[0], upper=True)
+                if z is not None:
+                    zs.append(z)
+            if zs:
+                return float(np.mean(zs))
+        return self._face_height_edge(psi)
 
     def fill_fraction(self, ef=None):
         ef = electrolyte_fraction(self.psi, self.g) if ef is None else ef
@@ -361,6 +400,13 @@ class ViaSim:
             if z_plane > g.z_top - 3 * g.dx:
                 stop_reason = 'overburden_exceeded'
                 break
+            if p.bulk_plane == "fixed":
+                # bulk_plane='fixed' (C5): the plane is frozen at the initial height, so the FRONT approaches
+                # it instead.  Stop 3 dx before contact: the Dirichlet layer needs a few cells of electrolyte
+                # above the front (the same margin the moving plane keeps below the domain top).
+                if self._face_height_edge() > z_plane - 3 * g.dx:
+                    stop_reason = 'overburden_exceeded'
+                    break
             geo = StepGeom(g, self.psi, z_plane, p)
             self.update_void_records(geo.void_m, t)
             # ---- stop test: open path sealed (a pocket exists and no open cavity remains below z = H)
@@ -543,7 +589,18 @@ class ViaSim:
                 stop_reason = 'filled'
                 break
             # ---- advance the interface
-            psi_new = advect(self.psi, vext, dt, g)
+            psi_new = advect(self.psi, vext, dt, g, scheme=p.ls_scheme,
+                             band_cells=(p.ls_band_cells if p.ls_narrow_band else None))
+            if p.ls_volume_correct:
+                # Plan v2 C3: the Godunov/WENO5 advance conserves neither the enclosed volume (0.2-0.8 %
+                # Faraday error per fill) nor the corners.  Shift psi inside the narrow band to the solid
+                # volume the charge passed so far must have deposited, solid0 + q*Mfac (Mfac = M_Cu/(2 F rho)
+                # x efficiency, the same convention as the growth velocity and the reported Faraday check).
+                # Done BEFORE the reinit/extend below, as a volume-preserving redistancing would be; the shift
+                # is a pure translation of the zero set, so it does not move corners.
+                q_step = self.q_total + I_net * dt
+                band_cells = float(p.ls_band_cells) if p.ls_narrow_band else float(NARROW_CELLS)
+                psi_new = volume_correct(psi_new, self.solid0 + q_step * ph.Mfac, g, band_cells)
             if p.use_accel:
                 kap = np.clip(-curvature_div_n(self.psi, g), -1 / (2 * g.dx), 1 / (2 * g.dx))
                 ta = st['theta_a']
@@ -557,6 +614,13 @@ class ViaSim:
                 _, st['theta_a'] = extend(psi_new, st['theta_a'], g.dx, periodic=g.periodic_x)
             if k % p.reinit_every == 0:
                 self.psi = d_new if d_new is not None else reinit(psi_new, g.dx, periodic=g.periodic_x)
+                if p.ls_volume_correct:
+                    # The FMM re-initialisation re-solves |grad psi| = 1 without the Sussman constraint, so it
+                    # drifts the enclosed volume again (measured ~3e-3 of the deposit over 13 steps at dx 8).
+                    # Re-impose the SAME per-step target after it, so the switch holds the deposit volume at
+                    # the Faraday value at the end of every step too (before-reinit correction above handles
+                    # the advection drift, this one the redistancing drift).  Only on steps that reinitialise.
+                    self.psi = volume_correct(self.psi, self.solid0 + q_step * ph.Mfac, g, band_cells)
             else:
                 self.psi = psi_new
             self.q_total += I_net * dt                          # charge of the step just taken (front advanced)
@@ -584,6 +648,14 @@ class ViaSim:
                 series[key].append(series[key][-1] if series[key] else np.nan)
         cu_dep = self.q_total * p.efficiency / (2 * F)      # moles of Cu in the deposit (net charge x efficiency)
         self.cu_balance_rel = float(self.cu_influx / cu_dep - 1.0) if cu_dep > 0 else None
+        # Faraday check of the level set (plan v2 C3): deposit volume as electrolyte_fraction sees it vs the
+        # volume the charge must have deposited, q * Mfac with Mfac = M_Cu/(2 F rho_Cu) * efficiency (cm3/C),
+        # which is the growth velocity's own factor.  This is the number convergence.py quotes (0.2-0.8 %
+        # before ls_volume_correct, ~0 with it - by construction, so it is a robustness check, not a
+        # measurement of scheme accuracy).
+        faraday_volume = self.q_total * ph.Mfac
+        faraday_error_rel = (float((self.solid_volume() - self.solid0 - faraday_volume) / faraday_volume)
+                             if faraday_volume > 0 else None)
         # honest version for the OPEN-top trench_full cell: the advective Cu2+ crossing of the Dirichlet plane
         # is not in cu_influx, and the 'gradient' operator is not discretely conservative, so the net advective
         # source of the operator is added on top of the diffusive influx (equal to cu_balance_rel when the
@@ -597,6 +669,7 @@ class ViaSim:
                     wall_s=_time.time() - t0_wall, face_thickness_um=(self.face_height() - g.H) / UM,
                     voids=[dict(rec, cls=self.classify(rec)) for rec in self.void_records],
                     solid_gain=self.solid_volume() - self.solid0, q_total=self.q_total,
+                    faraday_volume=faraday_volume, faraday_error_rel=faraday_error_rel,
                     cu_influx=self.cu_influx, cu_balance_rel=self.cu_balance_rel,
                     cu_adv=self.cu_adv, cu_balance_adv_rel=self.cu_balance_adv_rel)
         if progress is not None:

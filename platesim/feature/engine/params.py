@@ -26,6 +26,10 @@ from ...core.constants import F, M_CU, RHO_CU   # identical values to the resear
 # would shift Arrhenius i0 by ~0.005 % and break the bit-identical via regression in the tests)
 R_GAS = 8.314          # J/(mol K)
 
+# Molar volume of solid Cu [m3/mol], from the same constants the growth velocity uses (M_CU g/mol,
+# RHO_CU g/cm3).  Entered into the Gibbs-Thomson shift eta_GT = -gamma * Omega * kappa / (2F) (plan v2 D6).
+OMEGA_CU_M3_MOL = (M_CU * 1e-3) / (RHO_CU * 1e3)      # ~7.09e-6 m3/mol
+
 
 # ---------------------------------------------------------------- transport helpers (copied from
 # research/agent_reports_2026-10-17/fill_model_v2.py so this folder is self-contained)
@@ -176,6 +180,22 @@ class Params:
     ls_scheme: str = "godunov1"                # 'godunov1' (legacy first-order) | 'weno5' (WENO5 + TVD-RK3)
     ls_narrow_band: bool = False               # restrict band operations to |psi| < ls_band_cells * dx
     ls_band_cells: float = 8.0
+    # Volume-preserving advance (plan v2 C3): after every advection step shift psi inside the narrow band so
+    # the level-set solid volume equals solid0 + Faraday volume of the accumulated charge.  Off by default:
+    # the correction hides the scheme's own (0.2-0.8 %) volume drift, so it is a reporting/robustness knob,
+    # not evidence of scheme accuracy (see tests/test_feature_engine_hooks.py).
+    ls_volume_correct: bool = False
+    # Bulk (delta) plane rule (plan v2 C5; only the periodic trench_full geometry has a field to average):
+    #   'edge'       legacy: average the two field columns at x ~ 0 and x ~ pitch (bit-identical default)
+    #   'field_mean' mean psi = 0 crossing over every column on the FIELD (outside the trench opening)
+    #   'fixed'      the plane stays at the INITIAL face height + delta for the whole run; the run stops
+    #                when the front comes within 3 dx of it (the Dirichlet layer must keep a few cells)
+    bulk_plane: str = "edge"
+    # Gibbs-Thomson capillarity (plan v2 D6): curvature shift of the local cathodic overpotential,
+    # eta_eff = eta + gamma * Omega * kappa / (2F) with Omega = M_CU/rho_CU (params.OMEGA_CU_M3_MOL),
+    # kappa = levelset.curvature_div_n (positive on a convex metal protrusion), |kappa| <= 1/(2 dx) clipped.
+    gibbs_thomson: bool = False
+    gamma_cu_J_m2: float = 1.8                 # [J/m2] solid Cu surface energy (order of magnitude, not measured)
     # ---- growth
     efficiency: float = 1.0                    # current efficiency for growth velocity and Cu2+ sink/source
     # ---- model switches
@@ -246,6 +266,7 @@ ADV_FORMS = ("gradient", "divergence")
 FLOW_SOLVERS = ("lbm", "stokes")
 ADV_SCHEMES = ("upwind", "sg", "tvd")
 LS_SCHEMES = ("godunov1", "weno5")
+BULK_PLANES = ("edge", "field_mean", "fixed")
 
 
 def derive(p: Params, T_C: float) -> Phys:
@@ -263,6 +284,10 @@ def derive(p: Params, T_C: float) -> Phys:
         raise ValueError(f"adv_scheme must be one of {ADV_SCHEMES}, got {p.adv_scheme!r}")
     if p.ls_scheme not in LS_SCHEMES:
         raise ValueError(f"ls_scheme must be one of {LS_SCHEMES}, got {p.ls_scheme!r}")
+    if p.bulk_plane not in BULK_PLANES:
+        raise ValueError(f"bulk_plane must be one of {BULK_PLANES}, got {p.bulk_plane!r}")
+    if p.gamma_cu_J_m2 < 0.0:
+        raise ValueError(f"gamma_cu_J_m2 must be >= 0, got {p.gamma_cu_J_m2!r}")
     if p.activity not in ("ideal", "davies", "bdot"):
         raise ValueError(f"activity must be 'ideal', 'davies' or 'bdot', got {p.activity!r}")
     if not 0.0 <= p.pr_dl_fraction < 1.0:

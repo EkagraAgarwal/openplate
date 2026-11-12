@@ -19,8 +19,8 @@ import scipy.sparse.linalg as spla
 import scipy.ndimage as ndi
 from scipy.optimize import brentq
 
-from .levelset import Grid, grad_mag, label_regions
-from .params import F
+from .levelset import Grid, grad_mag, label_regions, curvature_div_n
+from .params import F, OMEGA_CU_M3_MOL
 
 
 # ======================================================================================= Scharfetter-Gummel
@@ -740,6 +740,32 @@ class Kinetics:
         return a, self.p.alpha_a * self.f * a        # (i_a, d i_a / d eta)
 
 
+# ======================================================================================= capillarity
+def gibbs_thomson_eta(psi, g: Grid, gamma_J_m2, omega_m3_mol=None):
+    """Per-cell Gibbs-Thomson shift of the CATHODIC overpotential, eta_GT [V] (plan v2 D6).
+
+    Sign convention.  psi > 0 in the electrolyte and psi < 0 in the metal, so n = grad psi/|grad psi| points
+    OUT of the metal and  kappa = levelset.curvature_div_n(psi) = div n  is POSITIVE on a convex metal
+    protrusion (deposit growing into the electrolyte; on a metal circle of radius R in the planar 2-D
+    geometries kappa = +1/R everywhere).  A curved interface carries the excess metal chemical potential
+    mu = mu_flat + gamma Omega kappa  (Kelvin), i.e. a raised local equilibrium potential
+    E_eq = E_eq,flat + gamma Omega kappa / (2F) for z = 2, so plating needs a LARGER driving force:
+
+        eta_GT = -gamma Omega kappa / (2 F)                     [V]
+
+    is returned, and the kinetics use  eta_eff = eta - eta_GT = (V - phi) + gamma Omega kappa / (2F).
+    kappa > 0 (protrusion) therefore shifts eta_eff TOWARD ZERO, i.e. reduces the cathodic driving force and
+    makes the protrusion plate more slowly; a groove (kappa < 0) plates faster.  That is the physical sign.
+
+    kappa is clipped to |kappa| <= 1/(2 dx) (the guard the CEAC use_accel code applies to the same operator)
+    because the finite-difference curvature of a re-initialised field is only usable up to the grid scale.
+    omega_m3_mol defaults to params.OMEGA_CU_M3_MOL = M_CU/rho_CU (molar volume of solid Cu); curvature_div_n
+    returns 1/cm, hence the 100 for metres in gamma [J/m2] * Omega [m3/mol] * kappa [1/m]."""
+    omega = OMEGA_CU_M3_MOL if omega_m3_mol is None else float(omega_m3_mol)
+    kap = np.clip(curvature_div_n(psi, g), -1.0 / (2.0 * g.dx), 1.0 / (2.0 * g.dx))     # 1/cm
+    return -float(gamma_J_m2) * omega * (kap * 100.0) / (2.0 * F)                        # V
+
+
 def theta_be(th_old, dt, a_rate, vu, vs, km_duty, b_extra):
     """Backward-Euler solution of  dth/dt = a (1-th) - [km (vu (1-th) + vs th) + b_extra] th  (per cell, exact quadratic).
     a_rate = k_plus*s_surf [1/s]; vu, vs: growth velocities of fully free / fully suppressed surface [cm/s];
@@ -752,15 +778,18 @@ def theta_be(th_old, dt, a_rate, vu, vs, km_duty, b_extra):
 
 
 # ======================================================================================= potential problems
-def scalar_V_cathodic(kin, w, ct, th, acc, phi, I_t, V0=None, lo=-4.0, hi=2.0):
+def scalar_V_cathodic(kin, w, ct, th, acc, phi, I_t, V0=None, lo=-4.0, hi=2.0, eta_gt=None):
     """V such that sum w ct ci(V - phi) = I_t with phi fixed.  I(V) is monotone decreasing and ln I is nearly linear
-    in V, so Newton on ln I - ln I_t converges in 3-5 iterations; brentq is the fallback."""
+    in V, so Newton on ln I - ln I_t converges in 3-5 iterations; brentq is the fallback.
+    eta_gt (plan v2 D6): per-cell Gibbs-Thomson shift [V], the kinetics see eta = V - phi - eta_gt;
+    None (default) reproduces the legacy expression exactly."""
     p = kin.p
     f_ = kin.f
     lnT = np.log(I_t)
     V = -0.2 if V0 is None else float(np.clip(V0, lo, hi))
     for _ in range(40):
-        gu, gs = kin.cath(V - phi, acc)
+        eta = V - phi if eta_gt is None else V - phi - eta_gt
+        gu, gs = kin.cath(eta, acc)
         wu, ws = w * ct * (1 - th) * gu, w * ct * th * gs
         I = wu.sum() + ws.sum()
         if I <= 0:
@@ -773,7 +802,8 @@ def scalar_V_cathodic(kin, w, ct, th, acc, phi, I_t, V0=None, lo=-4.0, hi=2.0):
         V = float(np.clip(V - np.clip(step, -0.5, 0.5), lo, hi))
 
     def g(V):
-        gu, gs = kin.cath(V - phi, acc)
+        eta = V - phi if eta_gt is None else V - phi - eta_gt
+        gu, gs = kin.cath(eta, acc)
         return np.dot(w * ct, (1 - th) * gu + th * gs) - I_t
     glo, ghi = g(lo), g(hi)
     if glo < 0:
@@ -784,17 +814,21 @@ def scalar_V_cathodic(kin, w, ct, th, acc, phi, I_t, V0=None, lo=-4.0, hi=2.0):
 
 
 def newton_potential(geo, cs, kin, w, ct, th, acc, V0, phi0, I_t, galvano, anodic=False, maxit=14, tol_eta=2e-7,
-                     src=None):
+                     src=None, eta_gt=None):
     """Solve  K phi + sigma w I(V-phi) = 0  [sigma = +1 cathodic sink, -1 anodic source] and, if galvano,
     sum w I = I_t for the unknowns (phi, V) with Newton (bordered system reduced by a Schur complement).
     src (tertiary path only): the divergence of the diffusion current F sum z_i D_i grad c_i, so the
     residual is  K phi + sigma w I - src = 0  (charge balance  div i_l = 0  with i_l = -kappa grad phi
     - F sum z_i D_i grad c_i).  src=None reproduces the enhanced path exactly.
+    eta_gt (plan v2 D6): per-cell Gibbs-Thomson shift [V] of the cathodic overpotential, so the kinetics see
+    eta = V - phi - eta_gt (see gibbs_thomson_eta).  It is constant in V and phi, so the Newton Jacobian is
+    unchanged.  None (default) is bit-identical to the pre-D6 solver; the anodic branch ignores it.
     Returns V, phi, I_p (A/cm2 per cell incl. ct factor for cathodic), iterations."""
     sigma = -1.0 if anodic else 1.0
     phi = phi0.copy()
     V = V0
     n = geo.n
+    shift = eta_gt if (eta_gt is not None and not anodic) else None
 
     def current(eta):
         if anodic:
@@ -814,7 +848,7 @@ def newton_potential(geo, cs, kin, w, ct, th, acc, V0, phi0, I_t, galvano, anodi
         else:
             V = scalar_V_cathodic(kin, w, ct, th, acc, phi, I_t, V0=V0)
     for it in range(maxit):
-        eta = V - phi
+        eta = V - phi if shift is None else V - phi - shift
         I, q0 = current(eta)
         q = w * q0
         R = geo.matvec(cs.data, phi) + sigma * w * I
@@ -835,7 +869,7 @@ def newton_potential(geo, cs, kin, w, ct, th, acc, V0, phi0, I_t, galvano, anodi
         V = V + lam * dV
         if lam == 1.0 and m < tol_eta:
             break
-    eta = V - phi
+    eta = V - phi if shift is None else V - phi - shift
     I, _ = current(eta)
     return V, phi, I, it + 1
 
@@ -867,6 +901,12 @@ class StepSolver:
         self.adv_top = None                 # top-plane z-face flux per active top cell (stokes path only)
         self.tvd_faces = None               # (F_r, F_z, F_w) of the MUSCL deferred correction (tvd only)
         self.tertiary = p.transport == "tertiary"
+        # Plan v2 D6 (Gibbs-Thomson): per-active-cell shift of the local cathodic overpotential, computed once
+        # per step from the frozen level set (see gibbs_thomson_eta for the sign convention).  None - the
+        # default - makes every kinetic expression below exactly the legacy one.
+        self.eta_gt = None
+        if p.gibbs_thomson:
+            self.eta_gt = gibbs_thomson_eta(geo.psi, geo.g, p.gamma_cu_J_m2)[geo.act]
         # Plan v2 D1b: bulk speciation state (None = legacy fully dissociated bath).  The transported Cu2+
         # field stays TOTAL Cu; r_react/r_cu/r_so4 apply the bulk free-ion ratios (frozen-speciation
         # approximation) to the kinetics, the diffusion current and the conductivity.
@@ -1075,7 +1115,7 @@ class StepSolver:
                 phi = np.zeros(n)
             if not galvano:
                 V = ctrl['V_set']
-            eta = V - phi
+            eta = V - phi if self.eta_gt is None else V - phi - self.eta_gt   # D6: local GT-corrected eta
             gu, gs = kin.cath(eta, acc)
             if p.suppressor:
                 b_ex = p.k_rd * duty_r * Ia * (1.0 - p.pr_dl_fraction) / 1e-3 if ctrl['pr'] else 0.0
@@ -1095,11 +1135,11 @@ class StepSolver:
                 th_new, s_new = th0 * 0.0, s_t
             if p.ohmic:
                 V_new, phi_new, _, nph = newton_potential(geo, self.cs_p, kin, w, ct, th_new, acc, V, phi,
-                                                          ctrl['I_t'], galvano)
+                                                          ctrl['I_t'], galvano, eta_gt=self.eta_gt)
             else:
                 V_new, phi_new, _, nph = self._nonohmic(w, ct, th_new, acc, V, ctrl, galvano)
             diag['nph'] += nph
-            gu, gs = kin.cath(V_new - phi_new, acc)
+            gu, gs = kin.cath(V_new - phi_new if self.eta_gt is None else V_new - phi_new - self.eta_gt, acc)
             ci = (1 - th_new) * gu + th_new * gs
             extra = p.efficiency * duty_f * w * ci / (2 * F * p.c_bulk)  # Cu2+ sink, time-averaged over PR cycle
             rhs_c = self.bc_c + rev_src
@@ -1120,7 +1160,7 @@ class StepSolver:
                 phi = np.zeros(n)
             if not galvano:
                 V = ctrl['V_set']
-            eta = V - phi
+            eta = V - phi if self.eta_gt is None else V - phi - self.eta_gt   # D6: local GT-corrected eta
             gu, gs = kin.cath(eta, acc)
             r_react = self.r_react                   # gamma_Cu * free-Cu fraction (1.0 = legacy)
             if p.suppressor:
@@ -1149,7 +1189,7 @@ class StepSolver:
                 # (i_loc = ci * c_Cu/c_bulk), so the diagonal coefficient is w*ci/(2F c_bulk) and it
                 # multiplies the absolute concentration c_Cu -- the same number as the enhanced path's
                 # extra, which multiplies ctil.
-                gu_w, gs_w = kin.cath(V_w - phi_w, acc)
+                gu_w, gs_w = kin.cath(V_w - phi_w if self.eta_gt is None else V_w - phi_w - self.eta_gt, acc)
                 ci = (1 - th_new) * gu_w + th_new * gs_w
                 # i_loc = ci * (reactive Cu)/(c_bulk) with reactive Cu = r_react * total Cu (bulk-ratio
                 # approximation).  The dissolved species stays TOTAL Cu, so the sink coefficient is
@@ -1178,14 +1218,14 @@ class StepSolver:
                     self.cs_p = CachedSym(geo, kp, lu=self.cs_p.lu if self.cs_p is not None else None)
                     src = self._diff_src(c_cu, c_h, c_s)
                     V_w, phi_w, _, nph = newton_potential(geo, self.cs_p, kin, w, ct_w, th_new, acc, V_w, phi_w,
-                                                          ctrl['I_t'], galvano, src=src)
+                                                          ctrl['I_t'], galvano, src=src, eta_gt=self.eta_gt)
                 else:
                     V_w, phi_w, _, nph = self._nonohmic(w, ct_w, th_new, acc, V_w, ctrl, galvano)
                 diag['nph'] += nph
             ter['c_h'], ter['c_so4'] = c_h, c_s
             ter['d_h'] = float(np.max(np.abs(c_h - c_h_old)) / self.c_h_scale) if n else 0.0
             ct_new = np.clip(c_cu / p.c_bulk, 0.0, 3.0)
-            gu_w, gs_w = kin.cath(V_w - phi_w, acc)
+            gu_w, gs_w = kin.cath(V_w - phi_w if self.eta_gt is None else V_w - phi_w - self.eta_gt, acc)
             ci = (1 - th_new) * gu_w + th_new * gs_w
             # galvanostatic balance: newton_potential solved sum(w I) = I_t at this reactive ct, so bal is ~0
             # by construction here; convergence of the tertiary path rests on d_c / d_th (and ter['d_h']).
@@ -1257,9 +1297,10 @@ class StepSolver:
         # ---- final polish of V at fixed phi, c so the currents used for the front motion balance exactly
         ct_r = ct * self.r_react                 # reactive Cu (bulk-ratio speciation); = ct when off
         if galvano:
-            V = scalar_V_cathodic(kin, w, ct_r, th, acc, phi, ctrl['I_t'], V0=V)
-        eta = V - phi
-        gu, gs = kin.cath(eta, acc)
+            V = scalar_V_cathodic(kin, w, ct_r, th, acc, phi, ctrl['I_t'], V0=V, eta_gt=self.eta_gt)
+        eta = V - phi                               # physical (reported) overpotential
+        eta_k = eta if self.eta_gt is None else eta - self.eta_gt   # D6: what the kinetics see
+        gu, gs = kin.cath(eta_k, acc)
         ci = (1 - th) * gu + th * gs
         i_f = ct_r * ci                            # forward cathodic current density per cell (A/cm2)
         info['I_f'] = float(np.dot(w, i_f))
@@ -1287,10 +1328,11 @@ class StepSolver:
         n = self.geo.n
         phi = np.zeros(n)
         if galvano:
-            V = scalar_V_cathodic(self.kin, w, ct, th, acc, phi, ctrl['I_t'], V0=V)
+            V = scalar_V_cathodic(self.kin, w, ct, th, acc, phi, ctrl['I_t'], V0=V, eta_gt=self.eta_gt)
         else:
             V = ctrl['V_set']
-        gu, gs = self.kin.cath(V - phi, acc)
+        eta = V - phi if self.eta_gt is None else V - phi - self.eta_gt
+        gu, gs = self.kin.cath(eta, acc)
         return V, phi, ct * ((1 - th) * gu + th * gs), 0
 
     def _rev_nonohmic(self, w, I_ta):
