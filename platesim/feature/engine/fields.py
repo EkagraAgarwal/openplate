@@ -79,6 +79,45 @@ def sg_face_coeffs(g, F):
     return gp, gq
 
 
+# ======================================================================================= TVD (MUSCL / van Leer)
+def vanleer(r):
+    """van Leer flux limiter  psi(r) = (r + |r|) / (1 + |r|)  (the harmonic-mean form).
+
+    psi(r) = 0 for r <= 0 (no anti-diffusive extrapolation across an extremum) and psi(r) = 2r/(1+r)
+    for r > 0, rising monotonically to 2 as r -> inf.  Used with the MOVERS/MUSCL reconstruction
+    c_face = c_u + 0.5 psi(r) (c_d - c_u), which is TVD for any such Sweby-region limiter."""
+    r = np.asarray(r, dtype=float)
+    ar = np.abs(r)
+    return (r + ar) / (1.0 + ar)
+
+
+def muscl_face(cu, cd, cuu, ok=None):
+    """Limited second-order (MUSCL) face value from the upwind side, vectorised over faces.
+
+    For a face whose signed flux runs upwind cell u -> downwind cell d, with uu the next cell further
+    upstream (all uniform spacing):
+        r      = (c_u - c_uu) / (c_d - c_u)
+        c_face = c_u + 0.5 * vanleer(r) * (c_d - c_u)
+    r ~ 1 on a smooth monotone field, so psi(r) ~ 1 and the face value is centred (second order);
+    psi -> 0 at extrema/steps, which collapses it to the first-order upwind value c_u (TVD).
+
+    ok (bool array, optional) marks the faces that have a valid far-upwind cell; the others fall back
+    to c_u (solid neighbour, domain end, the top Dirichlet plane).  A locally uniform field (c_d ==
+    c_u) returns c_u exactly, so a constant field never generates a correction."""
+    cu = np.asarray(cu, dtype=float)
+    cd = np.asarray(cd, dtype=float)
+    cuu = np.asarray(cuu, dtype=float)
+    dc = cd - cu
+    live = dc != 0.0
+    den = np.where(live, dc, 1.0)
+    r = (cu - cuu) / den
+    psi = vanleer(np.where(live, r, 0.0))
+    ho = cu + 0.5 * psi * dc
+    if ok is not None:
+        ho = np.where(np.asarray(ok, dtype=bool), ho, cu)
+    return np.where(live, ho, cu)
+
+
 # ======================================================================================= geometry for a step
 class StepGeom:
     """Everything that depends only on psi at the start of a step: smoothed indicator, active cells, interface
@@ -429,6 +468,84 @@ class StepGeom:
             np.add.at(div, q, -F)
         return div
 
+    # ------------------------------------------------------------------ TVD (MUSCL) deferred correction
+    def tvd_topology(self):
+        """Cached per-face (upwind, downwind, far-upwind) active-cell ids for the MUSCL reconstruction.
+
+        One tuple per stencil face group, in the (F_r, F_z, F_w) order of mac_face_fluxes:
+            (p, q, up_pos, dn_pos, uu_pos, up_neg, dn_neg, uu_neg)
+        where the *_pos entries are the upwind / downwind / upwind-upwind cell ids used on faces with
+        F > 0 and *_neg those for F < 0.  The far-upwind id uu is -1 when that cell is inactive (solid),
+        off the grid, or past the top Dirichlet plane, in which case muscl_face falls back to first
+        order.  The far-upwind cell across the periodic x seam wraps (columns nr-1 / 0 / 1 / nr-2);
+        z is not periodic, so the bottom/top ends fall back.  Built once per StepGeom."""
+        topo = getattr(self, "_tvd_topo", None)
+        if topo is not None:
+            return topo
+        idx, g = self.idx, self.g
+        nr, nz = g.nr, g.nz
+        wx = g.periodic_x
+
+        def cell(i, j):
+            if j < 0 or j >= nz:
+                return -1
+            if i < 0 or i >= nr:
+                if not wx:
+                    return -1
+                i %= nr
+            return int(idx[i, j])
+
+        def ids(i_arr, j_arr):
+            return np.array([cell(i, j) for i, j in zip(i_arr, j_arr)], dtype=np.int64)
+
+        pr, qr = np.asarray(self.pr), np.asarray(self.qr)
+        pz, qz = np.asarray(self.pz), np.asarray(self.qz)
+        pw, qw = np.asarray(self.pw), np.asarray(self.qw)
+        # r-faces p -> q point +x: F>0 upwind p, far-upwind (ir-1); F<0 upwind q, far-upwind (ir+2)
+        uu_r_pos = ids(self.ir - 1, self.jr)
+        uu_r_neg = ids(self.ir + 2, self.jr)
+        # z-faces p -> q point +z: F>0 far-upwind (iz, jz-1); F<0 far-upwind (iz, jz+2)
+        uu_z_pos = ids(self.iz, self.jz - 1)
+        uu_z_neg = ids(self.iz, self.jz + 2)
+        # wrap face p=(0,j) -> q=(nr-1,j) points -x: F>0 far-upwind column 1; F<0 column nr-2
+        jw = np.asarray(self.jw)
+        uu_w_pos = ids(np.ones_like(jw), jw) if nr >= 2 else np.full(jw.size, -1, np.int64)
+        uu_w_neg = ids(np.full(jw.size, nr - 2, np.int64), jw) if nr >= 3 else np.full(jw.size, -1, np.int64)
+        topo = (
+            (pr, qr, pr, qr, uu_r_pos, qr, pr, uu_r_neg),
+            (pz, qz, pz, qz, uu_z_pos, qz, pz, uu_z_neg),
+            (pw, qw, pw, qw, uu_w_pos, qw, pw, uu_w_neg),
+        )
+        self._tvd_topo = topo
+        return topo
+
+    def tvd_correction(self, c, F_r, F_z, F_w):
+        """Deferred-correction vector of the limited (MUSCL / van Leer) advective face fluxes.
+
+        Returns  D(c) = sum over faces of  F (c_face_limited - c_face_upwind)  accumulated with + on p
+        and - on q, i.e. the flux divergence of the extra anti-diffusive flux, so that the second-order
+        scheme is  A_upwind c + D(c) = rhs  and a Picard sweep freed with  rhs - D(c^k)  converges to it.
+        The linear operator (and therefore the CachedGen reuse and the classic upwind matrix) is
+        unchanged.  Each face enters p and q with opposite signs, so sum(D) == 0 exactly (up to the
+        summation round-off) and a uniform field gives D == 0.  The top Dirichlet-plane terms of
+        mac_advection are untouched: only the interior stencil faces reconstructed here get the
+        correction."""
+        c = np.asarray(c, dtype=float)
+        corr = np.zeros(self.n)
+        for (p, q, up_p, dn_p, uu_p, up_n, dn_n, uu_n), F in zip(self.tvd_topology(),
+                                                                 (F_r, F_z, F_w)):
+            if F.size == 0:
+                continue
+            assert p.size == q.size == up_p.size == up_n.size == F.size == uu_p.size == uu_n.size
+            pos = F > 0
+            u = np.where(pos, up_p, up_n)
+            d = np.where(pos, dn_p, dn_n)
+            uu = np.where(pos, uu_p, uu_n)
+            ho = muscl_face(c[u], c[d], c[np.maximum(uu, 0)], uu >= 0)
+            extra = F * (ho - c[u])
+            corr += np.bincount(p, extra, self.n) - np.bincount(q, extra, self.n)
+        return corr
+
     def factor(self, data, extra=None):
         d = data.copy() if extra is not None else data
         if extra is not None:
@@ -663,6 +780,11 @@ def newton_potential(geo, cs, kin, w, ct, th, acc, V0, phi0, I_t, galvano, anodi
 class StepSolver:
     PHI_SC = 0.05        # V   weights for the Anderson least-squares norm
     V_SC = 0.05
+    TVD_OMEGA = 1.0      # under-relaxation of the MUSCL deferred correction (1 = full limited face value).
+                         # The correction is an explicit function of the current iterate, so it only adds a
+                         # local O(dx^2) term to the Picard map; the Anderson loop handled omega = 1 on the
+                         # narrow-trench gate case (same iteration count as upwind), hence no damping here.
+                         # Lower it (e.g. 0.5) if a stiff case stalls on the correction.
 
     def __init__(self, geo: StepGeom, p, ph, Dt, reuse=None, flow=None, flow_faces=None):
         """reuse: LU factors (c, s, phi) of the previous step; valid when the active cell set is unchanged, they
@@ -679,6 +801,7 @@ class StepSolver:
         self.flow_faces = flow_faces
         self.adv_bc = None                  # rhs source of the open-top inflow (stokes MAC path only)
         self.adv_top = None                 # top-plane z-face flux per active top cell (stokes path only)
+        self.tvd_faces = None               # (F_r, F_z, F_w) of the MUSCL deferred correction (tvd only)
         self.tertiary = p.transport == "tertiary"
         g = geo.g
         lu_c = lu_s = lu_p = None
@@ -713,6 +836,13 @@ class StepSolver:
             else:
                 self.cs_c = CachedGen(geo, self._base(Kc, adv))
                 self.cs_s = CachedGen(geo, self._base(Ks, adv))
+                if self.adv_scheme == "tvd":
+                    # Limited (MUSCL / van Leer) face values by DEFERRED CORRECTION: the implicit operator
+                    # stays the upwind one above (CachedGen / LU reuse unchanged), and every Picard sweep
+                    # adds  -D(c)  to the rhs (D = flux divergence of the limited minus the upwind face
+                    # flux, StepGeom.tvd_correction).  D is conservative per face and vanishes for a
+                    # uniform field, so the Cu balance still closes and c = const stays exact.
+                    self.tvd_faces = geo.mac_face_fluxes(*flow_faces)[:3]
         else:
             self.cs_c, self.cs_s = CachedSym(geo, Kc, lu=lu_c), CachedSym(geo, Ks, lu=lu_s)
         self.cs_p = None
@@ -859,6 +989,8 @@ class StepSolver:
                 rhs = self.bc_s.copy()
                 if self.adv_bc is not None:                   # bulk normalised: s_bulk -> 1
                     rhs = rhs + self.adv_bc
+                if self.tvd_faces is not None:                # limited (MUSCL) face values, deferred
+                    rhs = rhs - self.TVD_OMEGA * geo.tvd_correction(s_t, *self.tvd_faces)
                 if p.s_transient:
                     extra = extra + geo.vh / dt
                     rhs += geo.vh / dt * s_old
@@ -877,6 +1009,8 @@ class StepSolver:
             rhs_c = self.bc_c + rev_src
             if self.adv_bc is not None:                       # open-top inflow, bulk normalised to 1
                 rhs_c = rhs_c + self.adv_bc
+            if self.tvd_faces is not None:                    # limited (MUSCL) face values, deferred
+                rhs_c = rhs_c - self.TVD_OMEGA * geo.tvd_correction(ct, *self.tvd_faces)
             ct_new = np.clip(self.cs_c.solve(extra, rhs_c), 0.0, 3.0)
             diag['bal'] = (np.dot(w * ci, ct_new) / ctrl['I_t'] - 1.0) if galvano else 0.0
             return np.concatenate([th_new, s_new, ct_new, phi_new / self.PHI_SC, [V_new / self.V_SC]])
