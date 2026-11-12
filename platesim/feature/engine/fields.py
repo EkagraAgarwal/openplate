@@ -21,6 +21,7 @@ from scipy.optimize import brentq
 
 from .levelset import Grid, grad_mag, label_regions, curvature_div_n
 from .params import F, OMEGA_CU_M3_MOL
+from .additives import (AdditiveSet, displace_suppressor, suppressor_cl_rate)
 
 
 # ======================================================================================= Scharfetter-Gummel
@@ -723,6 +724,23 @@ def bulk_speciation(p, ph):
 
 
 # ======================================================================================= kinetics
+def additive_set(p) -> AdditiveSet:
+    """``AdditiveSet`` with the engine's own Params in the kinetics/suppressor slots (plan v2 D2 wiring).
+
+    ``c_s``/``Gamma_s``/``k_plus``/``k_minus`` and the ``i0_u``/``i0_s`` ratio are the engine's literature
+    set, so the Cl-gated suppressor of ``additives='cl_ndr'`` reduces EXACTLY to the legacy update when
+    ``theta_cl -> 1`` (``suppressor_i0_factor`` reproduces the ``(1-theta) i0_u + theta i0_s``
+    interpolation the Kinetics/sweeps use, see tests/test_feature_additives.py).  The accelerator slots are
+    the engine's ``c_acc``/``k_acc``/``b_acc``; the leveller ``k_l``/``Gamma_l`` come from Params so the
+    transported leveller uses the engine's own transport constants.  Everything else is the module's
+    literature-order default, flagged [J] there.
+    """
+    return AdditiveSet(c_s=p.s_bulk, Gamma_s=p.Gamma, k_plus=p.k_plus, k_minus=p.k_minus,
+                       k_des_s=0.0, n_cl=1.0, i0_u=p.i0_u, i0_s=p.i0_s,
+                       c_a=p.c_acc, k_a=p.k_acc, b_acc=p.b_acc,
+                       k_l=p.k_lev, Gamma_l=p.Gamma_lev)
+
+
 class Kinetics:
     def __init__(self, ph, p):
         self.ph, self.p = ph, p
@@ -884,19 +902,23 @@ class StepSolver:
                          # narrow-trench gate case (same iteration count as upwind), hence no damping here.
                          # Lower it (e.g. 0.5) if a stiff case stalls on the correction.
 
-    def __init__(self, geo: StepGeom, p, ph, Dt, reuse=None, flow=None, flow_faces=None):
+    def __init__(self, geo: StepGeom, p, ph, Dt, reuse=None, flow=None, flow_faces=None, shade=None):
         """reuse: LU factors (c, s, phi) of the previous step; valid when the active cell set is unchanged, they
         then serve as preconditioners (refinement) for the slightly different matrices of this step.
         flow: (ux, uz) cell-centred velocities (nr, nz) in cm/s for the resolved cavity flow
         ('trench_full'); the advective operator is added to the Cu2+ and suppressor equations.
         flow_faces: (ufx, ufz) MAC face velocities in the engine orientation (nr, nz) / (nr, nz+1);
         required by flow_solver='stokes', which then uses the conservative divergence-form operator of
-        StepGeom.mac_advection (plus its open-top rhs adv_bc) instead of the interpolated face fluxes."""
+        StepGeom.mac_advection (plus its open-top rhs adv_bc) instead of the interpolated face fluxes.
+        shade: optional per-active-cell factor in [0, 1] that multiplies the interface weights w (plan v2
+        E2, bubble shading).  None (default) -> w = geo.w, the legacy operator, bit-identical."""
         self.geo, self.p, self.ph = geo, p, ph
         self.kin = Kinetics(ph, p)
         self.Dt = Dt
         self.flow = flow
         self.flow_faces = flow_faces
+        # ---- plan v2 E2: bubble shading of the interface weights (None = legacy)
+        self.shade = shade
         self.adv_bc = None                  # rhs source of the open-top inflow (stokes MAC path only)
         self.adv_top = None                 # top-plane z-face flux per active top cell (stokes path only)
         self.tvd_faces = None               # (F_r, F_z, F_w) of the MUSCL deferred correction (tvd only)
@@ -916,12 +938,19 @@ class StepSolver:
         self.r_cu = 1.0                     # free Cu2+ / total Cu (diffusion current)
         self.r_so4 = 1.0                    # free SO4^2- / total sulfate (diffusion current)
         self.kappa_bulk = 0.0               # speciated bulk conductivity (S/cm), 0 when speciation off
+        # Plan v2 D2 (full additive system): mode flags and the additive constants.  'legacy' keeps every
+        # legacy expression and operation order below untouched (bit-identical defaults).
+        self.add_mode = p.additives
+        self.cl_on = p.additives in ("cl_ndr", "full") and bool(p.suppressor)
+        self.full = p.additives == "full"
+        self.lev_on = bool(self.full and p.c_lev_bulk > 0.0)
+        self.aset = additive_set(p) if self.add_mode != "legacy" else None
         g = geo.g
-        lu_c = lu_s = lu_p = None
+        lu_c = lu_s = lu_p = lu_l = None
         if reuse is not None and reuse[0].shape == geo.act.shape and np.array_equal(reuse[0], geo.act):
-            lu_c, lu_s, lu_p = reuse[1:]
+            lu_c, lu_s, lu_p, lu_l = reuse[1:]
         if self.tertiary:
-            self._init_tertiary(Dt, reuse, lu_s)
+            self._init_tertiary(Dt, reuse, lu_s, lu_l)
             return
         Kc, self.bc_c = geo.K_data(ph.D_c + Dt)
         Ks, self.bc_s = geo.K_data(ph.D_s + Dt)
@@ -958,6 +987,15 @@ class StepSolver:
                     self.tvd_faces = geo.mac_face_fluxes(*flow_faces)[:3]
         else:
             self.cs_c, self.cs_s = CachedSym(geo, Kc, lu=lu_c), CachedSym(geo, Ks, lu=lu_s)
+        # Plan v2 D2 ('full' only): the transported leveller copies the suppressor machinery (diffusion +
+        # Dirichlet bulk + an interface sink linear in the normalised concentration, so only the diagonal
+        # changes between sweeps).  adv_scheme='sg' fits the SG faces of Cu2+/suppressor only; the leveller
+        # keeps the upwind operator of the same face fluxes there (flagged, new mode).
+        self.cs_l, self.bc_l = None, None
+        if self.lev_on:
+            Kl, self.bc_l = geo.K_data(ph.D_lev + Dt)
+            self.cs_l = (CachedGen(geo, self._base(Kl, self.adv)) if self.adv is not None
+                         else CachedSym(geo, Kl, lu=lu_l))
         self.cs_p = None
         if p.ohmic:
             Kp, _ = geo.K_data(ph.kappa * np.ones((g.nr, g.nz)))
@@ -969,7 +1007,7 @@ class StepSolver:
         return sp.csr_matrix((K_data, geo.indices, geo.indptr), shape=(geo.n, geo.n)) + adv
 
     # ------------------------------------------------------------------ tertiary transport
-    def _init_tertiary(self, Dt, reuse=None, lu_s=None):
+    def _init_tertiary(self, Dt, reuse=None, lu_s=None, lu_l=None):
         """Operators for transport == 'tertiary' (explicit Cu2+ / H+ / SO4^2-).
 
         Cu2+ stays in the Anderson vector as ctil = c_Cu/c_bulk, so every existing diagnostic and the
@@ -1003,6 +1041,12 @@ class StepSolver:
         self.cs_c = self.sg_c                       # lu_state()/n_fac bookkeeping
         Ks, self.bc_s = geo.K_data(ph.D_s + Dt)
         self.cs_s = CachedGen(geo, self._base(Ks, adv)) if adv is not None else CachedSym(geo, Ks, lu=lu_s)
+        # Plan v2 D2 ('full'): transported leveller, same transport machinery as the suppressor above.
+        self.cs_l, self.bc_l = None, None
+        if self.lev_on:
+            Kl, self.bc_l = geo.K_data(ph.D_lev + Dt)
+            self.cs_l = (CachedGen(geo, self._base(Kl, adv)) if adv is not None
+                         else CachedSym(geo, Kl, lu=lu_l))
         # diffusion-current source: constant-D operators per species (K_data data vectors, CSR order)
         self.kd = [geo.K_data(self.D_cu_a), geo.K_data(self.D_h_a), geo.K_data(self.D_s_a)]
         self.D_n = (self.D_cu_a[geo.act], self.D_h_a[geo.act], self.D_s_a[geo.act])
@@ -1066,7 +1110,8 @@ class StepSolver:
         return src
 
     def lu_state(self):
-        return (self.geo.act.copy(), self.cs_c.lu, self.cs_s.lu, self.cs_p.lu if self.cs_p else None)
+        return (self.geo.act.copy(), self.cs_c.lu, self.cs_s.lu, self.cs_p.lu if self.cs_p else None,
+                self.cs_l.lu if self.cs_l is not None else None)
 
     # ------------------------------------------------------------------
     def solve(self, st, ctrl, dt):
@@ -1074,12 +1119,32 @@ class StepSolver:
         accelerated.  st: dict of full-grid arrays + scalars (updated in place).
         ctrl: dict(mode 'I'|'V', I_t (A, instantaneous forward total), V_set, duty_f, duty_r, rr, pr)."""
         geo, p, ph, kin = self.geo, self.p, self.ph, self.kin
-        act, w, n = geo.act, geo.w, geo.n
+        act, n = geo.act, geo.n
+        # plan v2 E2: bubble shading multiplies the interface weights, so the remaining area carries the
+        # galvanostatic current.  shade=None (default) leaves w = geo.w, i.e. the legacy operator.
+        w = geo.w if self.shade is None else geo.w * self.shade
         galvano = ctrl['mode'] == 'I'
         duty_f, duty_r = ctrl['duty_f'], ctrl['duty_r']
-        acc = (1.0 + p.b_acc * st['theta_a'][act]) if p.use_accel else 1.0
+        cl_on, lev_on, full = self.cl_on, self.lev_on, self.full
+        aset = self.aset
+        acc_a = (1.0 + p.b_acc * st['theta_a'][act]) if (p.use_accel or full) else 1.0
         th0 = st['theta'][act].copy()
         s_old = st['s'][act].copy()
+        # ---- plan v2 D2 coverage state of the step (theta_cl is owned by sim.run, which re-steps it with the
+        # true dt after the CFL clip; the sweeps below use the start-of-step value as the Cl gate).
+        th_clr = st['theta_cl'][act].copy() if cl_on else None
+        ta = st['theta_a'][act] if full else None
+        th_l0 = st['theta_l'][act].copy() if lev_on else None
+        lev_old = st['lev'][act].copy() if lev_on else None
+        lev_t = lev_old
+        lev_new = lev_old
+        th_l_new = th_l0
+
+        def acc_now(th_l_now):
+            """i0 multiplier of the accelerator (plan v2 D2 'full': x the leveller blocking factor)."""
+            if not lev_on:
+                return acc_a
+            return acc_a * aset.leveller_factor(th_l_now)
         Mf = ph.Mfac
         # ---- reverse (anodic) problem: independent of c; solved once per step, warm started
         Ia = np.zeros(n)
@@ -1110,18 +1175,32 @@ class StepSolver:
 
         def sweep_enh(x):
             """One Gauss-Seidel pass  theta -> s -> (V, phi) -> c  (the fixed-point map)."""
+            nonlocal lev_t, lev_new, th_l_new
             th, s_t, ct, phi, V = x[:n], x[n:2 * n], x[2 * n:3 * n], x[3 * n:4 * n] * self.PHI_SC, x[4 * n] * self.V_SC
             if not p.ohmic:
                 phi = np.zeros(n)
             if not galvano:
                 V = ctrl['V_set']
             eta = V - phi if self.eta_gt is None else V - phi - self.eta_gt   # D6: local GT-corrected eta
-            gu, gs = kin.cath(eta, acc)
+            acc_s = acc_now(lev_t) if lev_on else acc_a
+            gu, gs = kin.cath(eta, acc_s)
             if p.suppressor:
-                b_ex = p.k_rd * duty_r * Ia * (1.0 - p.pr_dl_fraction) / 1e-3 if ctrl['pr'] else 0.0
-                th_new = theta_be(th0, dt, p.k_plus * p.s_bulk * s_t, Mf * ct * gu, Mf * ct * gs,
-                                  p.k_minus * duty_f, b_ex)
-                extra = w * p.Gamma * p.k_plus * (1 - th_new)          # sink = Gamma k_plus s (1-theta)
+                # 'full' moves the reverse-pulse coverage loss out of theta_be into the additive kernel
+                # (additives.reverse_pulse_desorption, applied by sim.run with the accepted dt).
+                b_ex = 0.0 if full else (p.k_rd * duty_r * Ia * (1.0 - p.pr_dl_fraction) / 1e-3 if ctrl['pr'] else 0.0)
+                if cl_on:
+                    # D2: the Cl- adlayer gates the polyether adsorption (Braun 2019/2020 co-adsorption).
+                    # suppressor_cl_rate = k_plus c_s theta_cl**n_cl, so theta_cl -> 1 reproduces the legacy
+                    # rate (and sink coefficient) exactly and theta_cl -> 0 adsorbs no suppressor.
+                    gate = np.clip(th_clr, 0.0, 1.0) ** aset.n_cl
+                    a_rate = suppressor_cl_rate(p.s_bulk * s_t, th_clr, p.k_plus, n_cl=aset.n_cl)
+                    th_new = theta_be(th0, dt, a_rate, Mf * ct * gu, Mf * ct * gs,
+                                      p.k_minus * duty_f, b_ex)
+                    extra = w * p.Gamma * p.k_plus * gate * (1 - th_new)
+                else:
+                    th_new = theta_be(th0, dt, p.k_plus * p.s_bulk * s_t, Mf * ct * gu, Mf * ct * gs,
+                                      p.k_minus * duty_f, b_ex)
+                    extra = w * p.Gamma * p.k_plus * (1 - th_new)      # sink = Gamma k_plus s (1-theta)
                 rhs = self.bc_s.copy()
                 if self.adv_bc is not None:                   # bulk normalised: s_bulk -> 1
                     rhs = rhs + self.adv_bc
@@ -1133,14 +1212,32 @@ class StepSolver:
                 s_new = np.clip(self.cs_s.solve(extra, rhs), 0.0, 1.5)
             else:
                 th_new, s_new = th0 * 0.0, s_t
+            if lev_on:
+                # D2 'full': transport-limited leveller coverage from the local front supply c_l = c_lev_bulk
+                # * lev, then the transported leveller equation (same machinery as the suppressor, always
+                # transient here because the species is new).
+                v_cell = Mf * ct * ((1.0 - th_new) * gu + th_new * gs)
+                th_l_new = aset.leveller_step(th_l0, dt, c_l=p.c_lev_bulk * np.clip(lev_t, 0.0, None),
+                                              v=v_cell)
+                # Sink coefficient of the NORMALISED leveller field: the molar sink is k_l c_l (1-theta), so
+                # after dividing by c_lev_bulk the diagonal carries k_l (1-theta) [cm/s], not Gamma_l*k_l.
+                extra_l = w * p.k_lev * (1.0 - th_l_new) + geo.vh / dt
+                rhs_l = self.bc_l.copy() + geo.vh / dt * lev_old
+                if self.adv_bc is not None:                   # normalised: bulk leveller -> 1
+                    rhs_l = rhs_l + self.adv_bc
+                if self.tvd_faces is not None:
+                    rhs_l = rhs_l - self.TVD_OMEGA * geo.tvd_correction(lev_t, *self.tvd_faces)
+                lev_new = np.clip(self.cs_l.solve(extra_l, rhs_l), 0.0, 1.5)
+            thk = displace_suppressor(th_new, ta) if full else th_new
+            acc_k = acc_now(th_l_new) if lev_on else acc_a
             if p.ohmic:
-                V_new, phi_new, _, nph = newton_potential(geo, self.cs_p, kin, w, ct, th_new, acc, V, phi,
+                V_new, phi_new, _, nph = newton_potential(geo, self.cs_p, kin, w, ct, thk, acc_k, V, phi,
                                                           ctrl['I_t'], galvano, eta_gt=self.eta_gt)
             else:
-                V_new, phi_new, _, nph = self._nonohmic(w, ct, th_new, acc, V, ctrl, galvano)
+                V_new, phi_new, _, nph = self._nonohmic(w, ct, thk, acc_k, V, ctrl, galvano)
             diag['nph'] += nph
-            gu, gs = kin.cath(V_new - phi_new if self.eta_gt is None else V_new - phi_new - self.eta_gt, acc)
-            ci = (1 - th_new) * gu + th_new * gs
+            gu, gs = kin.cath(V_new - phi_new if self.eta_gt is None else V_new - phi_new - self.eta_gt, acc_k)
+            ci = (1 - thk) * gu + thk * gs
             extra = p.efficiency * duty_f * w * ci / (2 * F * p.c_bulk)  # Cu2+ sink, time-averaged over PR cycle
             rhs_c = self.bc_c + rev_src
             if self.adv_bc is not None:                       # open-top inflow, bulk normalised to 1
@@ -1149,25 +1246,35 @@ class StepSolver:
                 rhs_c = rhs_c - self.TVD_OMEGA * geo.tvd_correction(ct, *self.tvd_faces)
             ct_new = np.clip(self.cs_c.solve(extra, rhs_c), 0.0, 3.0)
             diag['bal'] = (np.dot(w * ci, ct_new) / ctrl['I_t'] - 1.0) if galvano else 0.0
+            lev_t = lev_new
             return np.concatenate([th_new, s_new, ct_new, phi_new / self.PHI_SC, [V_new / self.V_SC]])
 
         def sweep_ter(x):
             """One outer Picard pass for transport == 'tertiary':
             theta -> s -> [Cu2+/H+ SG species -> electroneutral sulfate -> local kappa -> (V, phi) with the
             diffusion current -> kinetics] x tertiary_inner."""
+            nonlocal lev_t, lev_new, th_l_new
             th, s_t, ct, phi, V = x[:n], x[n:2 * n], x[2 * n:3 * n], x[3 * n:4 * n] * self.PHI_SC, x[4 * n] * self.V_SC
             if not p.ohmic:
                 phi = np.zeros(n)
             if not galvano:
                 V = ctrl['V_set']
             eta = V - phi if self.eta_gt is None else V - phi - self.eta_gt   # D6: local GT-corrected eta
-            gu, gs = kin.cath(eta, acc)
+            acc_s = acc_now(lev_t) if lev_on else acc_a
+            gu, gs = kin.cath(eta, acc_s)
             r_react = self.r_react                   # gamma_Cu * free-Cu fraction (1.0 = legacy)
             if p.suppressor:
-                b_ex = p.k_rd * duty_r * Ia * (1.0 - p.pr_dl_fraction) / 1e-3 if ctrl['pr'] else 0.0
-                th_new = theta_be(th0, dt, p.k_plus * p.s_bulk * s_t, Mf * ct * r_react * gu,
-                                  Mf * ct * r_react * gs, p.k_minus * duty_f, b_ex)
-                extra = w * p.Gamma * p.k_plus * (1 - th_new)
+                b_ex = 0.0 if full else (p.k_rd * duty_r * Ia * (1.0 - p.pr_dl_fraction) / 1e-3 if ctrl['pr'] else 0.0)
+                if cl_on:
+                    gate = np.clip(th_clr, 0.0, 1.0) ** aset.n_cl
+                    a_rate = suppressor_cl_rate(p.s_bulk * s_t, th_clr, p.k_plus, n_cl=aset.n_cl)
+                    th_new = theta_be(th0, dt, a_rate, Mf * ct * r_react * gu,
+                                      Mf * ct * r_react * gs, p.k_minus * duty_f, b_ex)
+                    extra = w * p.Gamma * p.k_plus * gate * (1 - th_new)
+                else:
+                    th_new = theta_be(th0, dt, p.k_plus * p.s_bulk * s_t, Mf * ct * r_react * gu,
+                                      Mf * ct * r_react * gs, p.k_minus * duty_f, b_ex)
+                    extra = w * p.Gamma * p.k_plus * (1 - th_new)
                 rhs = self.bc_s.copy()
                 if self.adv_bc is not None:                   # bulk normalised: s_bulk -> 1
                     rhs = rhs + self.adv_bc
@@ -1177,6 +1284,17 @@ class StepSolver:
                 s_new = np.clip(self.cs_s.solve(extra, rhs), 0.0, 1.5)
             else:
                 th_new, s_new = th0 * 0.0, s_t
+            if lev_on:
+                v_cell = Mf * ct * r_react * ((1.0 - th_new) * gu + th_new * gs)
+                th_l_new = aset.leveller_step(th_l0, dt, c_l=p.c_lev_bulk * np.clip(lev_t, 0.0, None),
+                                              v=v_cell)
+                extra_l = w * p.k_lev * (1.0 - th_l_new) + geo.vh / dt
+                rhs_l = self.bc_l.copy() + geo.vh / dt * lev_old
+                if self.adv_bc is not None:                   # normalised: bulk leveller -> 1
+                    rhs_l = rhs_l + self.adv_bc
+                lev_new = np.clip(self.cs_l.solve(extra_l, rhs_l), 0.0, 1.5)
+            thk = displace_suppressor(th_new, ta) if full else th_new
+            acc_k = acc_now(th_l_new) if lev_on else acc_a
             c_h_old = ter['c_h']
             c_cu, c_h, c_s = ct * p.c_bulk, c_h_old, ter['c_so4']
             phi_w, V_w = phi, V
@@ -1189,8 +1307,8 @@ class StepSolver:
                 # (i_loc = ci * c_Cu/c_bulk), so the diagonal coefficient is w*ci/(2F c_bulk) and it
                 # multiplies the absolute concentration c_Cu -- the same number as the enhanced path's
                 # extra, which multiplies ctil.
-                gu_w, gs_w = kin.cath(V_w - phi_w if self.eta_gt is None else V_w - phi_w - self.eta_gt, acc)
-                ci = (1 - th_new) * gu_w + th_new * gs_w
+                gu_w, gs_w = kin.cath(V_w - phi_w if self.eta_gt is None else V_w - phi_w - self.eta_gt, acc_k)
+                ci = (1 - thk) * gu_w + thk * gs_w
                 # i_loc = ci * (reactive Cu)/(c_bulk) with reactive Cu = r_react * total Cu (bulk-ratio
                 # approximation).  The dissolved species stays TOTAL Cu, so the sink coefficient is
                 # scaled by r_react and multiplies c_Cu_total -- the Cu balance still closes because
@@ -1217,19 +1335,20 @@ class StepSolver:
                     kp, _ = geo.K_data(self._kappa(c_cu, c_h, c_s))
                     self.cs_p = CachedSym(geo, kp, lu=self.cs_p.lu if self.cs_p is not None else None)
                     src = self._diff_src(c_cu, c_h, c_s)
-                    V_w, phi_w, _, nph = newton_potential(geo, self.cs_p, kin, w, ct_w, th_new, acc, V_w, phi_w,
+                    V_w, phi_w, _, nph = newton_potential(geo, self.cs_p, kin, w, ct_w, thk, acc_k, V_w, phi_w,
                                                           ctrl['I_t'], galvano, src=src, eta_gt=self.eta_gt)
                 else:
-                    V_w, phi_w, _, nph = self._nonohmic(w, ct_w, th_new, acc, V_w, ctrl, galvano)
+                    V_w, phi_w, _, nph = self._nonohmic(w, ct_w, thk, acc_k, V_w, ctrl, galvano)
                 diag['nph'] += nph
             ter['c_h'], ter['c_so4'] = c_h, c_s
             ter['d_h'] = float(np.max(np.abs(c_h - c_h_old)) / self.c_h_scale) if n else 0.0
             ct_new = np.clip(c_cu / p.c_bulk, 0.0, 3.0)
-            gu_w, gs_w = kin.cath(V_w - phi_w if self.eta_gt is None else V_w - phi_w - self.eta_gt, acc)
-            ci = (1 - th_new) * gu_w + th_new * gs_w
+            gu_w, gs_w = kin.cath(V_w - phi_w if self.eta_gt is None else V_w - phi_w - self.eta_gt, acc_k)
+            ci = (1 - thk) * gu_w + thk * gs_w
             # galvanostatic balance: newton_potential solved sum(w I) = I_t at this reactive ct, so bal is ~0
             # by construction here; convergence of the tertiary path rests on d_c / d_th (and ter['d_h']).
             diag['bal'] = (np.dot(w * ci, ct_new * r_react) / ctrl['I_t'] - 1.0) if galvano else 0.0
+            lev_t = lev_new
             return np.concatenate([th_new, s_new, ct_new, phi_w / self.PHI_SC, [V_w / self.V_SC]])
 
         sweep = sweep_ter if self.tertiary else sweep_enh
@@ -1296,12 +1415,16 @@ class StepSolver:
             V = ctrl['V_set']
         # ---- final polish of V at fixed phi, c so the currents used for the front motion balance exactly
         ct_r = ct * self.r_react                 # reactive Cu (bulk-ratio speciation); = ct when off
+        # D2 'full': the kinetics see the displaced suppressor coverage and the accelerator x leveller factor;
+        # identical values to `th`/`acc` when the mode is 'legacy'.
+        thk_f = displace_suppressor(th, ta) if full else th
+        acc_f = acc_now(th_l_new) if lev_on else acc_a
         if galvano:
-            V = scalar_V_cathodic(kin, w, ct_r, th, acc, phi, ctrl['I_t'], V0=V, eta_gt=self.eta_gt)
+            V = scalar_V_cathodic(kin, w, ct_r, thk_f, acc_f, phi, ctrl['I_t'], V0=V, eta_gt=self.eta_gt)
         eta = V - phi                               # physical (reported) overpotential
         eta_k = eta if self.eta_gt is None else eta - self.eta_gt   # D6: what the kinetics see
-        gu, gs = kin.cath(eta_k, acc)
-        ci = (1 - th) * gu + th * gs
+        gu, gs = kin.cath(eta_k, acc_f)
+        ci = (1 - thk_f) * gu + thk_f * gs
         i_f = ct_r * ci                            # forward cathodic current density per cell (A/cm2)
         info['I_f'] = float(np.dot(w, i_f))
         st['V'] = V
@@ -1311,15 +1434,20 @@ class StepSolver:
         st['theta'][act] = th
         st['s'][act] = s_t
         st['ctil'][act] = ct
+        if lev_on:
+            st['theta_l'][act] = th_l_new
+            st['lev'][act] = lev_new
         if self.tertiary:
             st['c_h'][act] = ter['c_h']
             st['c_so4'][act] = ter['c_so4']
         if p.ohmic:
             st['phi'][act] = phi
         info['n_fac'] = (self.cs_c.n_fac + self.cs_s.n_fac + (self.cs_p.n_fac if self.cs_p else 0)
-                         + (self.sg_h.n_fac if self.tertiary else 0))
+                         + (self.sg_h.n_fac if self.tertiary else 0)
+                         + (self.cs_l.n_fac if self.cs_l is not None else 0))
         return dict(act=act, i_f=i_f, i_a=Ia, th=th, th0=th0, ct=ct, ct_react=ct_r, eta=eta, phi=phi,
                     s_t=s_t, gu=gu, gs=gs,
+                    theta_cl=th_clr, theta_l=th_l_new, lev=lev_new, th_k=thk_f,
                     c_h=ter['c_h'] if self.tertiary else None,
                     c_so4=ter['c_so4'] if self.tertiary else None, info=info)
 

@@ -171,6 +171,43 @@ class Params:
     speciation: bool = False
     logK_ip: float = 2.3                       # log10 of the CuSO4^0 ion-pair constant [J, not verified]
     activity: str = "davies"                   # 'ideal' | 'davies' | 'bdot' (core.speciation)
+    # ---- plan v2 D2: full additive system.  Switch:
+    #   'legacy' (default): today's single transported suppressor (Cl factor implicitly 1), non-transported
+    #            accelerator behind use_accel, no leveller.  BIT-IDENTICAL to the pre-D2 engine.
+    #   'cl_ndr'          : + chloride coverage theta_cl per interface cell, computed from the BULK Cl-
+    #            concentration c_cl_bulk (no Cl transport, see the justification below) and the local growth
+    #            velocity; the suppressor adsorption rate is gated by theta_cl**n_cl (Braun et al. 2019/2020
+    #            Cl-/polyether co-adsorption S-NDR), which feeds the existing theta_be balance in place of
+    #            k_plus*s_bulk*s_t and the transported-suppressor sink coefficient.
+    #   'full'            : 'cl_ndr' + the CEAC accelerator (area-conserving, curvature term, displacing the
+    #            suppressor; p.c_acc/p.k_acc/p.b_acc as in use_accel) + a TRANSPORTED leveller (same machinery
+    #            as the suppressor: diffusion + Dirichlet bulk + interface sink) whose coverage blocks i0, and
+    #            reverse-pulse coverage desorption (additives.reverse_pulse_desorption, p.k_rd) on a PR recipe.
+    # Cl- transport justification: the net irreversible Cl- consumption at the front is only the burial term
+    # k_inc_cl * v * Gamma_cl * theta_cl (~1e-12 mol/cm2/s at v ~ 1e-6 cm/s, theta_cl ~ 0.1), i.e. ~1e-7 A/cm2
+    # equivalent, because thermal desorption returns Cl- to the boundary layer.  The pure-diffusion supply limit
+    # for 1 mM Cl- (D ~ 2e-5 cm2/s) at delta = 64 um is F D c/delta ~ 0.3 mA/cm2, some 3e3 times larger, so Cl-
+    # is NOT transport limited at the 5-30 mA/cm2 of these runs and the bulk concentration is used at the front.
+    # The assumption degrades below ~1 uM Cl- or with a much larger k_inc_cl [J].
+    additives: str = "legacy"                  # 'legacy' | 'cl_ndr' | 'full'
+    c_cl_bulk: float = 1.0e-6                  # mol/cm3 bulk Cl- (1 mM, Braun high-k S-NDR set [B19])
+    # Leveller (plan v2 D2, 'full' only): transported species, c_lev_bulk = 0 -> no leveller at all (factor 1).
+    c_lev_bulk: float = 0.0                    # mol/cm3 (~10 uM bath, [J])
+    k_lev: float = 1.0e-3                      # cm/s supply (mass-transfer) velocity [J]
+    Gamma_lev: float = 2.0e-10                 # mol/cm2 saturation coverage [J]
+    D_lev25: float = 1.0e-6                    # cm2/s at 25 C (PEG-type polymer, same order as D_s25) [J]
+    # ---- plan v2 E2: Lagrangian H2 micro-bubbles attached to the front (bubble shading of the electrode).
+    # bubbles=False keeps every legacy path (no import of platesim.bubbles, no extra series keys).
+    bubbles: bool = False
+    bubble_contact_deg: float = 45.0            # [J] gas-side contact angle (Fritz / contact disc radius)
+    bubble_supersat_threshold: float = 0.0      # S-1 of the wall H2 layer above which a cell may nucleate
+    bubble_seed: int = 0                        # RNG seed of the nucleation draw (same seed -> same sites)
+    bubble_init: tuple = ()                     # ((x_um, z_um, R_um), ...) attached bubbles injected at t = 0
+    bubble_rate_per_cell: float = 1.0           # nucleation probability 1 - exp(-rate (S-1-threshold))
+    bubble_R0_um: float = 1.0                   # [J] mean seeded radius (0.5-1.5 x)
+    bubble_max: int = 40                        # cap on the live bubble count (step cost)
+    bubble_supersat: float = 0.0                # [J] imposed far-field H2 supersaturation added to the HER estimate
+    bubble_pH: float = 1.7                      # [J] bath pH for the HER side-reaction estimate (side_reactions)
     # Pulse-reverse double-layer correction (plan v2 D3): fraction of each reverse pulse's charge that
     # charges the double layer instead of dissolving Cu (platesim.feature.pulse_cycle gives 0.27-0.41
     # for the team waveform).  Scales only mechanisms tied to the FARADAIC anodic current (k_rd term);
@@ -244,6 +281,7 @@ class Phys:
     D_cu: float          # cm2/s plain Cu2+ diffusivity
     D_c: float           # enhanced: E_mig*D_cu (migration lumped in); tertiary: D_cu (explicit potential)
     D_s: float           # suppressor diffusivity
+    D_lev: float         # leveller diffusivity (plan v2 D2 'full' only; 0 when the mode is off)
     kappa: float         # S/cm
     i0_u: float
     i0_s: float
@@ -267,6 +305,7 @@ FLOW_SOLVERS = ("lbm", "stokes")
 ADV_SCHEMES = ("upwind", "sg", "tvd")
 LS_SCHEMES = ("godunov1", "weno5")
 BULK_PLANES = ("edge", "field_mean", "fixed")
+ADDITIVES_MODES = ("legacy", "cl_ndr", "full")
 
 
 def derive(p: Params, T_C: float) -> Phys:
@@ -286,6 +325,16 @@ def derive(p: Params, T_C: float) -> Phys:
         raise ValueError(f"ls_scheme must be one of {LS_SCHEMES}, got {p.ls_scheme!r}")
     if p.bulk_plane not in BULK_PLANES:
         raise ValueError(f"bulk_plane must be one of {BULK_PLANES}, got {p.bulk_plane!r}")
+    if p.additives not in ADDITIVES_MODES:
+        raise ValueError(f"additives must be one of {ADDITIVES_MODES}, got {p.additives!r}")
+    if p.c_cl_bulk < 0.0:
+        raise ValueError(f"c_cl_bulk must be >= 0, got {p.c_cl_bulk!r}")
+    if p.c_lev_bulk < 0.0:
+        raise ValueError(f"c_lev_bulk must be >= 0, got {p.c_lev_bulk!r}")
+    if not 0.0 <= p.bubble_contact_deg <= 180.0:
+        raise ValueError(f"bubble_contact_deg must be in [0, 180], got {p.bubble_contact_deg!r}")
+    if p.bubble_max < 0:
+        raise ValueError(f"bubble_max must be >= 0, got {p.bubble_max!r}")
     if p.gamma_cu_J_m2 < 0.0:
         raise ValueError(f"gamma_cu_J_m2 must be >= 0, got {p.gamma_cu_J_m2!r}")
     if p.activity not in ("ideal", "davies", "bdot"):
@@ -308,6 +357,7 @@ def derive(p: Params, T_C: float) -> Phys:
     return Phys(
         T_C=T_C, T_K=T_K, f_RT=f_RT,
         D_cu=D_cu, D_c=D_cu if tertiary else p.E_mig * D_cu, D_s=p.D_s25 * fD,
+        D_lev=(p.D_lev25 * fD if p.additives == "full" else 0.0),
         kappa=p.kappa_22 * (1 + p.kappa_per_K * (T_C - 22.0)),
         i0_u=p.i0_u * arr, i0_s=p.i0_s * arr, i0_a=p.i0_a * arr,
         Mfac=M_CU / (2 * F * RHO_CU) * p.efficiency,
