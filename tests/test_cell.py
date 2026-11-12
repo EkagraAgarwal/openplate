@@ -140,3 +140,87 @@ def test_gmsh_fallback_box(monkeypatch):
         assert np.all(res.j_mA_cm2 > 0)
     finally:
         _MESH_CACHE.clear()                   # never leave a box mesh under the gmsh key
+
+
+# ------------------------------------------------ D5a: thin-seed sheet resistance (terminal effect)
+
+def _third_means(res, geom=None):
+    """(near, far) mean j in the thirds nearest/farthest from the top clip edge."""
+    geom = geom or CellGeometry()
+    j, z = res.j_mA_cm2, res.z_cm
+    h = geom.coupon_h
+    near = float(j[z >= z.max() - h / 3.0].mean())
+    far = float(j[z <= z.min() + h / 3.0].mean())
+    return near, far
+
+
+def test_seed_off_reproduces_equipotential(beaker_default):
+    """seed_R_sq=None (the default) is bit-identical to the old behaviour."""
+    res = solve_cell(CellGeometry(), Bath(), I_TEST, resolution="coarse")
+    assert np.array_equal(res.j_mA_cm2, beaker_default.j_mA_cm2)
+    assert res.seed_R_sq is None
+    assert res.n_seed_iter == 0
+    assert res.vm_max_mV == 0.0
+
+
+def test_seed_negligible_sheet_resistance(beaker_default):
+    """R_s -> 0 must collapse onto the equipotential solution."""
+    res = solve_cell(CellGeometry(), Bath(), I_TEST, resolution="coarse", seed_R_sq=1e-6)
+    ref = beaker_default.j_mA_cm2
+    rel = np.max(np.abs(res.j_mA_cm2 - ref)) / ref.mean()
+    print(f"\nR_s=1e-6: max relative j change {rel:.2e}, vm_max {res.vm_max_mV:.2e} mV")
+    assert rel < 1e-4
+    assert res.I_cathode_A == pytest.approx(I_TEST, rel=1e-6)
+
+
+def test_seed_terminal_effect_conserves_current():
+    """R_s = 0.05 ohm/sq: clip side plates heavier, current still conserved."""
+    res = solve_cell(CellGeometry(), Bath(), I_TEST, resolution="coarse", seed_R_sq=0.05)
+    near, far = _third_means(res)
+    print(f"\nR_s=0.05: near/far={near / far:.5f}, vm_max={res.vm_max_mV:.3f} mV, "
+          f"n_seed={res.n_seed_iter}")
+    assert abs(res.I_cathode_A - I_TEST) / I_TEST < 0.01
+    assert abs(res.I_anode_A + I_TEST) / I_TEST < 0.01
+    assert near > far, f"near clip third must plate heavier: {near:.3f} vs {far:.3f}"
+    assert res.vm_max_mV > 0.0
+    assert res.n_seed_iter < 30
+    assert res.seed_R_sq == 0.05
+
+
+def test_seed_effect_grows_with_sheet_resistance(beaker_default):
+    """Larger R_s -> stronger terminal effect (near/far ratio increases)."""
+    ratios, vmax = [], []
+    for rs in (0.02, 0.05, 0.2):
+        res = solve_cell(CellGeometry(), Bath(), I_TEST, resolution="coarse", seed_R_sq=rs)
+        near, far = _third_means(res)
+        ratios.append(near / far)
+        vmax.append(res.vm_max_mV)
+        print(f"R_s={rs:4g}: near/far={near / far:.5f}, vm_max={res.vm_max_mV:.3f} mV, "
+              f"n_seed={res.n_seed_iter}")
+        assert abs(res.I_cathode_A - I_TEST) / I_TEST < 0.01
+    print(f"base (equipotential) near/far = {_third_means(beaker_default)[0] / _third_means(beaker_default)[1]:.5f}")
+    assert ratios[0] < ratios[1] < ratios[2]
+    assert vmax[0] < vmax[1] < vmax[2]
+    assert ratios[2] > ratios[0] + 0.01
+
+
+def test_seed_untaped_warns_front_face_only():
+    res = solve_cell(CellGeometry(taped=False), _fast_bath(), I_TEST, delta_um=0.0,
+                     resolution="coarse", seed_R_sq=0.05)
+    assert any("front face only" in w for w in res.warnings)
+    assert abs(res.I_cathode_A - I_TEST) / I_TEST < 0.01
+
+
+def test_sheet_poisson_1d_analytic():
+    """Uniform j0 strip fed from one end: V_m(L) = R_s j0 L^2 / 2."""
+    from platesim.cell.solver import _sheet_poisson
+
+    rs, j0, length = 0.05, 0.012, 2.0
+    nx, nz = 41, 5                      # uniform in z -> effectively 1-D in x
+    j = np.full((nz, nx), j0)
+    v = _sheet_poisson(j, rs, length / (nx - 1), 2.0 / (nz - 1), "left")
+    v_analytic = rs * j0 * length ** 2 / 2.0
+    print(f"\n1-D sheet: V(L) = {v.max() * 1e3:.4f} mV, analytic {v_analytic * 1e3:.4f} mV")
+    assert v.max() == pytest.approx(v_analytic, rel=0.02)
+    assert np.ptp(v, axis=0).max() < 1e-9 * max(v_analytic, 1.0)  # z-independent
+

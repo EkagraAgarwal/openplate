@@ -26,6 +26,23 @@ def recipe_delta_max(recipe: Recipe, p: Params):
     return dm
 
 
+def dt_change_measure(v_new, v_old):
+    """Relative change of the extended interface speed between two accepted steps (adaptive dt controller).
+
+    The measure is the 92nd percentile of the cell-wise |v_new - v_old| over the interface band, divided by
+    max|v_new|: a robust high percentile of the relative change, i.e. all but the noisiest few percent of
+    the band cells changed by less than this fraction of the peak front speed.  The maximum (or a higher
+    percentile) is dominated by single-cell discretisation artefacts -- band edges and the concave trench
+    corner, where the normal extension of the velocity jumps by one stencil between steps -- which already
+    at the fixed dt_max reach ~2.5e-3 and would pin the controller at the fixed ceiling; a mean (or a low
+    percentile) is instead dominated by the smooth extended band far from the front and lets dt run to the
+    ceiling.  vext is what the level set is advected with, so its per-step change is exactly the quantity a
+    too-large dt integrates inaccurately, and unlike the floor/field current ratio it is defined on every
+    geometry (via, trench, trench_full)."""
+    den = max(float(np.abs(v_new).max()), 1e-30)
+    return float(np.percentile(np.abs(v_new - v_old), 92.0)) / den
+
+
 class ViaSim:
     def __init__(self, d_um, T_C, params: Params, f_open, recipe: Recipe):
         self.p, self.ph = params, derive(params, T_C)
@@ -56,12 +73,24 @@ class ViaSim:
         self.cu_adv = 0.0                        # ... plus the net Cu2+ the advection operator adds (trench_full)
         self.cu_balance_rel = None               # (Cu2+ in) / (Cu deposited) - 1, filled by run()
         self.cu_balance_adv_rel = None           # (diffusive influx + net advective source) / deposit - 1
+        self.flow_info: dict = {}
+        self.flow_faces = None                   # MAC face velocities (ufx, ufz) of the last stokes solve
         self.void_records: list[dict] = []
 
     # ------------------------------------------------------------------ geometry diagnostics
     def face_height(self, psi=None):
         if self.g.f_open >= 0.999:                 # 1-D slab test geometry: flat interface
-            return 0.0 if self.g.periodic_x else self.g.H   # trench_full: initial_psi puts the wall at z = 0
+            if not self.g.periodic_x:
+                return self.g.H                    # via / trench slab test: the wall is the top of the domain
+            # trench_full flat slab: initial_psi puts the wall at z = 0, so the interface height must be read
+            # from psi instead of being pinned at 0.  A pinned delta plane stays behind the rising front, the
+            # rows below it lose their electrolyte, and the active set of StepGeom collapses (empty bincounts
+            # in K_data) as soon as the front has grown past the plane.
+            psi = self.psi if psi is None else psi
+            g = self.g
+            zs = [z for z in (column_crossing(psi[i], g.zc[0], upper=True)[1] for i in range(g.nr))
+                  if z is not None]
+            return float(np.mean(zs)) if zs else 0.0
         psi = self.psi if psi is None else psi
         g = self.g
         if g.periodic_x:
@@ -147,19 +176,34 @@ class ViaSim:
 
     # ------------------------------------------------------------------ resolved cavity flow (trench_full)
     def cavity_flow(self, shear_rate_s):
-        """LBM shear flow over the current level set.  Returns (ux, uz) arrays shaped (nr, nz) in cm/s.
+        """LBM (default) or MAC Stokes shear flow over the current level set.  Returns (ux, uz) arrays shaped
+        (nr, nz) in cm/s.
 
         The trenchflow CavityGrid convention is [iz, ix] with z = 0 at the wafer (field) plane and z < 0
         in the trench, so z_um = (g.zc - g.H)/UM and the field is transposed back to this engine's (nr, nz).
-        CavityGrid lengths are in um while the engine works in cm (UM = 1e-4 cm), hence the /UM on x/z/height."""
+        CavityGrid lengths are in um while the engine works in cm (UM = 1e-4 cm), hence the /UM on x/z/height.
+
+        p.flow_solver='stokes' uses platesim.trenchflow.stokes.solve_stokes and additionally keeps its MAC
+        face velocities in self.flow_faces = (u_face_x.T, u_face_z.T), shapes (nr, nz) and (nr, nz+1):
+        u_face_x.T[i, j] is the x-face between cells (i-1, j) and (i, j) (face i = 0 is the periodic seam
+        between columns nr-1 and 0), u_face_z.T[i, m] is the z-face between rows m-1 and m.  Those are the
+        fluxes of the conservative advection operator (StepGeom.mac_advection)."""
         from ...trenchflow.geometry import CavityGrid
-        from ...trenchflow.cavity_lbm import solve_flow
         g = self.g
         grid = CavityGrid(dx_um=g.dx_um, x_um=g.rc[:, 0] / UM, z_um=(g.zc[0] - g.H) / UM,
                           solid=(self.psi <= 0).T.copy(), width_um=g.d_um, depth_um=g.H_um,
                           pitch_um=g.R_um, height_um=(g.z_top - g.H) / UM, deposit_um=0.0)
+        if self.p.flow_solver == "stokes":
+            from ...trenchflow.stokes import solve_stokes
+            ff = solve_stokes(grid, float(shear_rate_s))
+            self.flow_info = ff.info
+            self.flow_faces = (np.ascontiguousarray(ff.info["u_face_x"].T),
+                               np.ascontiguousarray(ff.info["u_face_z"].T))
+            return ff.ux.T.copy(), ff.uz.T.copy()
+        from ...trenchflow.cavity_lbm import solve_flow
         ff = solve_flow(grid, float(shear_rate_s))
         self.flow_info = ff.info
+        self.flow_faces = None
         return ff.ux.T.copy(), ff.uz.T.copy()
 
     # ------------------------------------------------------------------ voids
@@ -238,12 +282,18 @@ class ViaSim:
         bounds = np.concatenate([[0.0], np.cumsum([s.duration_s for s in recipe.steps])])
         t, k = 0.0, 0
         dt_prev, vmax_prev = None, None
+        # adaptive dt ceiling (p.dt_adapt, OFF by default): dt_max_eff lives in [p.dt_max, p.dt_max_adapt] and
+        # starts at the fixed p.dt_max, so the disabled path is bit-identical (dt_max_eff == p.dt_max there).
+        dt_max_eff = float(p.dt_max)
+        vext_prev, psi_prev = None, None    # previous accepted step: extended speed + level set (change measure)
         growth = 1.6                        # dt growth factor chosen by the iteration-count controller
         lu_reuse = None                     # LU factors carried from step to step while the active set is unchanged
-        flow_cache = None                   # (ux, uz, z_face, G, step) of the last LBM solve (trench_full)
+        flow_cache = None                   # (ux, uz, z_face, G, step, MAC faces) of the last flow solve
         series = {key: [] for key in ('t_s', 'V', 'eta_floor', 'eta_face', 'I_total', 'fill_fraction',
                                       'face_thickness_um', 'floor_height_um', 'void_volume_frac', 'theta_floor',
                                       'theta_face', 'c_floor', 'bal', 'it', 'dt_s', 'attempts')}
+        if p.dt_adapt:                         # extra key ONLY when the adaptive ceiling is enabled: other code
+            series['dt_max_eff'] = []          # and the default-series tests read the keys above unchanged
         if g.periodic_x:                       # trench_full only: field/floor statistics of the whole pitch
             series.update({key: [] for key in ('field_mean_um', 'field_min_um', 'field_max_um', 'field_std_um',
                                                'floor_mean_um', 'floor_min_um', 'floor_max_um',
@@ -281,13 +331,15 @@ class ViaSim:
                         or abs(G_flow - flow_cache[3]) > 1e-9 * max(1.0, abs(G_flow)))
                 if need:
                     ux_f, uz_f = self.cavity_flow(G_flow)
-                    flow_cache = (ux_f, uz_f, z_face, G_flow, k)
+                    flow_cache = (ux_f, uz_f, z_face, G_flow, k, self.flow_faces)
                 flow = flow_cache[:2]
+                flow_faces = flow_cache[5]         # MAC faces (stokes) or None (lbm), engine orientation
                 Dt = np.zeros((g.nr, g.nz))        # resolved flow replaces the eddy-diffusivity surrogate
             else:
                 flow = None
+                flow_faces = None
                 Dt = self.eddy_map(z_face, k_mix)
-            solver = StepSolver(geo, p, ph, Dt, reuse=lu_reuse, flow=flow)
+            solver = StepSolver(geo, p, ph, Dt, reuse=lu_reuse, flow=flow, flow_faces=flow_faces)
             # ---- control
             if step.j_mA_cm2 is not None:
                 pr = step.pr
@@ -301,7 +353,8 @@ class ViaSim:
             else:
                 ctrl = dict(mode='V', V_set=step.V_mV * 1e-3, I_t=1.0, duty_f=1.0, duty_r=0.0, rr=0.0, pr=False)
             # ---- predicted time step
-            dt_pred = min(p.dt_max, t_end_step - t)
+            dt_max_used = dt_max_eff
+            dt_pred = min(dt_max_used, t_end_step - t)
             if vmax_prev:
                 dt_pred = min(dt_pred, p.cfl * g.dx / vmax_prev)
             dt_pred = min(dt_pred, 5.0 if dt_prev is None else dt_prev * growth)
@@ -341,6 +394,27 @@ class ViaSim:
             vmax_prev = max(vmax, 1e-12)
             dt = min(dt_pred, p.cfl * g.dx / max(vmax, 1e-30), t_end_step - t)
             dt = max(dt, min(p.dt_min, t_end_step - t))
+            # ---- adaptive ceiling (p.dt_adapt): scale dt_max_eff for the NEXT step by how much the solution
+            # moved in this one.  Measure: the relative change of the extended interface speed vext over the
+            # interface band (|psi| <= 2 dx of the current AND the previous step), see dt_change_measure().
+            # vext is what the level set is advected with, so it measures exactly the quantity whose per-step
+            # change a too-large dt integrates inaccurately, and it is available on every geometry (via,
+            # trench, trench_full).  The observed change grows roughly linearly with dt, so it is first
+            # scaled to the next candidate ceiling (dt_max_eff / dt); the controller then reacts to the step
+            # it is about to allow instead of lagging one step behind (which would overshoot the transient).
+            # Factor = sqrt(dt_tol / change) clipped to [0.5, 2]; dt_max_eff stays in
+            # [p.dt_max, p.dt_max_adapt], and the CFL clip and the iteration-count growth limit keep
+            # applying on top, so a step is never longer than the CFL allows and the ceiling never drops
+            # below the known-safe fixed p.dt_max.
+            if p.dt_adapt:
+                if vext_prev is not None:
+                    m = (np.abs(self.psi) <= 2 * g.dx) & (np.abs(psi_prev) <= 2 * g.dx)
+                    if m.any():
+                        change = dt_change_measure(vext[m], vext_prev[m]) * (dt_max_eff / max(dt, p.dt_min))
+                        fac = float(np.clip(math.sqrt(p.dt_tol / max(change, 1e-12)), 0.5, 2.0))
+                        dt_max_eff = float(np.clip(dt_max_eff * fac, p.dt_max, p.dt_max_adapt))
+                vext_prev = vext.copy()
+                psi_prev = self.psi.copy()
             # ---- Cu2+ mass balance, independent of the level set: moles entering through the top Dirichlet
             # plane of the Cu2+ field of this step.  K_data builds bc for u_bulk = 1, so the top-row Dirichlet
             # coupling is bc_c and the influx per unit driving concentration is bc_c (1 - ct_top).  Computed
@@ -355,6 +429,18 @@ class ViaSim:
             # separate number instead of being forced into cu_balance_rel: -sum_p (A_adv c)_p c_bulk dt.
             cu_adv_step = (-float(np.sum(solver.adv @ out['ct'])) * p.c_bulk * dt
                            if solver.adv is not None else 0.0)
+            if solver.adv_bc is not None:
+                # Conservative MAC advection (flow_solver='stokes'): the operator's top-plane boundary terms
+                # make the advective Cu2+ crossing of the Dirichlet plane an explicit, physical influx --
+                # inflow |F_top| at c_bulk, outflow F_top at the top-cell c_top -- that is exactly the
+                # column/row sum of the operator.  Count it in cu_step (so cu_balance_rel closes) and leave
+                # cu_adv at zero (the flux field is discretely divergence free, cu_balance_adv_rel then
+                # equals cu_balance_rel, as documented for the 'divergence' form).
+                F_top = solver.adv_top
+                c_top = out['ct'][geo.ptop]
+                cu_plane = float(np.sum(np.maximum(-F_top, 0.0) - np.maximum(F_top, 0.0) * c_top))
+                cu_step += cu_plane * p.c_bulk * dt
+                cu_adv_step = 0.0
             if p.suppressor and dt < 0.9 * dt_pred:
                 # shorter step than predicted: redo the (cell-local) coverage update with the true dt
                 acc = (1.0 + p.b_acc * st['theta_a'][act]) if p.use_accel else 1.0
@@ -389,6 +475,8 @@ class ViaSim:
             series['it'].append(info['it'])
             series['dt_s'].append(dt)
             series['attempts'].append(attempt + 1)
+            if p.dt_adapt:
+                series['dt_max_eff'].append(dt_max_used)
             if g.periodic_x:                   # trench_full: whole-pitch front statistics (see field_floor_metrics)
                 for key, val in self.field_floor_metrics(z_plane).items():
                     series[key].append(val)
@@ -455,6 +543,8 @@ class ViaSim:
         # is not in cu_influx, and the 'gradient' operator is not discretely conservative, so the net advective
         # source of the operator is added on top of the diffusive influx (equal to cu_balance_rel when the
         # flow is off or the fluxes are discretely divergence free, e.g. the legacy 'divergence' form).
+        # flow_solver='stokes' already counts the plane influx in cu_influx and leaves cu_adv at zero, so the
+        # two balance numbers agree there.
         self.cu_balance_adv_rel = (float((self.cu_influx + self.cu_adv) / cu_dep - 1.0)
                                    if cu_dep > 0 else None)
         raw = dict(series=series, frames=frames, t_end=t, stop_reason=stop_reason, fill_time=fill_time,

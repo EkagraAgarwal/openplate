@@ -126,6 +126,30 @@ class Params:
     # 'divergence': legacy conservative form +div(Hs u c) (column sums zero).  Kept only for comparison;
     #   it is not discretely stable against the LBM flux imbalance and re-introduces the ripple.
     adv_form: str = "gradient"                 # 'gradient' | 'divergence'
+    # ---- solver for the resolved cavity flow (trench_full only; see sim.ViaSim.cavity_flow)
+    # 'lbm' (default, bit-identical legacy path): platesim.trenchflow.cavity_lbm, cell-centred velocities
+    #   interpolated to the faces by StepGeom.face_fluxes and discretised according to adv_form above.
+    # 'stokes': platesim.trenchflow.stokes.solve_stokes, whose MAC face velocities are discretely
+    #   divergence free.  The advective operator of every advected species is then ALWAYS the conservative
+    #   'divergence' form built directly from those face fluxes (StepGeom.mac_face_fluxes: no
+    #   interpolation, no Hs weighting) plus the open-top boundary flux through the Dirichlet plane, so
+    #   adv_form is IGNORED for this path (it only selects the LBM discretisation).  With that operator the
+    #   Cu2+ balance closes (cu_balance_rel) because the advective net influx through the plane is counted.
+    # The flow itself is only used for geometry='trench_full' (periodic x); otherwise both solvers are idle.
+    flow_solver: str = "lbm"                   # 'lbm' | 'stokes'
+    # Discretisation of the advective face flux of the Cu2+/suppressor equations.  Only used when
+    # flow_solver='stokes' (the LBM path keeps adv_form/upwind and is bit-identical for either value).
+    # 'upwind' (default): separate diffusive conductance g plus the first-order upwind advective flux F
+    #   (i.e. today's Stokes result, bit for bit).  At dx 8 um the cell Peclet number F/g ~ 70, so the
+    #   numerical diffusion u dx/2 >> D swamps the physical one and the fill profile is grid dependent.
+    # 'sg': exponentially fitted (Scharfetter-Gummel) face flux  N = g [B(-P) c_p - B(P) c_q],
+    #   P = F/g, B(x) = x/(exp(x)-1), replacing the separate g + F on every interior stencil face.
+    #   P -> 0 recovers pure diffusion, P >> 1 recovers upwind, and it is exact for the steady 1-D
+    #   advection-diffusion problem with constant coefficients, so the solution is grid independent in
+    #   the boundary-layer sense.  The top Dirichlet plane keeps its diffusive coupling plus the upwind
+    #   advective terms (it is a modelling boundary, not a resolved face).  Not available for
+    #   transport='tertiary' (derive raises NotImplementedError).
+    adv_scheme: str = "upwind"                 # 'upwind' | 'sg'
     # ---- growth
     efficiency: float = 1.0                    # current efficiency for growth velocity and Cu2+ sink/source
     # ---- model switches
@@ -147,6 +171,9 @@ class Params:
     n_active_eps: float = 3.5                  # solve where psi > -n_active_eps * eps
     cfl: float = 0.5
     dt_max: float = 120.0                      # s
+    dt_adapt: bool = False                     # adaptive ceiling: dt_max_eff in [dt_max, dt_max_adapt]
+    dt_max_adapt: float = 900.0                # s, absolute ceiling of the adaptive dt_max controller
+    dt_tol: float = 2e-3                       # target relative per-step change of the interface speed
     dt_min: float = 1e-3
     reinit_every: int = 4
     fix_tol_bal: float = 2e-3                  # galvanostatic balance tolerance inside the iteration
@@ -190,6 +217,8 @@ class Phys:
 
 TRANSPORTS = ("enhanced", "tertiary")
 ADV_FORMS = ("gradient", "divergence")
+FLOW_SOLVERS = ("lbm", "stokes")
+ADV_SCHEMES = ("upwind", "sg")
 
 
 def derive(p: Params, T_C: float) -> Phys:
@@ -201,6 +230,15 @@ def derive(p: Params, T_C: float) -> Phys:
         raise ValueError(f"transport must be one of {TRANSPORTS}, got {p.transport!r}")
     if p.adv_form not in ADV_FORMS:
         raise ValueError(f"adv_form must be one of {ADV_FORMS}, got {p.adv_form!r}")
+    if p.flow_solver not in FLOW_SOLVERS:
+        raise ValueError(f"flow_solver must be one of {FLOW_SOLVERS}, got {p.flow_solver!r}")
+    if p.adv_scheme not in ADV_SCHEMES:
+        raise ValueError(f"adv_scheme must be one of {ADV_SCHEMES}, got {p.adv_scheme!r}")
+    if p.adv_scheme == "sg" and p.transport == "tertiary":
+        raise NotImplementedError(
+            "adv_scheme='sg' is not implemented for transport='tertiary': that path already carries the "
+            "Scharfetter-Gummel migration flux in StepGeom.sg_operator, and folding the advective Peclet "
+            "number into its Bernoulli argument is not wired up.  Use adv_scheme='upwind' (default).")
     tertiary = p.transport == "tertiary"
     D_H = p.D_H25 * fD
     D_so4 = p.D_SO425 * fD

@@ -1,5 +1,7 @@
 """Coupled trench growth model: quasi-steady flow + Cu2+ transport, marched galvanostatically.
 
+Quick estimator. The reference model is the feature engine with geometry='trench_full'.
+
 Physical picture
 ----------------
 The coupon sits in a stirred beaker. At feature scale the bulk flow is a shear flow with wall shear
@@ -8,7 +10,8 @@ above the wafer. For a given trench (width, depth) and a given stage of the depo
 
     grid = trench_grid(width, depth, height_um=delta_um, dx_um=dx, deposit_um=dep)
 
-solve the flow ``solve_flow(grid, G)``, then the Cu2+ field with a first-order surface reaction of rate
+solve the flow (``solve_flow(grid, G)``, the D2Q9 lattice by default, or ``solve_stokes(grid, G)`` when
+``flow_solver="stokes"``), then the Cu2+ field with a first-order surface reaction of rate
 constant ``k``: ``solve_concentration(grid, flow, D, k)``.
 
 The metal is one equipotential and the ohmic drop inside a ~100 um feature is small (Wagner number >> 1)
@@ -46,6 +49,14 @@ Constants come from the feature engine so both models agree: ``Params()``, ``der
 ``D = ph.D_c`` (includes the migration enhancement), ``c_bulk = p.c_bulk``, ``F`` from
 ``platesim.core.constants`` and ``ph.Mfac`` (cm/s per A/cm2) for the Faraday thickness rate.
 
+Every public entry point takes optional ``p: Params`` and ``ph: Phys`` keyword arguments: pass the same
+objects the feature engine uses (``ph = derive(p, T_C)``) and the two models run on identical constants
+(``ph.D_c``, ``ph.Mfac``, ``p.c_bulk``). ``ph.transport == "tertiary"`` sets ``ph.D_c = D_cu`` because
+that path carries migration in an explicit potential field. The quick model is 1-D and has no potential
+field, so it must keep the migration enhancement: it uses ``E_mig * D_cu`` and records the choice in the
+returned ``'D_source'`` entry. The default (no ``p``/``ph``) is the enhanced set and is bit-identical to
+the pre-``p``/``ph`` behaviour.
+
 There are no parameters fitted to the trench data in this model. The only measured input is the field
 thickness ``field_um``, which fixes ``j_field``.
 
@@ -61,12 +72,35 @@ from platesim.feature.engine.params import Params, derive
 
 from .cavity_lbm import eddy_summary, solve_flow
 from .geometry import trench_grid
+from .stokes import solve_stokes
 from .transport import region_means, solve_concentration
 
 _UM_TO_CM = 1e-4
 LEVEQUE = 0.538          # Sh_x = 0.538 (G x^2 / D)^(1/3); the same prefactor as platesim/flow/lbm.py [FT]
 _MEAN_PREFACTOR = 1.5 * LEVEQUE   # 0.807: mean of x^(-1/3) over a plate of length L is 1.5 L^(-1/3) [C]
 K_LO, K_HI = 1e-7, 1e2  # cm/s bracket for the galvanostatic k solve [J]
+FLOW_SOLVERS = ("lbm", "stokes")   # ('lbm', the default, and the direct steady 'stokes' solver)
+
+
+def _flow_solver(name):
+    """Validate the ``flow_solver`` switch and return its normalised name ('lbm' or 'stokes')."""
+    key = str(name).strip().lower()
+    if key not in FLOW_SOLVERS:
+        raise ValueError(f"flow_solver must be one of {FLOW_SOLVERS}, got {name!r}")
+    return key
+
+
+def _solve_flow_field(grid, shear_rate_s, flow_solver="lbm"):
+    """Steady shear flow over ``grid`` with the selected solver: 'lbm' (D2Q9) or 'stokes' (direct MAC).
+
+    Both return a :class:`~platesim.trenchflow.geometry.FlowField` with the same conventions (ux, uz in
+    cm/s on the cell centres, exactly 0 in solid cells), so the transport solver and ``eddy_summary``
+    are agnostic to the choice.
+    """
+    key = _flow_solver(flow_solver)
+    if key == "stokes":
+        return solve_stokes(grid, float(shear_rate_s))
+    return solve_flow(grid, float(shear_rate_s))
 
 
 def shear_from_delta(delta_um: float, D_cm2_s: float, L_cm: float = 2.0) -> float:
@@ -89,11 +123,35 @@ def shear_from_delta(delta_um: float, D_cm2_s: float, L_cm: float = 2.0) -> floa
     return float((k_mean * float(L_cm) ** (1.0 / 3.0) / (_MEAN_PREFACTOR * D ** (2.0 / 3.0))) ** 3)
 
 
-def model_constants(T_C):
-    """(D_cm2_s with migration, c_bulk mol/cm3, Mfac cm/s per A/cm2) from the feature engine."""
-    p = Params()
-    ph = derive(p, T_C)
-    return float(ph.D_c), float(p.c_bulk), float(ph.Mfac)
+def _constants(T_C, p=None, ph=None):
+    """(D cm2/s, c_bulk mol/cm3, Mfac cm/s per A/cm2, D_source) of the quick 1-D model.
+
+    ``ph = derive(p, T_C)`` is used when ``ph`` is omitted.  On the tertiary path ``ph.D_c = D_cu``
+    (migration lives in the explicit potential field of the feature engine); this model is 1-D and has
+    no potential field, so it keeps the lumped enhancement ``E_mig * D_cu`` and says so in ``D_source``.
+    """
+    if ph is None:
+        p = p if p is not None else Params()
+        ph = derive(p, T_C)
+    elif p is None:
+        p = Params()            # c_bulk only; pass p when it differs from the default bath
+    if ph.transport == "tertiary":
+        D = float(p.E_mig * ph.D_cu)
+        src = "tertiary:E_mig*D_cu (1-D quick model has no potential field; migration lumped)"
+    else:
+        D = float(ph.D_c)
+        src = "enhanced:ph.D_c"
+    return D, float(p.c_bulk), float(ph.Mfac), src
+
+
+def model_constants(T_C, p=None, ph=None):
+    """(D_cm2_s with migration, c_bulk mol/cm3, Mfac cm/s per A/cm2) from the feature engine.
+
+    Optional ``p``/``ph`` (``ph = derive(p, T_C)``) let the caller reuse the constants of the feature
+    engine instead of a fresh default ``Params()``.  See :func:`_constants` for the tertiary path.
+    """
+    D, c_bulk, mfac, _ = _constants(T_C, p=p, ph=ph)
+    return D, c_bulk, mfac
 
 
 def _limit_current_mA_cm2(D_cm2_s, c_bulk, delta_um):
@@ -133,17 +191,23 @@ def _wall_fluxes(result, grid):
 
 
 def stage_fields(width_um, depth_um, delta_um, shear_rate_s, j_field_mA_cm2, deposit_um, T_C=22.0,
-                 dx_um=4.0, use_flow=True):
+                 dx_um=4.0, use_flow=True, p=None, ph=None, flow_solver="lbm"):
     """Full fields of one stage: grid, flow, concentration, k and the region fluxes.
 
     Same inputs as :func:`stage`; used by :mod:`platesim.trenchflow.validate` to dump fields for figures.
+    ``p``/``ph`` (``ph = derive(p, T_C)``) select the constants instead of a fresh default ``Params()``.
+    ``flow_solver`` selects the flow solver: ``'lbm'`` (default, the D2Q9 lattice of
+    :func:`~platesim.trenchflow.cavity_lbm.solve_flow`, bit-identical to the pre-switch behaviour) or
+    ``'stokes'`` (:func:`~platesim.trenchflow.stokes.solve_stokes`, one direct sparse solve). Any other
+    value raises ``ValueError``; the choice is reported as ``'flow_solver'`` in the result.
 
     The grid height is ``delta_um`` [J: the Nernst layer is the transport boundary layer]. Late stages
     can push the conformal deposit above that height; the domain is then extended to
     ``deposit_um + 2 dx`` so the top Dirichlet row stays in the electrolyte [J] (numerical guard, not a
     physical layer thickness).
     """
-    D, c_bulk, _ = model_constants(T_C)
+    solver = _flow_solver(flow_solver)
+    D, c_bulk, _, d_source = _constants(T_C, p=p, ph=ph)
     j_field_mA_cm2 = float(j_field_mA_cm2)
     i_lim = _limit_current_mA_cm2(D, c_bulk, delta_um)
     if j_field_mA_cm2 >= i_lim:
@@ -157,7 +221,7 @@ def stage_fields(width_um, depth_um, delta_um, shear_rate_s, j_field_mA_cm2, dep
     height = max(float(delta_um), float(deposit_um) + 2.0 * dx)
     grid = trench_grid(float(width_um), float(depth_um), height_um=height, dx_um=dx,
                        deposit_um=float(deposit_um))
-    flow = solve_flow(grid, float(shear_rate_s)) if use_flow else None
+    flow = _solve_flow_field(grid, float(shear_rate_s), solver) if use_flow else None
     target_flux = j_field_mA_cm2 * 1e-3 / (2.0 * F * c_bulk)        # cm/s, j / (2 F c_bulk) [C]
     k, res = solve_k(grid, flow, D, target_flux)
     rm = region_means(res, grid)
@@ -178,6 +242,8 @@ def stage_fields(width_um, depth_um, delta_um, shear_rate_s, j_field_mA_cm2, dep
             "n_down": n_down,
             "eddy": eddy_summary(flow) if flow is not None else None,
             "grid_shape": tuple(int(v) for v in grid.shape),
+            "flow_solver": solver,
+            "D_source": d_source,
         }
     return out
 
@@ -216,14 +282,16 @@ def solve_k(grid, flow, D_cm2_s, target_field_flux_cm_s):
 
 
 def stage(width_um, depth_um, delta_um, shear_rate_s, j_field_mA_cm2, deposit_um, T_C=22.0, dx_um=4.0,
-          use_flow=True):
+          use_flow=True, p=None, ph=None, flow_solver="lbm"):
     """One quasi-steady growth stage; scalar result of :func:`stage_fields`.
 
+    ``flow_solver`` ('lbm' or 'stokes') is forwarded to :func:`stage_fields`.
+
     Returns ``{'k_cm_s', 'floor_over_field', 'wall_up_over_field', 'wall_down_over_field',
-    'field_flux_cm_s', 'i_lim_field_mA_cm2', 'eddy', 'grid_shape'}``.
+    'field_flux_cm_s', 'i_lim_field_mA_cm2', 'eddy', 'grid_shape', 'flow_solver', 'D_source'}``.
     """
     f = stage_fields(width_um, depth_um, delta_um, shear_rate_s, j_field_mA_cm2, deposit_um, T_C=T_C,
-                     dx_um=dx_um, use_flow=use_flow)
+                     dx_um=dx_um, use_flow=use_flow, p=p, ph=ph, flow_solver=flow_solver)
     return {
         "k_cm_s": f["k_cm_s"],
         "floor_over_field": f["floor_over_field"],
@@ -233,10 +301,13 @@ def stage(width_um, depth_um, delta_um, shear_rate_s, j_field_mA_cm2, deposit_um
         "i_lim_field_mA_cm2": f["i_lim_field_mA_cm2"],
         "eddy": f["eddy"],
         "grid_shape": f["grid_shape"],
+        "flow_solver": f["flow_solver"],
+        "D_source": f["D_source"],
     }
 
 
-def predict_site(site, delta_um, shear_rate_s=None, n_stages=5, dx_um=None, use_flow=True, field_um=None):
+def predict_site(site, delta_um, shear_rate_s=None, n_stages=5, dx_um=None, use_flow=True, field_um=None,
+                 p=None, ph=None, flow_solver="lbm"):
     """March one SEM site of ``trench_sem.json`` through ``n_stages`` galvanostatic stages.
 
     The measured field thickness is an INPUT: it fixes the local field current density
@@ -244,17 +315,21 @@ def predict_site(site, delta_um, shear_rate_s=None, n_stages=5, dx_um=None, use_
         j_field = field_um * 1e-4 / (Mfac * hours * 3600)      [A/cm2]                [C]
 
     (reported in mA/cm2). ``shear_rate_s = None`` -> ``shear_from_delta(delta_um, D)``. ``dx_um = None``
-    -> 4.0 um for width < 400 um, else 6.0 um.
+    -> 4.0 um for width < 400 um, else 6.0 um.  ``p``/``ph`` (``ph = derive(p, T_C)``) select the
+    constants instead of a fresh default ``Params()``; the same objects are forwarded to every stage.
+    ``flow_solver`` ('lbm' or 'stokes') is forwarded to every stage and reported in the result.
 
     Returns ``{'id', 'field_um', 'j_field_mA_cm2', 'delta_um', 'shear_rate_s', 'floor_um', 'wall_up_um',
-    'wall_down_um', 'floor_over_field', 'wall_asymmetry', 'stages', 'use_flow', 'dx_um'}``; each stage dict
-    holds the stage() scalars plus ``'t_field_um'`` (midpoint field thickness) and ``'deposit_um'``.
+    'wall_down_um', 'floor_over_field', 'wall_asymmetry', 'stages', 'use_flow', 'flow_solver', 'dx_um',
+    'D_source'}``; each stage dict holds the stage() scalars plus ``'t_field_um'`` (midpoint field
+    thickness) and ``'deposit_um'``.
     """
+    solver = _flow_solver(flow_solver)
     width = float(site["width_um"])
     depth = float(site["depth_um"])
     hours = float(site["hours"])
     T_C = float(site.get("T_C", 22.0))
-    D, _, mfac = model_constants(T_C)
+    D, _, mfac, d_source = _constants(T_C, p=p, ph=ph)
 
     field_um = float(site["field_um"]["best"]) if field_um is None else float(field_um)
     j_field = field_um * _UM_TO_CM / (mfac * hours * 3600.0)          # A/cm2
@@ -271,7 +346,8 @@ def predict_site(site, delta_um, shear_rate_s=None, n_stages=5, dx_um=None, use_
     for s in range(int(n_stages)):
         t_field = (s + 0.5) * dT
         dep = t_field * 0.5 * (1.0 + r_prev)                          # conformal at mean of field/floor [J]
-        st = stage(width, depth, delta_um, shear, j_field_mA, dep, T_C=T_C, dx_um=dx_um, use_flow=use_flow)
+        st = stage(width, depth, delta_um, shear, j_field_mA, dep, T_C=T_C, dx_um=dx_um, use_flow=use_flow,
+                   p=p, ph=ph, flow_solver=solver)
         floor += st["floor_over_field"] * dT
         wall_up += st["wall_up_over_field"] * dT
         wall_down += st["wall_down_over_field"] * dT
@@ -297,4 +373,6 @@ def predict_site(site, delta_um, shear_rate_s=None, n_stages=5, dx_um=None, use_
         "wall_asymmetry": asymmetry,
         "stages": stages,
         "use_flow": bool(use_flow),
+        "flow_solver": solver,
+        "D_source": d_source,
     }

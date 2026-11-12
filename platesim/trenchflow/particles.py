@@ -13,7 +13,12 @@ the continuum solver is a genuine cross-check, and it gives particle paths for v
 MODEL (one explicit time step dt, lengths in um, velocities in cm/s)
     x  <- x + ux(x,z)*dt*1e4 + sqrt(2*D*dt)*1e4 * N(0,1)
     z  <- z + uz(x,z)*dt*1e4 + sqrt(2*D*dt)*1e4 * N(0,1)
-``ux``, ``uz`` are sampled at the particle's nearest cell (``flow=None`` -> pure diffusion).
+``ux``, ``uz`` come from the flow field (``flow=None`` -> pure diffusion).  With
+``interp="bilinear"`` the velocity at (x, z) is the bilinear interpolation of the four
+cell-centred velocities surrounding that point, and a neighbour that is solid contributes zero
+velocity (no-slip), so the flow decays linearly to the wall inside the surface cell.  With
+``interp="nearest"`` (default, see ``simulate``) the velocity is taken from the nearest cell (the cell of the position at the
+start of the step); that older rule lets the flow slip by up to half a cell at the wall.
 This is the Euler-Maruyama / random-walk solution of dc/dt + u.grad c = D lap c with a reaction
 boundary; the 1e4 converts cm to um (D in cm2/s, sqrt(2 D dt) in cm).
 
@@ -24,9 +29,18 @@ Boundaries
   um2) -- every step the layer is emptied and refilled uniformly with Poisson(n_ref*L_src*pitch)
   particles.  This realises the Dirichlet condition c = 1 at the top boundary.  Then c = n/n_ref.
 - solid wall (a step that ends in a solid cell): the particle hit the Cu/Si surface.  With probability
-  P_abs it is absorbed (deposited) and removed from the system, otherwise it is reflected -- the
-  simplest robust rule, return to the position at the start of the step.  For a first-order surface
-  reaction with rate constant k (cm/s):
+  P_abs it is absorbed (deposited) and removed from the system.  Otherwise:
+
+  * ``wall="specular"``: the step is reflected specularly back into the electrolyte about
+    the cell face it crossed -- the face between the last fluid cell and the first solid cell -- with
+    only the velocity component normal to that face reversed.  The reflected point is the mirror
+    image of the step end, so the reflecting plane is the physical surface rather than the particle's
+    old position.  If the mirror image is itself in a solid cell (the particle entered through a
+    concave corner) the step is undone instead (old position).
+  * ``wall="return"`` (default, see ``simulate``): the older rule, put the particle back where the step started.  That pushes
+    every non-absorbed encounter a whole step away from the wall.
+
+  For a first-order surface reaction with rate constant k (cm/s):
 
       P_abs = k * sqrt(pi * dt / D)          (clipped to [0, 1]; k = inf -> 1)
 
@@ -35,11 +49,19 @@ Boundaries
   D dc/dn = k c is implemented as a reaction probability per encounter; the expression above is their
   first-order form, valid for P_abs << 1, i.e. rms step << D/k and << dx.
 
-Accuracy note [C]: the "return to previous position" reflection offsets the effective absorbing plane
-by ~0.6 * rms_step below the true wall (a boundary layer of one step thickness is compressed into the
-reflecting rule rather than resolved), which biases the measured flux low by ~0.6*sigma/H -- about 1 %
-for a 1 um rms step and H = 80 um.  If a flat-wall validation shows more bias than that, shorten dt
-(smaller rms step) rather than change the physics.
+Accuracy note: the two wall rules differ only inside one rms step of the wall, and neither shifts the
+absorbing plane by more than that.  What limits the flat-wall accuracy is common to both: the wall
+concentration is taken at the first cell centre rather than at the face (an O(dx) boundary layer) and
+the run has a finite burn-in.  Measured on the flat-wall case of tests/test_trenchflow_particles.py
+(H = 80 um, dx = 4 um, rms step 1.4 um, k = 1e-3 cm/s): both rules land within 5 % of the analytic
+1/(1/k + H/D) and the two fluxes differ from each other by about 1-2 %, i.e. less than the cell-size
+bias they share, so the wall rule is not the accuracy limit at that resolution.  Where the difference
+is resolved (coarse grids, rms step/H of several per cent)
+``wall="return"`` biases the flux a few per cent *below* ``wall="specular"``, because undoing the step
+acts like an extra push away from the wall.  The earlier note in this file claimed a ~0.6*sigma/H low
+bias for that rule; on a flat wall at H = 80 um that is at the 1 % level and is not what the run above
+measures, so treat the wall-rule error as "a per cent or two at practical resolutions" and refine dt
+(smaller rms step) if a flat-wall validation needs better.
 
 Flux estimator: every absorption is recorded in the electrolyte surface cell the particle came FROM
 (the cell of its position before the step), accumulated only after the burn-in.  For a surface cell
@@ -76,6 +98,66 @@ def _cell_of(z, x, ze0, dx, nx, nz):
     return iz, ix
 
 
+def _bilinear(field, z, x, ze0, dx, nz, nx):
+    """Bilinear interpolation of a cell-centred field at continuous positions (um).
+
+    Cell (iz, ix) is centred at ((ix + 0.5) * dx, ze0 + (iz + 0.5) * dx), so the interpolation
+    weights are the fractional offsets from the four surrounding cell centres.  x is periodic with
+    period nx * dx; z is clamped to the outermost row, so a point at or beyond the first/last cell
+    centre takes that cell's value (the physics above the top and inside the wall is set by the
+    boundary rules, not by the interpolation).  ``field`` is (nz, nx).
+    """
+    fz = (z - ze0) / dx - 0.5
+    iz0 = np.clip(np.floor(fz).astype(np.int64), 0, nz - 1)
+    tz = np.clip(fz - iz0, 0.0, 1.0)
+    iz1 = np.minimum(iz0 + 1, nz - 1)
+    fx = x / dx - 0.5
+    ix_lo = np.floor(fx).astype(np.int64)
+    ix0 = ix_lo % nx
+    tx = fx - ix_lo
+    ix1 = (ix0 + 1) % nx
+    return ((1.0 - tz) * ((1.0 - tx) * field[iz0, ix0] + tx * field[iz0, ix1])
+            + tz * ((1.0 - tx) * field[iz1, ix0] + tx * field[iz1, ix1]))
+
+
+def _velocity_at(ux, uz, z, x, ze0, dx, nz, nx, interp="bilinear"):
+    """Velocity (cm/s) at continuous positions; ``ux``/``uz`` must already be 0 in solid (no-slip)."""
+    if interp == "nearest":
+        iz, ix = _cell_of(z, x, ze0, dx, nx, nz)
+        return ux[iz, ix], uz[iz, ix]
+    return (_bilinear(ux, z, x, ze0, dx, nz, nx),
+            _bilinear(uz, z, x, ze0, dx, nz, nx))
+
+
+def _specular_reflect(x_old, z_old, x_new, z_new, iz0, ix0, iz1, ix1, ze0, dx, pitch):
+    """Mirror the step (x_old, z_old) -> (x_new, z_new) about the wall face it crossed.
+
+    The step started in the fluid cell (iz0, ix0) and ended in the solid cell (iz1, ix1).  The
+    crossed face is the face of the solid cell towards the start of the step: z = ze0 + iz1*dx when
+    moving up, z = ze0 + (iz1 + 1)*dx when moving down, x = ix1*dx when moving +x and
+    x = (ix1 + 1)*dx when moving -x (x faces in the unwrapped frame, result wrapped into
+    [0, pitch)).  When both indices changed (a diagonal step into a corner cell) the face crossed
+    last -- the one the path entered through -- is used.  Only the component normal to the face is
+    reversed, so the tangential component of the step is kept.
+
+    Returns (x, z); the caller must still check the result for solid and fall back to the old
+    position when the mirror image is solid too.
+    """
+    dz = z_new - z_old
+    ddx = (x_new - x_old + 0.5 * pitch) % pitch - 0.5 * pitch   # shortest signed x step
+    changed_z = iz1 != iz0
+    changed_x = ix1 != ix0
+    with np.errstate(divide="ignore", invalid="ignore"):
+        z_face = ze0 + np.where(dz > 0.0, iz1, iz1 + 1) * dx
+        x_face = (ix1 + (ddx <= 0.0)) * dx
+        t_z = np.where(changed_z, (z_face - z_old) / dz, np.inf)
+        t_x = np.where(changed_x, (x_face - x_old) / ddx, np.inf)
+    use_z = changed_z & (~changed_x | (t_z >= t_x))
+    z_out = np.where(use_z, 2.0 * z_face - z_new, z_new)
+    x_out = np.where(use_z, x_new, (2.0 * x_face - (x_old + ddx)) % pitch)
+    return x_out, z_out
+
+
 def _initial_particles(grid, n_ref, init, ze0, dx, rng, max_particles):
     """Start from c = z/height above the wafer plane (empty trench) to shorten the burn-in.
 
@@ -105,17 +187,34 @@ def _initial_particles(grid, n_ref, init, ze0, dx, rng, max_particles):
 
 def simulate(grid, flow=None, D_cm2_s=5.6e-6, k_cm_s=1e-3, n_ref_per_um2=0.02, t_burn_s=None,
              t_sample_s=None, dt_s=None, seed=0, n_tracks=0, max_particles=2_000_000,
-             init="linear") -> dict:
+             init="linear", interp="nearest", wall="return") -> dict:
     """Run the Brownian-tracer solver on ``grid``; see the module docstring for the model.
+
+    ``interp`` selects how the flow is sampled at a particle: ``"bilinear"`` interpolates the four
+    surrounding cell-centred velocities with no-slip on solid neighbours, ``"nearest"`` (default) is
+    the nearest-cell sampling.  ``wall`` selects the treatment of a step that ends in a solid cell
+    without being absorbed: ``"specular"`` mirrors it about the crossed cell face, ``"return"``
+    (default) puts it back at the previous position.  The remaining arguments are unchanged.
+
+    The defaults stay on the older rules on purpose: in the 120 x 60 um trench cross-check
+    (convergence.particle_cross_check, LBM flow, dx 6) the four combinations give floor/field
+    0.726 / 0.772 / 0.697 / 0.669 (nearest+return / nearest+specular / bilinear+return /
+    bilinear+specular) against 0.736 for the continuum, with a particle standard error of ~0.029.
+    All are within ~2.3 standard errors, so that run cannot tell which rule is closer; switch the
+    default only after a higher-statistics comparison resolves it.
 
     Returns a dict with the surface-cell arrays (same order as ``geometry.surface_cells``), the flux
     density per surface cell (cm/s), the raw absorbed counts, the time-averaged concentration estimate
     c (NaN in solid), run bookkeeping ('n_particles_mean', 'steps', 'dt_s', 't_sample_s', 'P_abs',
-    'wall_s') and the tagged tracks (n_tracks, n_saved, 2) or None.
+    'interp', 'wall', 'wall_s') and the tagged tracks (n_tracks, n_saved, 2) or None.
     """
     t_wall0 = time.perf_counter()
     if init not in ("linear", "empty"):
         raise ValueError("init must be 'linear' or 'empty'")
+    if interp not in ("bilinear", "nearest"):
+        raise ValueError("interp must be 'bilinear' or 'nearest'")
+    if wall not in ("specular", "return"):
+        raise ValueError("wall must be 'specular' or 'return'")
     g = grid
     dx = float(g.dx_um)
     nz, nx = g.shape
@@ -163,6 +262,13 @@ def simulate(grid, flow=None, D_cm2_s=5.6e-6, k_cm_s=1e-3, n_ref_per_um2=0.02, t
         # [FT] Erban & Chapman, Phys. Biol. 4 (2007) 16-28: reaction probability per encounter.
         p_abs = float(np.clip(k * np.sqrt(np.pi * dt / D), 0.0, 1.0))
 
+    # ---- velocity field with no-slip in solid (used by the bilinear stencil) --
+    if flow is None:
+        ux_ns = uz_ns = None
+    else:
+        ux_ns = np.where(solid, 0.0, np.asarray(flow.ux, dtype=float))
+        uz_ns = np.where(solid, 0.0, np.asarray(flow.uz, dtype=float))
+
     l_src = max(3.0 * sigma_um, dx)                         # >= ~3 rms steps, so fully renewed [J]
     n_src = n_ref * l_src * pitch                           # mean particles in the source layer
     # ---- initial state -----------------------------------------------------
@@ -201,14 +307,15 @@ def simulate(grid, flow=None, D_cm2_s=5.6e-6, k_cm_s=1e-3, n_ref_per_um2=0.02, t
             xn = x_old + sigma_um * xi[:n]
             zn = z_old + sigma_um * xi[n:]
         else:
-            xn = x_old + (flow.ux[iz0, ix0] * dt) * _CM_TO_UM + sigma_um * xi[:n]
-            zn = z_old + (flow.uz[iz0, ix0] * dt) * _CM_TO_UM + sigma_um * xi[n:]
+            ux_p, uz_p = _velocity_at(ux_ns, uz_ns, z_old, x_old, ze0, dx, nz, nx, interp)
+            xn = x_old + (ux_p * dt) * _CM_TO_UM + sigma_um * xi[:n]
+            zn = z_old + (uz_p * dt) * _CM_TO_UM + sigma_um * xi[n:]
         xn %= pitch                                         # periodic in x
         np.minimum(zn, z_top, out=zn)                       # reservoir reflects anything above the top
         iz1, ix1 = _cell_of(zn, xn, ze0, dx, nx, nz)
         hit = solid[iz1, ix1]
 
-        # ---- solid encounter: absorb with P_abs, else return to the previous position
+        # ---- solid encounter: absorb with P_abs, else reflect (specular) / return to the start
         if hit.any():
             hi = np.flatnonzero(hit)
             if p_abs >= 1.0:
@@ -219,9 +326,22 @@ def simulate(grid, flow=None, D_cm2_s=5.6e-6, k_cm_s=1e-3, n_ref_per_um2=0.02, t
                 absorbed = hi[:0]
             reflect = hit.copy()
             reflect[absorbed] = False
-            if reflect.any():                               # a step that would enter the wall is undone
-                xn[reflect] = x_old[reflect]
-                zn[reflect] = z_old[reflect]
+            if reflect.any():
+                ri = np.flatnonzero(reflect)
+                if wall == "specular":
+                    xr, zr = _specular_reflect(x_old[ri], z_old[ri], xn[ri], zn[ri],
+                                               iz0[ri], ix0[ri], iz1[ri], ix1[ri],
+                                               ze0, dx, pitch)
+                    izr, ixr = _cell_of(zr, xr, ze0, dx, nx, nz)
+                    bad = solid[izr, ixr]                   # concave corner: the mirror is solid too
+                    if bad.any():
+                        xr[bad] = x_old[ri][bad]
+                        zr[bad] = z_old[ri][bad]
+                    xn[ri] = xr
+                    zn[ri] = zr
+                else:                                      # a step that would enter the wall is undone
+                    xn[ri] = x_old[ri]
+                    zn[ri] = z_old[ri]
             if absorbed.size:
                 if sampling:                                # record in the cell it came from
                     abs_counts += np.bincount(iz0[absorbed] * nx + ix0[absorbed], minlength=nz * nx)
@@ -295,6 +415,8 @@ def simulate(grid, flow=None, D_cm2_s=5.6e-6, k_cm_s=1e-3, n_ref_per_um2=0.02, t
         "dt_s": dt,
         "t_sample_s": t_samp_eff,
         "P_abs": p_abs,
+        "interp": interp,
+        "wall": wall,
         "wall_s": wall_s,
         "tracks": tracks,
         "x_final_um": x,                                     # final particle positions (for checks/plots)
