@@ -149,7 +149,23 @@ class Params:
     #   the boundary-layer sense.  The top Dirichlet plane keeps its diffusive coupling plus the upwind
     #   advective terms (it is a modelling boundary, not a resolved face).  Not available for
     #   transport='tertiary' (derive raises NotImplementedError).
-    adv_scheme: str = "upwind"                 # 'upwind' | 'sg'
+    adv_scheme: str = "upwind"                 # 'upwind' | 'sg' | 'tvd'
+    # 'tvd' (plan v2 C1): second-order limited (MUSCL / van Leer) advective face values on the Stokes MAC
+    #   fluxes, applied by deferred correction on top of the upwind operator (Stokes path only).
+    # ---- plan v2 wave-b switches: all OFF / legacy by default, so every default run is unchanged
+    # Solutal buoyancy (plan v2 D4): Boussinesq body force rho0 * beta * (c - c_bulk) * g in the Stokes
+    # flow (flow_solver='stokes', geometry='trench_full' only).  Depleted electrolyte is lighter.
+    buoyancy: bool = False
+    gravity_dir: tuple = (0.0, -1.0)           # unit (g_x, g_z) in the trench cross-section; (0, 0) = gravity
+                                               # along the trench (out of plane: no in-plane body force).  A
+                                               # vertical coupon has gravity in the wafer plane, i.e. (+-1, 0)
+                                               # or (0, 0) depending on the trench orientation on the coupon.
+    beta_cu_L_mol: float = 0.15                # solutal expansion coefficient of CuSO4, L/mol [J, not measured]
+    g_cm_s2: float = 981.0
+    # Level-set numerics (plan v2 B4 / C3)
+    ls_scheme: str = "godunov1"                # 'godunov1' (legacy first-order) | 'weno5' (WENO5 + TVD-RK3)
+    ls_narrow_band: bool = False               # restrict band operations to |psi| < ls_band_cells * dx
+    ls_band_cells: float = 8.0
     # ---- growth
     efficiency: float = 1.0                    # current efficiency for growth velocity and Cu2+ sink/source
     # ---- model switches
@@ -218,7 +234,8 @@ class Phys:
 TRANSPORTS = ("enhanced", "tertiary")
 ADV_FORMS = ("gradient", "divergence")
 FLOW_SOLVERS = ("lbm", "stokes")
-ADV_SCHEMES = ("upwind", "sg")
+ADV_SCHEMES = ("upwind", "sg", "tvd")
+LS_SCHEMES = ("godunov1", "weno5")
 
 
 def derive(p: Params, T_C: float) -> Phys:
@@ -234,7 +251,11 @@ def derive(p: Params, T_C: float) -> Phys:
         raise ValueError(f"flow_solver must be one of {FLOW_SOLVERS}, got {p.flow_solver!r}")
     if p.adv_scheme not in ADV_SCHEMES:
         raise ValueError(f"adv_scheme must be one of {ADV_SCHEMES}, got {p.adv_scheme!r}")
-    if p.adv_scheme == "sg" and p.transport == "tertiary":
+    if p.ls_scheme not in LS_SCHEMES:
+        raise ValueError(f"ls_scheme must be one of {LS_SCHEMES}, got {p.ls_scheme!r}")
+    if len(tuple(p.gravity_dir)) != 2:
+        raise ValueError(f"gravity_dir must be a (g_x, g_z) pair, got {p.gravity_dir!r}")
+    if p.adv_scheme in ("sg", "tvd") and p.transport == "tertiary":
         raise NotImplementedError(
             "adv_scheme='sg' is not implemented for transport='tertiary': that path already carries the "
             "Scharfetter-Gummel migration flux in StepGeom.sg_operator, and folding the advective Peclet "
