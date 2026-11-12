@@ -20,12 +20,19 @@ Discretisation
   its own constant-pressure null space; without its own pin that block is singular. A region with no
   contact with the lid has no driving term and comes out at u = w = 0 to round-off. One region -> the
   pinned cell is the same as the single-gauge code, so those results stay bit-identical.
-- Non-dimensionalisation: x by dx, u by the lid speed |u_top|, and p by nu*|u_top|/dx. The viscosity
-  then drops out of the Stokes momentum equation entirely (as it must for Stokes similarity), and the
-  assembled matrix has O(1) entries: A = -Laplacian, G = gradient, D = divergence.
-- Oseen: `oseen_passes` Picard iterations add Re_dx * (U_prev . grad) u, Re_dx = |u_top| * dx / nu.
+- Non-dimensionalisation: x by dx, u by U, and p by nu*U/dx, with U the lid speed |u_top| (or
+  max(|u_top|, max|f| dx^2/nu) when a body force is given, so a buoyancy-only solve has a scale too).
+  The viscosity then drops out of the Stokes momentum equation entirely (as it must for Stokes
+  similarity), and the assembled matrix has O(1) entries: A = -Laplacian, G = gradient, D = divergence.
+- Oseen: `oseen_passes` Picard iterations add Re_dx * (U_prev . grad) u, Re_dx = U * dx / nu.
 - Optional Brinkman penalisation -(nu/K)(1-H)u with a smoothed solid fraction H; faces are then kept
   as unknowns unless both adjacent cells are solid (diffuse mask, no ghost values).
+- Optional body force `body_force=(fx, fz)` in cm/s2 (force per unit mass, cell centres): averaged onto
+  the u and w faces over the fluid adjacent cells and added to the momentum right-hand side. The
+  velocity scale is then U = max(|u_top|, max|f| dx^2 / nu), so a buoyancy-only solve (shear 0) keeps
+  the assembled matrix O(1); the dimensionless face force is f dx^2 / (nu U). The system is linear in
+  the right-hand side, so shear and body force superpose exactly, and a force that is the gradient of a
+  pressure (f parallel to gravity, varying only along it, in a closed box) is absorbed by p: no flow.
 
 The top boundary (z = height_um) is always the moving lid with u_x = shear_rate_s *
 (height_um - deposit_um) * 1e-4 cm/s and u_z = 0, matching cavity_lbm._scaling / the LBM lid row.
@@ -165,14 +172,15 @@ def _layout(grid: CavityGrid, diffuse: bool = False) -> dict:
                 idx_m=idx_m, idx_p=idx_p)
 
 
-def _assemble(lay: dict, u_lid: float, brinkman_K, rec: float | None, uprev):
+def _assemble(lay: dict, u_lid: float, brinkman_K, rec: float | None, uprev, body_force=None):
     """Assemble the sparse saddle-point system [[A, G], [D, 0]] (row-major unknown order u, w, p).
 
-    All coefficients are dimensionless (lengths in dx, velocities in |u_top|, pressure in
-    nu*|u_top|/dx), so A is the plain discrete -Laplacian and G / D are the plain gradient /
-    divergence. The lid enters through the ghost value u_ghost = 2*u_lid - u (wall at dx/2 above the
-    top row); a stationary horizontal wall gives u_ghost = -u, weighted by the fraction of the face
-    that actually faces solid (0, 0.5 or 1).
+    All coefficients are dimensionless (lengths in dx, velocities in U, pressure in nu*U/dx), so A is the
+    plain discrete -Laplacian and G / D are the plain gradient / divergence. The lid enters through the
+    ghost value u_ghost = 2*u_lid - u (wall at dx/2 above the top row); a stationary horizontal wall
+    gives u_ghost = -u, weighted by the fraction of the face that actually faces solid (0, 0.5 or 1).
+    ``body_force=(fx_face, fz_face)`` are already dimensionless face forces (see _face_body_force) and
+    are added to the momentum right-hand side.
     """
     nz, nx = lay["nz"], lay["nx"]
     solid = lay["solid"]
@@ -285,6 +293,10 @@ def _assemble(lay: dict, u_lid: float, brinkman_K, rec: float | None, uprev):
 
     b = np.zeros(lay["size"])
     b[id_u[top & open_u]] = 2.0 * u_lid
+    if body_force is not None:
+        fx_f, fz_f = (np.asarray(a, np.float64) for a in body_force)
+        b[id_u[open_u]] += fx_f[open_u]
+        b[id_w[open_w] + off_w] += fz_f[open_w]
 
     r = np.concatenate(rows)
     c = np.concatenate(cols)
@@ -355,8 +367,35 @@ def _add_oseen(emit, lay: dict, uprev, rec: float):
     emit(rw, gcol(iw_d, off_w), -b2 * open_w)
 
 
+def _face_body_force(fx, fz, lay: dict):
+    """Average a cell-centred body force (force per unit mass) onto the MAC faces, fluid cells only.
+
+    u face (k, j) is shared by cells (k, j-1) and (k, j); w face (m, j) by cells (m-1, j) and (m, j).
+    A face with a solid neighbour takes the value of the fluid one; a face with no fluid neighbour
+    (never an unknown) is 0. Returns ``(fx_face (nz, nx), fz_face (nz+1, nx))``.
+    """
+    nz, nx = lay["nz"], lay["nx"]
+    fluid = lay["fluid"].astype(np.float64)
+    idx_m = lay["idx_m"]
+    fx = np.where(lay["fluid"], np.asarray(fx, np.float64), 0.0)
+    fz = np.where(lay["fluid"], np.asarray(fz, np.float64), 0.0)
+
+    wu_l, wu_r = fluid[:, idx_m], fluid
+    fx_f = (fx[:, idx_m] * wu_l + fx * wu_r) / np.maximum(wu_l + wu_r, 1.0)
+
+    num = np.zeros((nz + 1, nx))
+    den = np.zeros((nz + 1, nx))
+    num[1:] += fz * fluid                 # cell m-1 feeds face m
+    den[1:] += fluid
+    num[:-1] += fz * fluid                # cell m feeds face m
+    den[:-1] += fluid
+    fz_f = num / np.maximum(den, 1.0)
+    return fx_f, fz_f
+
+
 def solve_stokes(grid: CavityGrid, shear_rate_s: float, nu_cm2_s: float = 0.0114,
-                 oseen_passes: int = 0, brinkman_K: float | None = None) -> FlowField:
+                 oseen_passes: int = 0, brinkman_K: float | None = None,
+                 body_force=None) -> FlowField:
     """Steady Stokes (or Picard-Oseen) flow over `grid`, driven by the far-field shear.
 
     Same interface and conventions as :func:`~platesim.trenchflow.cavity_lbm.solve_flow`: ux, uz are
@@ -364,12 +403,18 @@ def solve_stokes(grid: CavityGrid, shear_rate_s: float, nu_cm2_s: float = 0.0114
     periodic; the lid at z = height_um moves with shear_rate_s * (height_um - deposit_um) * 1e-4 cm/s
     (negative shear -> lid in -x -> the mirrored flow).
 
+    ``body_force=(fx, fz)``: optional arrays (nz, nx) in cm/s2, force per unit mass at the cell centres,
+    averaged onto the fluid MAC faces and added to the momentum right-hand side (Boussinesq buoyancy).
+    With it the velocity scale becomes U = max(|u_top|, max|f| dx^2/nu) -- a buoyancy-only solve has no
+    lid speed -- and the dimensionless face force is f dx^2/(nu U), so the matrix stays O(1) and both
+    drives superpose exactly (the system is linear in its right-hand side).
+
     info["u_face_x"] (nz, nx) and info["u_face_z"] (nz+1, nx) are the staggered face velocities in
     cm/s; they are discretely divergence-free in the open cells. info["method"] == "stokes_mac".
     info["n_fluid_regions"] is the number of 4-connected fluid regions (periodic in x) and every one of
     them gets its own pressure gauge, so a sealed void pocket does not make the matrix singular.
-    nu_cm2_s only enters the Oseen term and the reported Reynolds number: the Stokes velocity field is
-    independent of viscosity (it only sets the pressure scale).
+    nu_cm2_s only enters the Oseen term, the body-force scaling and the reported Reynolds number: the
+    Stokes velocity field is independent of viscosity (it only sets the pressure scale).
     """
     t0 = time.time()
     nz, nx = grid.shape
@@ -378,15 +423,36 @@ def solve_stokes(grid: CavityGrid, shear_rate_s: float, nu_cm2_s: float = 0.0114
     shear = float(shear_rate_s)
     h_cm = max(float(grid.height_um) - float(grid.deposit_um), 0.0) * 1e-4
     u_top = shear * h_cm                                    # cm/s at the lid (signed)
-    u_scale = abs(u_top)
+    dx_cm = float(grid.dx_um) * 1e-4
+
+    body = None
+    f_body_max = 0.0
+    if body_force is not None:
+        fx_in, fz_in = body_force
+        fx_in = np.asarray(fx_in, np.float64)
+        fz_in = np.asarray(fz_in, np.float64)
+        if fx_in.shape != (nz, nx) or fz_in.shape != (nz, nx):
+            raise ValueError(f"body_force arrays must have shape {grid.shape}, got "
+                             f"{fx_in.shape} and {fz_in.shape}")
+        if not (np.isfinite(fx_in).all() and np.isfinite(fz_in).all()):
+            raise ValueError("body_force contains non-finite values")
+        if nu_cm2_s <= 0:
+            raise ValueError("body_force requires nu_cm2_s > 0 (it sets the buoyant velocity scale)")
+        body = (np.where(fluid, fx_in, 0.0), np.where(fluid, fz_in, 0.0))
+        if fluid.any():
+            f_body_max = float(np.hypot(body[0], body[1])[fluid].max())
+
+    u_body = f_body_max * dx_cm ** 2 / nu_cm2_s if nu_cm2_s > 0 else 0.0
+    u_scale = max(abs(u_top), u_body)
     re = u_scale * h_cm / nu_cm2_s if nu_cm2_s > 0 else float("inf")
     n_rows = int(np.count_nonzero(grid.z_um >= grid.deposit_um))
     common = dict(tau=None, u_lid_lb=None, re=float(re), re_sim=None, max_mach=None, nu_lb=None,
                   re_clamped=None, n_fluid_rows=n_rows, method="stokes_mac",
                   scheme="MAC staggered, sharp no-slip, direct sparse SuperLU",
-                  dx_um=float(grid.dx_um))
+                  dx_um=float(grid.dx_um), u_scale_cm_s=float(u_scale),
+                  body_force_max_cm_s2=float(f_body_max), buoyant_velocity_scale_cm_s=float(u_body))
 
-    if not np.isfinite(shear) or u_top == 0.0 or not fluid.any():
+    if not np.isfinite(shear) or u_scale == 0.0 or not fluid.any():
         z = np.zeros((nz, nx))
         return FlowField(grid=grid, ux=z.copy(), uz=z.copy(), shear_rate_s=shear, converged=True,
                          info=dict(common, steps=0, wall_s=time.time() - t0, residual=0.0,
@@ -398,15 +464,21 @@ def solve_stokes(grid: CavityGrid, shear_rate_s: float, nu_cm2_s: float = 0.0114
     diffuse = brinkman_K is not None
     lay = _layout(grid, diffuse=diffuse)
     rec = u_scale * lay["dx"] * 1e-4 / nu_cm2_s if nu_cm2_s > 0 else 0.0
-    u_lid = u_top / u_scale                                  # +-1
+    u_lid = u_top / u_scale                                  # +-1 (or smaller with buoyancy only)
     npass = max(0, int(oseen_passes))
+    if body is not None:
+        fx_f, fz_f = _face_body_force(body[0], body[1], lay)
+        scale_f = dx_cm ** 2 / (nu_cm2_s * u_scale)
+        face_force = (fx_f * scale_f, fz_f * scale_f)
+    else:
+        face_force = None
 
     uprev = None
     converged, residual, steps = True, 0.0, 0
     uf = np.zeros((nz, nx))
     wf = np.zeros((nz + 1, nx))
     for it in range(npass + 1):
-        A, b = _assemble(lay, u_lid, brinkman_K, rec if it else None, uprev)
+        A, b = _assemble(lay, u_lid, brinkman_K, rec if it else None, uprev, body_force=face_force)
         x = spsolve(A, b)
         un = np.zeros((nz, nx))
         un[lay["open_u"]] = x[:lay["nu"]]

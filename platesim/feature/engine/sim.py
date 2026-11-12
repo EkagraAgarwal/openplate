@@ -175,7 +175,7 @@ class ViaSim:
         return float((self.g.vol * (1 - electrolyte_fraction(self.psi, self.g))).sum())
 
     # ------------------------------------------------------------------ resolved cavity flow (trench_full)
-    def cavity_flow(self, shear_rate_s):
+    def cavity_flow(self, shear_rate_s, delta_um=None):
         """LBM (default) or MAC Stokes shear flow over the current level set.  Returns (ux, uz) arrays shaped
         (nr, nz) in cm/s.
 
@@ -187,16 +187,54 @@ class ViaSim:
         face velocities in self.flow_faces = (u_face_x.T, u_face_z.T), shapes (nr, nz) and (nr, nz+1):
         u_face_x.T[i, j] is the x-face between cells (i-1, j) and (i, j) (face i = 0 is the periodic seam
         between columns nr-1 and 0), u_face_z.T[i, m] is the z-face between rows m-1 and m.  Those are the
-        fluxes of the conservative advection operator (StepGeom.mac_advection)."""
+        fluxes of the conservative advection operator (StepGeom.mac_advection).
+
+        Solutal buoyancy (p.buoyancy, Stokes only): the Boussinesq body force is built from the current
+        normalised Cu2+ field self.st['ctil'] and passed to solve_stokes as body_force, so it is re-derived
+        from the latest concentration on every flow update.  rho = rho0 (1 + beta (c - c_b)) gives the
+        force per unit mass f = (rho/rho0 - 1) g = beta (c - c_b) g with c_b = c_bulk (mol/L), i.e.
+
+            f = g_cm_s2 * beta_cu_L_mol * c_bulk_mol_L * (ctil - 1) * gravity_dir        [cm/s2]
+
+        so a depleted cell (ctil < 1) is pushed AGAINST gravity (lighter electrolyte rises) and gravity_dir
+        is the direction of the gravitational acceleration in the cross-section: (1, 0) across the trench,
+        (0, -1) wafer face-up, (0, 0) along the trench (no in-plane force -> buoyancy is exactly idle).
+        Above the diffusion boundary layer (the delta plane) the bulk is unperturbed, ctil = 1;
+        ``delta_um`` defaults to p.delta_um and the running recipe passes its own value.
+        The max buoyant speed of the field (cm/s) is recorded in self.flow_info['buoyant_speed_cm_s'].
+        """
         from ...trenchflow.geometry import CavityGrid
         g = self.g
+        body = None
+        if self.p.buoyancy:
+            if self.p.flow_solver != "stokes":
+                raise ValueError("buoyancy=True requires flow_solver='stokes': the LBM path of "
+                                 "cavity_lbm.solve_flow has no body-force term.  Set "
+                                 "Params(flow_solver='stokes') or Params(buoyancy=False).")
+            p = self.p
+            gx, gz = (float(v) for v in p.gravity_dir)
+            c_bulk_mol_L = p.c_bulk * 1e3
+            fac = p.g_cm_s2 * p.beta_cu_L_mol * c_bulk_mol_L      # cm/s2 per unit (ctil - 1)
+            ctil = np.array(self.st['ctil'], dtype=np.float64).T  # engine (nr, nz) -> grid (nz, nr)
+            d_um = p.delta_um if delta_um is None else float(delta_um)
+            z_um = (g.zc - g.H).T                                 # height above the wafer plane, um
+            z_plane_um = (self.face_height() + d_um * UM - g.H) / UM
+            ctil = np.where(z_um > z_plane_um + 0.5 * g.dx_um, 1.0, ctil)
+            f = fac * (ctil - 1.0)
+            body = (gx * f, gz * f)
         grid = CavityGrid(dx_um=g.dx_um, x_um=g.rc[:, 0] / UM, z_um=(g.zc[0] - g.H) / UM,
                           solid=(self.psi <= 0).T.copy(), width_um=g.d_um, depth_um=g.H_um,
                           pitch_um=g.R_um, height_um=(g.z_top - g.H) / UM, deposit_um=0.0)
         if self.p.flow_solver == "stokes":
             from ...trenchflow.stokes import solve_stokes
-            ff = solve_stokes(grid, float(shear_rate_s))
+            ff = solve_stokes(grid, float(shear_rate_s), body_force=body)
             self.flow_info = ff.info
+            if body is not None:
+                # max speed of the buoyant part alone: solve it on its own when shear is present (Stokes
+                # is linear, so a shear-only solve plus this one is the combined field)
+                buoy = ff if float(shear_rate_s) == 0.0 else solve_stokes(grid, 0.0, body_force=body)
+                self.flow_info['buoyant_speed_cm_s'] = float(
+                    max(np.abs(buoy.ux).max(), np.abs(buoy.uz).max()))
             self.flow_faces = (np.ascontiguousarray(ff.info["u_face_x"].T),
                                np.ascontiguousarray(ff.info["u_face_z"].T))
             return ff.ux.T.copy(), ff.uz.T.copy()
@@ -330,7 +368,7 @@ class ViaSim:
                         or abs(z_face - flow_cache[2]) > p.flow_move_cells * g.dx
                         or abs(G_flow - flow_cache[3]) > 1e-9 * max(1.0, abs(G_flow)))
                 if need:
-                    ux_f, uz_f = self.cavity_flow(G_flow)
+                    ux_f, uz_f = self.cavity_flow(G_flow, delta_um=delta_um)
                     flow_cache = (ux_f, uz_f, z_face, G_flow, k, self.flow_faces)
                 flow = flow_cache[:2]
                 flow_faces = flow_cache[5]         # MAC faces (stokes) or None (lbm), engine orientation
