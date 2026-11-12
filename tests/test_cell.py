@@ -9,7 +9,7 @@ from dataclasses import replace
 import numpy as np
 import pytest
 
-from platesim.cell import MODEL_SPEC, run, solve_cell
+from platesim.cell import MODEL_SPEC, march_cell, run, solve_cell
 from platesim.cell.solver import solve_duct
 from platesim.core.bath import Bath
 from platesim.core.cell import CellGeometry
@@ -224,3 +224,147 @@ def test_sheet_poisson_1d_analytic():
     assert v.max() == pytest.approx(v_analytic, rel=0.02)
     assert np.ptp(v, axis=0).max() < 1e-9 * max(v_analytic, 1.0)  # z-independent
 
+
+
+# ------------------------------------------------ F3: pulse-reverse duty average
+
+PR_TEAM = {"t_f_ms": 9.0, "t_r_ms": 0.5, "t_off_ms": 0.5, "rr": 2.0}
+PR_DC = {"t_f_ms": 9.0, "t_r_ms": 0.0, "t_off_ms": 0.0, "rr": 2.0}
+
+
+@pytest.fixture(scope="module")
+def pr_default():
+    """One PR solve (forward + reverse phase) shared by the charge and map tests."""
+    return solve_cell(CellGeometry(), Bath(), I_TEST, t_s=1200.0, resolution="coarse",
+                      pr=PR_TEAM)
+
+
+def _pr_ref(pr=PR_TEAM):
+    """(I_f, I_r, duty_f, duty_r) implied by a NET current of I_TEST."""
+    tf, tr, toff, rr = pr["t_f_ms"], pr["t_r_ms"], pr.get("t_off_ms", 0.0), pr["rr"]
+    P = tf + tr + toff
+    I_f = I_TEST * P / (tf - rr * tr)
+    return I_f, -rr * I_f, tf / P, tr / P
+
+
+def test_pr_off_is_bit_identical(beaker_default):
+    """pr=None (default) keeps the DC path bit-for-bit."""
+    res = solve_cell(CellGeometry(), Bath(), I_TEST, resolution="coarse", pr=None)
+    assert np.array_equal(res.j_mA_cm2, beaker_default.j_mA_cm2)
+    assert np.array_equal(res.thickness_um, beaker_default.thickness_um)
+    assert res.pr is None
+    assert res.j_forward_mA_cm2 is None and res.j_reverse_mA_cm2 is None
+    assert res.I_net_A is None and res.pr_dl_fraction == 0.0
+    assert res.I_front_net_A == pytest.approx(beaker_default.I_cathode_A, rel=1e-12)
+
+
+def test_pr_dc_limit_equals_dc(beaker_default):
+    """t_r = t_off = 0 -> the reverse phase carries no charge: exactly the DC solve."""
+    res = solve_cell(CellGeometry(), Bath(), I_TEST, resolution="coarse", pr=PR_DC)
+    ref = beaker_default.j_mA_cm2
+    rel = float(np.max(np.abs(res.j_mA_cm2 - ref)) / np.max(np.abs(ref)))
+    print(f"\nPR DC limit (t_r = t_off = 0): max relative j change {rel:.2e}")
+    assert rel < 1e-9
+    assert res.I_net_A == pytest.approx(I_TEST, rel=1e-6)
+    assert res.duty_r == 0.0
+
+
+def test_pr_charge_balance(pr_default):
+    """duty_f*I_f - duty_r*|I_r| == I_total (Faraday charge of the net map)."""
+    t_s = 1200.0
+    res = pr_default
+    I_f, I_r, duty_f, duty_r = _pr_ref()
+    assert res.I_forward_A == pytest.approx(I_f, rel=1e-9)
+    assert res.I_reverse_A == pytest.approx(I_r, rel=1e-9)
+    assert res.duty_f == pytest.approx(duty_f, rel=1e-12)
+    assert res.duty_r == pytest.approx(duty_r, rel=1e-12)
+    q_net = res.I_net_A * t_s
+    print(f"\ncharge: net {q_net:.9f} C, I_total*t {I_TEST * t_s:.9f} C, "
+          f"rel {abs(q_net - I_TEST * t_s) / (I_TEST * t_s):.2e}")
+    assert q_net == pytest.approx(I_TEST * t_s, rel=1e-6)
+    # double-layer share removes (1 - f_dl) of the reverse faradaic charge
+    dl = solve_cell(CellGeometry(), Bath(), I_TEST, t_s=t_s, resolution="coarse",
+                    pr=PR_TEAM, pr_dl_fraction=1.0 / 3.0)
+    q_dl = dl.I_net_A * t_s
+    q_expected = q_net + (1.0 / 3.0) * duty_r * abs(I_r) * t_s
+    print(f"charge with 1/3 double-layer share: {q_dl:.9f} C "
+          f"(DC-equivalent +{q_dl - q_net:.9f} C of reverse charge withheld)")
+    assert q_dl == pytest.approx(q_expected, rel=1e-6)
+
+
+def test_pr_maps_and_ratios_vs_dc(beaker_default, pr_default):
+    """PR net / forward / reverse maps are consistent; ratios are printed vs DC."""
+    from platesim.cell.solver import _uniformity
+
+    res = pr_default
+    assert res.j_mA_cm2.shape == (41, 41)
+    assert res.j_forward_mA_cm2.shape == (41, 41)
+    assert res.j_reverse_mA_cm2.shape == (41, 41)
+    assert np.all(res.j_reverse_mA_cm2 >= 0.0)          # removal density, positive
+    assert np.all(res.j_mA_cm2 > 0.0)                   # net deposition everywhere
+    assert np.all(res.thickness_um > 0.0)
+    assert np.allclose(res.j_mA_cm2, res.duty_f * res.j_forward_mA_cm2
+                       - res.duty_r * res.j_reverse_mA_cm2, rtol=0, atol=1e-12)
+    # the net map carries the net current (grid quadrature, ~1 % bias)
+    w = np.ones(41)
+    w[0] = w[-1] = 0.5
+    A = float(np.outer(w, w).sum()) * (2.0 / 40.0) ** 2
+    j_net_area = float((res.j_mA_cm2 * np.outer(w, w)).sum()) * (2.0 / 40.0) ** 2
+    u_dc = _uniformity(beaker_default.j_mA_cm2, 1.0, 1.0)
+    u_pr = _uniformity(res.j_mA_cm2, 1.0, 1.0)
+    u_rv = _uniformity(res.j_reverse_mA_cm2, 1.0, 1.0)
+    near, far = _third_means(res)
+    n_dc, f_dc = _third_means(beaker_default)
+    print(f"\nDC: near/far={n_dc / f_dc:.4f}, edge/centre={u_dc['edge_center_ratio']:.4f}")
+    print(f"PR: near/far={near / far:.4f}, edge/centre={u_pr['edge_center_ratio']:.4f}, "
+          f"j(area)/I_net={j_net_area * 1e-3 / res.I_net_A:.4f} (A = {A:.3f} cm2), "
+          f"reverse edge/centre={u_rv['edge_center_ratio']:.4f}")
+    # the anodic phase is far more edge-concentrated -> the net map is levelled
+    assert u_rv["edge_center_ratio"] > 1.5 * u_dc["edge_center_ratio"]
+    assert u_pr["edge_center_ratio"] < u_dc["edge_center_ratio"]
+    assert abs(j_net_area * 1e-3 / res.I_net_A - 1.0) < 0.02
+
+
+# ------------------------------------------------ F4: time-marched coupon cell
+
+def test_march_one_stage_equals_solve_cell():
+    """One stage reproduces solve_cell at the same R_s (same solve, same map)."""
+    for rs in (1e-3, None):
+        m = march_cell(CellGeometry(), Bath(), I_TEST, hours=0.5, n_stages=1, seed_R_sq0=rs)
+        ref = solve_cell(CellGeometry(), Bath(), I_TEST, t_s=1800.0, resolution="coarse",
+                         seed_R_sq=rs)
+        assert np.array_equal(m.stages[0].j_mA_cm2, ref.j_mA_cm2)
+        rel = abs(float(m.thickness_um.mean()) / float(ref.thickness_um.mean()) - 1.0)
+        shape = float(np.max(np.abs(m.thickness_um / m.thickness_um.mean()
+                                    - ref.thickness_um / ref.thickness_um.mean())))
+        print(f"\nR_s0={rs}: 1-stage march vs solve_cell: mean rel {rel:.2e}, "
+              f"shape residual {shape:.2e} (charge projection "
+              f"{m.stages[0].charge_scale:.5f})")
+        assert shape < 1e-9                    # same map, only the level differs
+        assert rel < 1e-2                      # the grid charge projection is ~0.8 %
+        assert m.stages[0].I_net_A == pytest.approx(I_TEST, rel=1e-6)
+
+
+def test_march_terminal_effect_fades_and_mass_balance():
+    """R_s0 = 0.2 ohm/sq: the deposit lands on the sheet and the terminal effect fades."""
+    m = march_cell(CellGeometry(), Bath(), I_TEST, hours=1.0, n_stages=6, seed_R_sq0=0.2)
+    ratios = [s.near_far_thickness_ratio for s in m.stages]
+    R_mean = [s.R_s_mean_ohm_sq for s in m.stages]
+    for s in m.stages:
+        print(f"\nstage {s.index}: R_s {s.R_s_mean_ohm_sq:8.4f} ohm/sq, "
+              f"near/far(th) {s.near_far_thickness_ratio:.5f}, "
+              f"near/far(j) {s.near_far_j_ratio:.5f}, "
+              f"edge/centre(th) {s.edge_center_thickness_ratio:.4f}, "
+              f"dep {s.dep_um.mean():.3f} um, V {s.V_cell_V:.4f} V")
+    assert R_mean[0] > R_mean[-1]
+    assert all(R_mean[i] >= R_mean[i + 1] - 1e-12 for i in range(len(R_mean) - 1))
+    assert all(ratios[i] >= ratios[i + 1] - 1e-9 for i in range(len(ratios) - 1))
+    assert ratios[-1] < ratios[0], f"terminal effect must fade: {ratios}"
+    print(f"mass balance {m.mass_balance:.8f}, V_cell {m.V_cell_first_V:.4f} -> "
+          f"{m.V_cell_last_V:.4f} V")
+    assert m.mass_balance == pytest.approx(1.0, abs=1e-4)
+    assert m.thickness_um.shape == (41, 41)
+    assert np.all(m.thickness_um > 0.0)
+    assert m.thickness_um.mean() == pytest.approx(
+        float(__import__("platesim.core.constants", fromlist=["thickness_um"])
+              .thickness_um(12.0, 3600.0)), rel=0.05)
