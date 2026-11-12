@@ -1,12 +1,23 @@
-"""Smoothed-boundary finite-volume field solvers for one time step (frozen geometry).
+"""Finite-volume field solvers for one time step (frozen geometry).
 
-Smoothed-boundary form (Hs = 0.5(1+tanh(psi/eps)), psi > 0 electrolyte):
+Two interface representations, selected by Params.interface (plan v2 C4):
+
+'diffuse' (default, bit-identical to the pre-C4 engine) -- smoothed-boundary form
+(Hs = 0.5(1+tanh(psi/eps)), psi > 0 electrolyte):
     div(Hs K grad u) = |grad Hs| * (K du/dn at the interface)
  so with a consumption flux N at the interface   div(Hs D grad c) = |grad Hs| N.
 Discretisation: cell-centred finite volume (axisymmetric via: face area ~ r; planar trench per unit length:
 weight 1 - both cases enter only through Grid.vol / Grid.AE / Grid.AZ), symmetric M-matrix K with
   K u = -(sink), solved on cells with psi > -n_active_eps*eps only, Dirichlet (bulk) value on the delta plane.
 Interface weights  w_p = V_p |grad Hs|_p  [cm2]  carry all interface fluxes:  total interface current = sum w_p i_p.
+
+'sharp' -- cut-cell interface built from the same level set (plan v2 C4; see StepGeom):
+cell electrolyte fractions ef in the storage, cut-cell face apertures in place of Hs on the faces, the
+interface area of a cut cell (the chord of the linear level-set reconstruction) as w_p on the sink node,
+and the interface rate rejected to the ghost-fluid distance |psi| of that node (k_eff = k/(1+k|psi|/D)).
+In 1-D that is exact for the steady planar limiting current at any front position inside a cell, where the
+tanh band is first-order biased (the band leaks the sink into the cells above the front).  Small cut cells
+(ef < EF_FLOOR) lose their sink to the majority neighbour and keep a floored storage.
 
 Fields per step (fixed-point loop): theta (implicit backward Euler per cell), suppressor s, potential phi with
 the metal potential V (Newton, galvanostatic constraint bordered), Cu2+ concentration c (implicit sink)."""
@@ -19,7 +30,7 @@ import scipy.sparse.linalg as spla
 import scipy.ndimage as ndi
 from scipy.optimize import brentq
 
-from .levelset import Grid, grad_mag, label_regions, curvature_div_n
+from .levelset import Grid, grad_mag, label_regions, curvature_div_n, electrolyte_fraction
 from .params import F, OMEGA_CU_M3_MOL
 from .additives import (AdditiveSet, displace_suppressor, suppressor_cl_rate)
 
@@ -121,10 +132,177 @@ def muscl_face(cu, cd, cuu, ok=None):
     return np.where(live, ho, cu)
 
 
+# ======================================================================================= sharp interface (C4)
+# Below ~5 % electrolyte a cut cell is no longer a useful unknown: its storage would be a needle and its
+# sink belongs to the neighbour that holds the bulk of the control volume (see StepGeom._sharp_weights).
+EF_FLOOR = 0.05
+
+
+def _seg_pos_frac(a, b):
+    """Fraction of the unit segment [a, b] on which the linear interpolant from a to b is > 0."""
+    a = np.asarray(a, dtype=float)
+    b = np.asarray(b, dtype=float)
+    mix = (a > 0.0) != (b > 0.0)
+    t = np.where(mix, a / np.where(mix, a - b, 1.0), 1.0)
+    return np.where((a <= 0.0) & (b <= 0.0), 0.0,
+                    np.where(mix, np.where(a > 0.0, t, 1.0 - t), 1.0))
+
+
+def _grad_comp(psi, dx, periodic):
+    """Central-difference gradient components of psi: the (gr, gz) that levelset.grad_mag hypot's."""
+    p = np.pad(psi, 1, mode='edge')
+    if periodic:
+        p[0, 1:-1] = psi[-1, :]
+        p[-1, 1:-1] = psi[0, :]
+    return ((p[2:, 1:-1] - p[:-2, 1:-1]) / (2 * dx),
+            (p[1:-1, 2:] - p[1:-1, :-2]) / (2 * dx))
+
+
+def _face_apertures(psi, g: Grid):
+    """Open (electrolyte) fraction of every grid face -- cut-cell apertures, plan v2 C4.
+
+    A face between two cells is a segment of length dx.  psi at its two ends is the bilinear mean of the
+    four cell values around that corner, psi is interpolated linearly along the segment and the aperture
+    is the length fraction with psi > 0 (psi > 0 = electrolyte).  The estimate is exact for a straight
+    interface -- in particular 1 for every face that lies wholly on the electrolyte side and 0 for one
+    wholly in the metal, which is what the smoothed band gets wrong for a face that is adjacent to a
+    mostly-solid cut cell -- and monotone in psi, so a_k in [0, 1].
+
+    Returns (ax, az):
+      ax[i, j]  x-face between (i, j) and (i+1, j)  (i = nr-1 is the periodic seam when g.periodic_x)
+      az[i, j]  z-face between (i, j) and (i, j+1)
+    The stencil picks ax[ir, jr], az[iz, jz] and ax[nr-1, jw]; degenerate edge entries (i = nr-1 or
+    j = nz-1 on a non-periodic grid) are never used."""
+    per = g.periodic_x
+
+    def up(a):
+        r = np.empty_like(a)
+        r[:, :-1] = a[:, 1:]
+        r[:, -1] = a[:, -1]
+        return r
+
+    def dn(a):
+        r = np.empty_like(a)
+        r[:, 1:] = a[:, :-1]
+        r[:, 0] = a[:, 0]
+        return r
+
+    def nxt(a):
+        if per:
+            return np.roll(a, -1, axis=0)
+        r = np.empty_like(a)
+        r[:-1] = a[1:]
+        r[-1] = a[-1]
+        return r
+
+    def prv(a):
+        if per:
+            return np.roll(a, 1, axis=0)
+        r = np.empty_like(a)
+        r[1:] = a[:-1]
+        r[0] = a[0]
+        return r
+
+    pu, pn = up(psi), nxt(psi)
+    lo = 0.25 * (psi + pn + dn(psi) + dn(pn))          # corner (i+1/2, j-1/2)
+    hi = 0.25 * (psi + pn + pu + up(pn))               # corner (i+1/2, j+1/2)
+    ax = _seg_pos_frac(lo, hi)
+    le = 0.25 * (psi + pu + prv(psi) + up(prv(psi)))   # corner (i-1/2, j+1/2)
+    ri = 0.25 * (psi + pu + pn + up(pn))               # corner (i+1/2, j+1/2)
+    az = _seg_pos_frac(le, ri)
+    return ax, az
+
+
+def _iface_cells(psi, g: Grid, gm=None):
+    """Interface area and sink node of every cut cell -- cut-cell geometry, plan v2 C4.
+
+    Interface area.  Inside a cell psi is replaced by its linear reconstruction
+        psi(x) = psi_p + (x - x_p) . grad psi,
+    i.e. the psi = 0 line sits at signed distance delta = psi_p/|grad psi| from the centre with unit
+    normal n = grad psi/|grad psi|.  The interface area of the cell is the length of that line's chord
+    through the square [x_p +- dx/2] x [z_p +- dx/2] (the closing segment of the cut polygon).  The
+    chord is exact for a straight interface (so the total interface area of a planar front is exactly
+    the front length, and of a 45 deg line the sqrt(2) dx of the diagonal), 2nd order for a curved one,
+    and 0 when the line misses the cell.  It is scaled to the cell's projected measure (1 per unit
+    length for the planar geometries, 2 pi r_c for the axisymmetric 'via'), matching the units of the
+    legacy  w = V |grad Hs|  so that sum(w) is the interface area in every geometry.
+
+    Sink node.  The sink of a cut cell lives at the node of the cell whose centre is in the
+    ELECTROLYTE: the cell itself when ef >= 0.5 (see levelset.electrolyte_fraction), otherwise the
+    neighbour along +grad psi (the outward normal, i.e. the 'merge the small sliver into the larger
+    neighbour along the normal' rule).  That keeps every sink |psi_node| <= ~dx from the interface
+    instead of up to dx/2 inside the metal, and it is what makes the 1-D chain exact (see
+    StepSolver._ghost).  Returns (chord, ti, tj):
+      chord [cm]      interface area per cell (>= 0, 0 = the cell is not cut)
+      ti, tj (int)    sink-node indices per cell (-1 where the cell is not cut); the caller validates
+                      them against the active set and falls back to the cell itself."""
+    nr, nz = psi.shape
+    dx = g.dx
+    gr, gz = _grad_comp(psi, dx, g.periodic_x)
+    gm = np.hypot(gr, gz) if gm is None else np.asarray(gm, dtype=float)
+    live = gm > 1e-8                                    # 1/cm; |grad psi| ~ 1 for a distance function
+    gs = np.where(live, gm, 1.0)
+    nx = np.where(live, gr / gs, 0.0)
+    nz_ = np.where(live, gz / gs, 0.0)
+    delta = np.where(live, psi / gs, 0.0)
+    h = 0.5 * dx
+
+    def bounds(c, s):
+        """t-interval of |c + s t| <= h (empty -> lo > hi; unbounded -> +-inf)."""
+        tiny = np.abs(s) < 1e-12
+        ss = np.where(tiny, 1.0, s)
+        a, b = (-h - c) / ss, (h - c) / ss
+        inside = np.abs(c) <= h + 1e-9 * dx      # tolerance: a front exactly ON the face is a valid case
+        lo = np.where(tiny, np.where(inside, -np.inf, np.inf), np.minimum(a, b))
+        hi = np.where(tiny, np.where(inside, np.inf, -np.inf), np.maximum(a, b))
+        return lo, hi
+
+    # the chord runs along t_hat = (n_z, -n_x): x = delta n_x + t n_z, z = delta n_z - t n_x
+    with np.errstate(invalid='ignore'):
+        lo1, hi1 = bounds(delta * nx, nz_)
+        lo2, hi2 = bounds(delta * nz_, -nx)
+        chord = np.maximum(np.minimum(hi1, hi2) - np.maximum(lo1, lo2), 0.0)
+    chord = np.where(live, np.clip(chord, 0.0, np.sqrt(2.0) * dx), 0.0)
+    # A line that lies (numerically) ON a cell boundary is reconstructed by both cells that share the
+    # face, so a grid-aligned front would be counted twice.  Keep it in the electrolyte-side cell only
+    # (psi >= 0); equality also covers a line through a corner, where the chord is ~0 anyway.
+    on_face = np.abs(delta) >= h * (np.abs(nx) + np.abs(nz_)) - 1e-9 * dx
+    chord = np.where(on_face & (psi < 0.0), 0.0, chord)
+    chord = np.where(chord < 1e-9 * dx, 0.0, chord)
+    chord = chord * (g.vol[:, 0] / dx ** 2)[:, None]
+    ef = electrolyte_fraction(psi, g)
+    ti = np.full((nr, nz), -1, np.int64)
+    tj = np.full((nr, nz), -1, np.int64)
+    ii, jj = np.nonzero(chord > 0.0)
+    if ii.size:
+        own = ef[ii, jj] >= 0.5
+        cx = np.abs(nx[ii, jj]) >= np.abs(nz_[ii, jj])   # step along the dominant normal component
+        si = np.where(cx, np.sign(nx[ii, jj]), 0.0).astype(np.int64)
+        sj = np.where(cx, 0.0, np.sign(nz_[ii, jj])).astype(np.int64)
+        ti[ii, jj] = np.where(own, ii, ii + si)
+        tj[ii, jj] = np.where(own, jj, jj + sj)
+    return chord, ti, tj
+
+
 # ======================================================================================= geometry for a step
 class StepGeom:
-    """Everything that depends only on psi at the start of a step: smoothed indicator, active cells, interface
-    weights and the sparse stencil (pattern) shared by all fields."""
+    """Everything that depends only on psi at the start of a step: smoothed indicator (or the sharp
+    cut-cell fractions), active cells, interface weights and the sparse stencil (pattern) shared by all
+    fields.
+
+    Params.interface selects the interface representation:
+      'diffuse' (default, bit-identical to the pre-C4 engine): Hs = 0.5(1+tanh(psi/eps)) on cells and
+          faces, interface weights w_p = V_p |grad Hs|_p.
+      'sharp' (plan v2 C4): cell electrolyte fractions ef (levelset.electrolyte_fraction) replace Hs in
+          the storage, cut-cell face apertures replace Hs on the faces (Hf_*), and w_p is the interface
+          area of the cut cell, placed on the sink node returned by _iface_cells.  Small cut cells
+          (ef < EF_FLOOR = 0.05) keep their storage floored at EF_FLOOR * V and their sink in the
+          majority neighbour, so no row of the operator loses its diagonal dominance; the sink area
+          itself is conserved (sum w is the interface area in both representations).  The interface
+          fluxes (interface current, the Cu2+ sink of the Cu balance, the level-set speed) all use w,
+          and StepSolver rejects the sink to the ghost-fluid distance |psi_node| (k_eff = k/(1+k d/D)),
+          which is exact for the 1-D planar steady limiting current.  Not applied: the suppressor /
+          leveller adsorption rates keep the plain interface area (documented in StepSolver)."""
 
     def __init__(self, g: Grid, psi, z_plane, p):
         self.g, dx = g, g.dx
@@ -140,6 +318,14 @@ class StepGeom:
         x = np.clip(psi / eps, -30, 30)
         self.Hs = np.maximum(0.5 * (1 + np.tanh(x)), 1e-6)
         self.gHs = 0.5 / eps / np.cosh(x) ** 2 * gm
+        # ---- plan v2 C4: 'sharp' cut-cell interface (None / False on the legacy 'diffuse' path)
+        self.sharp = str(getattr(p, "interface", "diffuse")) == "sharp"
+        self.ef = None                     # cell electrolyte volume fraction (sharp only)
+        self.d_if = None                   # |psi| of every sink node (ghost-fluid distance, sharp only)
+        if self.sharp:
+            self.ef = electrolyte_fraction(psi, g)
+            self.ape_x, self.ape_z = _face_apertures(psi, g)
+            self._chord, self._ti, self._tj = _iface_cells(psi, g, gm)
         # ---- electrolyte connectivity -> open cavity / trapped voids
         conn = -0.5 * dx
         open_m, void_m, _ = label_regions(psi, g, jt, conn)
@@ -154,11 +340,38 @@ class StepGeom:
         else:
             act = open_m | band
             self.void_cells = void_m
+        if self.sharp:
+            # a cell with no electrolyte by the level set has no capacity and no conductance: drop it.
+            # (For the flat band this is exactly the psi <= -dx/2 tail the tanh band still carries.)
+            act = act & (self.ef > 0.0)
         # keep only the connected piece that touches the Dirichlet row (guards against singular islands)
         lab, n = ndi.label(act)
         if n > 1:
             top = np.unique(lab[:, jt])
             act = np.isin(lab, top[top > 0])
+        if self.sharp:
+            # A cut cell whose every face is closed (or opens only onto a cell that has just been dropped)
+            # has no conductance to anywhere: its row of the operator would be empty and the LU singular.
+            # Such a sliver is a sub-grid electrolyte pocket that the level set keeps at ef ~ 0.1 inside the
+            # metal; it is dropped (its interface area then vanishes -- the galvanostatic constraint
+            # renormalises over the remaining w, so the Cu balance is unaffected).  Every cell on the
+            # Dirichlet row keeps its plane coupling and stays.
+            ax_, az_ = self.ape_x, self.ape_z
+            keep0 = np.zeros_like(act)
+            keep0[:, jt] = True
+            for _ in range(g.nr + g.nz):
+                nb = np.zeros_like(act)
+                nb[:-1] |= act[1:] & (ax_[:-1] > 0.0)
+                nb[1:] |= act[:-1] & (ax_[:-1] > 0.0)
+                nb[:, :-1] |= act[:, 1:] & (az_[:, :-1] > 0.0)
+                nb[:, 1:] |= act[:, :-1] & (az_[:, :-1] > 0.0)
+                if g.periodic_x:
+                    nb[0] |= act[-1] & (ax_[-1] > 0.0)
+                    nb[-1] |= act[0] & (ax_[-1] > 0.0)
+                keep = act & (nb | keep0)
+                if keep.sum() == act.sum():
+                    break
+                act = keep
         self.open_m, self.void_m, self.act = open_m, void_m, act
         n = int(act.sum())
         self.n = n
@@ -166,7 +379,11 @@ class StepGeom:
         idx[act] = np.arange(n)
         self.idx = idx
         # ---- interface weights (zero for inert surfaces in test mode)
-        w = g.vol * self.gHs
+        if self.sharp:
+            w, d_if = self._sharp_weights(act)
+            self.d_if = d_if
+        else:
+            w = g.vol * self.gHs
         w = np.where(act, w, 0.0)
         self.w_full = w
         self.w = w[act]
@@ -175,12 +392,14 @@ class StepGeom:
         self.ir, self.jr = np.nonzero(ar)
         self.pr, self.qr = idx[self.ir, self.jr], idx[self.ir + 1, self.jr]
         self.geo_r = g.AE[self.ir, 0] / dx
-        self.Hf_r = 0.5 * (self.Hs[self.ir, self.jr] + self.Hs[self.ir + 1, self.jr])
+        self.Hf_r = (self.ape_x[self.ir, self.jr] if self.sharp
+                     else 0.5 * (self.Hs[self.ir, self.jr] + self.Hs[self.ir + 1, self.jr]))
         az = act[:, :-1] & act[:, 1:]
         self.iz, self.jz = np.nonzero(az)
         self.pz, self.qz = idx[self.iz, self.jz], idx[self.iz, self.jz + 1]
         self.geo_z = g.AZ[self.iz, 0] / dx
-        self.Hf_z = 0.5 * (self.Hs[self.iz, self.jz] + self.Hs[self.iz, self.jz + 1])
+        self.Hf_z = (self.ape_z[self.iz, self.jz] if self.sharp
+                     else 0.5 * (self.Hs[self.iz, self.jz] + self.Hs[self.iz, self.jz + 1]))
         # periodic x seam: cell 0 (x ~ 0+) and cell nr-1 (x ~ pitch-) are neighbours.  p = column 0,
         # q = column nr-1, so the p -> q face normal points in -x (used for the advective flux sign).
         if g.periodic_x:
@@ -189,7 +408,8 @@ class StepGeom:
             self.pw = idx[0, self.jw]
             self.qw = idx[g.nr - 1, self.jw]
             self.geo_w = g.AE[0, 0] / dx
-            self.Hf_w = 0.5 * (self.Hs[0, self.jw] + self.Hs[g.nr - 1, self.jw])
+            self.Hf_w = (self.ape_x[g.nr - 1, self.jw] if self.sharp
+                         else 0.5 * (self.Hs[0, self.jw] + self.Hs[g.nr - 1, self.jw]))
         else:
             self.jw = np.empty(0, np.int64)
             self.pw = self.qw = np.empty(0, np.int64)
@@ -198,7 +418,13 @@ class StepGeom:
         self.itop = np.nonzero(act[:, jt])[0]
         self.ptop = idx[self.itop, jt]
         self.geo_top = g.AZ[self.itop, 0] / self.d_top
-        self.Hs_top = self.Hs[self.itop, jt]
+        if self.sharp:
+            # Dirichlet-plane coupling: the aperture of the z-face above the top cell (1 when that face
+            # does not exist, i.e. jt is the last row)
+            self.Hs_top = (self.ape_z[self.itop, jt] if jt < g.nz - 1
+                           else np.ones(self.itop.size, float))
+        else:
+            self.Hs_top = self.Hs[self.itop, jt]
         if g.periodic_x:
             rows = np.concatenate([self.pr, self.qr, self.pz, self.qz, self.pw, self.qw, np.arange(n)])
             cols = np.concatenate([self.qr, self.pr, self.qz, self.pz, self.qw, self.pw, np.arange(n)])
@@ -213,11 +439,52 @@ class StepGeom:
         inv[self.perm] = np.arange(nnz)
         self.diag_pos = inv[nnz - n + np.arange(n)]
         self.vh = (g.vol * self.Hs)[act]                      # V_p Hs_p (transient storage term)
+        if self.sharp:
+            # electrolyte storage: V_p ef_p, with the tiny-cell floor (see EF_FLOOR / _sharp_weights)
+            self.vh = (g.vol * np.where(self.ef > 0.0, np.maximum(self.ef, EF_FLOOR), 0.0))[act]
+
+    # ------------------------------------------------------------------ sharp (cut-cell) interface weights
+    def _sharp_weights(self, act):
+        """Interface area per cell and the ghost-fluid distance of every sink node (plan v2 C4).
+
+        w_p is the chord length of the level-set reconstruction inside cell p (_iface_cells), moved onto
+        the sink node: the cell itself when the centre is in the electrolyte (ef >= 0.5), otherwise the
+        neighbour along +grad psi.  Small cells (ef < EF_FLOOR) therefore carry neither the sink nor
+        (beyond the floor) the storage, which keeps the operator an M-matrix with positive diagonal:
+        every face conductance is aperture * geo * D >= 0 and every w_p >= 0.
+        The total interface area is conserved by the merge (sum w == sum of the cut-cell chords), so the
+        current sum(w i) and the Cu balance are unaffected by the small-cell rule.
+        d_if is |psi| of the sink node when that node is on the ELECTROLYTE side (psi >= 0), i.e. the
+        distance from the node to the interface, and 0 otherwise: a node on the metal side (only possible
+        when the majority neighbour is itself inactive, a degenerate sliver) already sits beyond the
+        interface, so its ghost correction would double-count the sub-cell distance.  0 disables the
+        correction there and recovers the plain interface rate."""
+        chord, ti, tj = self._chord, self._ti, self._tj
+        nr, nz = chord.shape
+        ii, jj = np.nonzero(chord > 0.0)
+        w = np.zeros((nr, nz))
+        d_if = np.zeros((nr, nz))
+        if ii.size == 0:
+            return w, d_if
+        ti_v, tj_v = ti[ii, jj], tj[ii, jj]
+        inb = (ti_v >= 0) & (ti_v < nr) & (tj_v >= 0) & (tj_v < nz)
+        tgt_ok = np.zeros(ii.size, bool)
+        tgt_ok[inb] = act[ti_v[inb], tj_v[inb]]
+        own_ok = act[ii, jj]
+        keep = tgt_ok | own_ok
+        ti2 = np.where(tgt_ok, ti_v, ii)[keep]
+        tj2 = np.where(tgt_ok, tj_v, jj)[keep]
+        np.add.at(w, (ti2, tj2), chord[ii[keep], jj[keep]])
+        d_if[ti2, tj2] = np.maximum(self.psi[ti2, tj2], 0.0)
+        return w, d_if
 
     # ------------------------------------------------------------------ matrix assembly
     def K_data(self, D):
-        """Data vector (CSR order) of the symmetric operator  -div(Hs D grad .)  incl. Dirichlet at the top plane,
-        and the Dirichlet coupling vector bc (n,) so that the bulk value u0 enters the rhs as bc*u0."""
+        """Data vector (CSR order) of the symmetric operator  -div(a K grad .)  incl. Dirichlet at the top plane,
+        and the Dirichlet coupling vector bc (n,) so that the bulk value u0 enters the rhs as bc*u0.
+
+        a is Hs (the smoothed band, 'diffuse') or the cut-cell face aperture ('sharp'), so the same assembly
+        serves both interface representations."""
         n = self.n
         g = self.g
         Gr = self.Hf_r * 0.5 * (D[self.ir, self.jr] + D[self.ir + 1, self.jr]) * self.geo_r
@@ -330,7 +597,12 @@ class StepGeom:
         touch a solid cell (psi <= 0) are exactly 0 in the MAC field.
 
         The face measure is the same geometric factor face_fluxes uses (geo * dx for planar trench_full,
-        where geo = 1) but WITHOUT the Hs face weight (the Stokes field is sharp).  The wrap face p -> q
+        where geo = 1) but WITHOUT the Hs face weight (the Stokes field is sharp).  With interface='sharp'
+        the aperture is deliberately NOT applied either: the MAC flux is already the face-normal velocity
+        of the sharp flow field (which is zero on faces that touch solid), and scaling it by an aperture
+        < 1 would destroy the discrete divergence-freeness that the conservative advective operator
+        (adv_matrix form='divergence', mac_advection) relies on to keep a uniform field uniform and the
+        Cu2+ balance closed.  The wrap face p -> q
         points in -x, so F_w = -ufx[0, jw] * dx * geo.  The returned F_top (one value per active top cell
         ptop, positive = leaving the species domain upward) is the flux through the z-face between rows
         jt and jt+1, which the species stencil truncates at the Dirichlet plane."""
@@ -796,23 +1068,45 @@ def theta_be(th_old, dt, a_rate, vu, vs, km_duty, b_extra):
 
 
 # ======================================================================================= potential problems
-def scalar_V_cathodic(kin, w, ct, th, acc, phi, I_t, V0=None, lo=-4.0, hi=2.0, eta_gt=None):
+def scalar_V_cathodic(kin, w, ct, th, acc, phi, I_t, V0=None, lo=-4.0, hi=2.0, eta_gt=None, i_ghost=None):
     """V such that sum w ct ci(V - phi) = I_t with phi fixed.  I(V) is monotone decreasing and ln I is nearly linear
     in V, so Newton on ln I - ln I_t converges in 3-5 iterations; brentq is the fallback.
     eta_gt (plan v2 D6): per-cell Gibbs-Thomson shift [V], the kinetics see eta = V - phi - eta_gt;
-    None (default) reproduces the legacy expression exactly."""
+    None (default) reproduces the legacy expression exactly.
+    i_ghost (plan v2 C4, sharp interface): per-cell a [cm2/A] of the ghost-fluid correction
+    ci -> ci/(1 + a ci) of the interface rate (see StepSolver._ghost); None (default) leaves the
+    legacy expression untouched."""
     p = kin.p
     f_ = kin.f
     lnT = np.log(I_t)
     V = -0.2 if V0 is None else float(np.clip(V0, lo, hi))
+    a = i_ghost
+
+    def cur(eta):
+        """(i_eff, |di_eff/deta|) per cell: i_eff = ct ci, times 1/(1 + a ci) on the sharp path."""
+        gu, gs = kin.cath(eta, acc)
+        ci = (1 - th) * gu + th * gs
+        di = f_ * ct * (p.alpha_u * (1 - th) * gu + p.alpha_s * th * gs)
+        if a is not None:
+            fac = 1.0 / (1.0 + a * ci)
+            ci, di = ci * fac, di * fac * fac
+        return ct * ci, di
+
+    def tot(eta):
+        """(sum w i_eff, sum w |di_eff/deta|); identical summation to the legacy expression when a is None."""
+        if a is None:
+            gu, gs = kin.cath(eta, acc)
+            wu, ws = w * ct * (1 - th) * gu, w * ct * th * gs
+            return wu.sum() + ws.sum(), f_ * (p.alpha_u * wu.sum() + p.alpha_s * ws.sum())
+        i, di = cur(eta)
+        return float(np.dot(w, i)), float(np.dot(w, di))
+
     for _ in range(40):
         eta = V - phi if eta_gt is None else V - phi - eta_gt
-        gu, gs = kin.cath(eta, acc)
-        wu, ws = w * ct * (1 - th) * gu, w * ct * th * gs
-        I = wu.sum() + ws.sum()
+        I, dI = tot(eta)
         if I <= 0:
             break
-        dlnI = -f_ * (p.alpha_u * wu.sum() + p.alpha_s * ws.sum()) / I
+        dlnI = -dI / I
         r = np.log(I) - lnT
         if abs(r) < 1e-11:
             return V
@@ -821,8 +1115,10 @@ def scalar_V_cathodic(kin, w, ct, th, acc, phi, I_t, V0=None, lo=-4.0, hi=2.0, e
 
     def g(V):
         eta = V - phi if eta_gt is None else V - phi - eta_gt
-        gu, gs = kin.cath(eta, acc)
-        return np.dot(w * ct, (1 - th) * gu + th * gs) - I_t
+        if a is None:
+            gu, gs = kin.cath(eta, acc)
+            return np.dot(w * ct, (1 - th) * gu + th * gs) - I_t
+        return float(np.dot(w, cur(eta)[0])) - I_t
     glo, ghi = g(lo), g(hi)
     if glo < 0:
         return lo
@@ -832,7 +1128,7 @@ def scalar_V_cathodic(kin, w, ct, th, acc, phi, I_t, V0=None, lo=-4.0, hi=2.0, e
 
 
 def newton_potential(geo, cs, kin, w, ct, th, acc, V0, phi0, I_t, galvano, anodic=False, maxit=14, tol_eta=2e-7,
-                     src=None, eta_gt=None):
+                     src=None, eta_gt=None, i_ghost=None):
     """Solve  K phi + sigma w I(V-phi) = 0  [sigma = +1 cathodic sink, -1 anodic source] and, if galvano,
     sum w I = I_t for the unknowns (phi, V) with Newton (bordered system reduced by a Schur complement).
     src (tertiary path only): the divergence of the diffusion current F sum z_i D_i grad c_i, so the
@@ -841,21 +1137,30 @@ def newton_potential(geo, cs, kin, w, ct, th, acc, V0, phi0, I_t, galvano, anodi
     eta_gt (plan v2 D6): per-cell Gibbs-Thomson shift [V] of the cathodic overpotential, so the kinetics see
     eta = V - phi - eta_gt (see gibbs_thomson_eta).  It is constant in V and phi, so the Newton Jacobian is
     unchanged.  None (default) is bit-identical to the pre-D6 solver; the anodic branch ignores it.
+    i_ghost (plan v2 C4): per-cell a [cm2/A] of the sharp-interface ghost-fluid correction
+    ci -> ci/(1 + a ci) of the cathodic interface rate ci = (1-theta) gu + theta gs
+    (StepSolver._ghost).  None (default) is the legacy diffuse-band expression, bit-identical; the
+    anodic branch ignores it.
     Returns V, phi, I_p (A/cm2 per cell incl. ct factor for cathodic), iterations."""
     sigma = -1.0 if anodic else 1.0
     phi = phi0.copy()
     V = V0
     n = geo.n
     shift = eta_gt if (eta_gt is not None and not anodic) else None
+    a = None if anodic else i_ghost
 
     def current(eta):
         if anodic:
             i, di = kin.anod(eta)                      # di = dI/deta > 0
             return i, di
         gu, gs = kin.cath(eta, acc)
-        i = ct * ((1 - th) * gu + th * gs)
+        ci = (1 - th) * gu + th * gs
         di = kin.f * ct * (kin.p.alpha_u * (1 - th) * gu + kin.p.alpha_s * th * gs)   # -dI/deta > 0
-        return i, di
+        if a is not None:
+            # ghost-fluid: the transported interface rate is ci/(1 + a ci) with d/deta -> di/(1+a ci)^2
+            fac = 1.0 / (1.0 + a * ci)
+            ci, di = ci * fac, di * fac * fac
+        return ct * ci, di
 
     if galvano:
         if anodic:
@@ -864,7 +1169,7 @@ def newton_potential(geo, cs, kin, w, ct, th, acc, V0, phi0, I_t, galvano, anodi
             s = np.dot(w, np.exp(np.clip(-kin.p.alpha_a * kin.f * phi, -60, 60)))
             V = np.log(I_t / (ph.i0_a * s + 1e-300)) / (kin.p.alpha_a * kin.f)
         else:
-            V = scalar_V_cathodic(kin, w, ct, th, acc, phi, I_t, V0=V0)
+            V = scalar_V_cathodic(kin, w, ct, th, acc, phi, I_t, V0=V0, i_ghost=i_ghost)
     for it in range(maxit):
         eta = V - phi if shift is None else V - phi - shift
         I, q0 = current(eta)
@@ -917,6 +1222,9 @@ class StepSolver:
         self.Dt = Dt
         self.flow = flow
         self.flow_faces = flow_faces
+        # ---- plan v2 C4: ghost-fluid distance of the sharp interface (None -> legacy diffuse band)
+        self.ghost_d = None
+        self.ghost_a = None
         # ---- plan v2 E2: bubble shading of the interface weights (None = legacy)
         self.shade = shade
         self.adv_bc = None                  # rhs source of the open-top inflow (stokes MAC path only)
@@ -951,9 +1259,13 @@ class StepSolver:
             lu_c, lu_s, lu_p, lu_l = reuse[1:]
         if self.tertiary:
             self._init_tertiary(Dt, reuse, lu_s, lu_l)
+            if geo.d_if is not None:
+                self._init_ghost(ph.D_cu + Dt)
             return
         Kc, self.bc_c = geo.K_data(ph.D_c + Dt)
         Ks, self.bc_s = geo.K_data(ph.D_s + Dt)
+        if geo.d_if is not None:
+            self._init_ghost(ph.D_c + Dt)
         self.adv = None
         # adv_scheme only has a meaning on the Stokes (MAC) path; the LBM path keeps upwind + adv_form.
         self.adv_scheme = p.adv_scheme if (p.flow_solver == "stokes" and flow_faces is not None) else "upwind"
@@ -1005,6 +1317,45 @@ class StepSolver:
         """Constant part (diffusion + advection) of a trench_full operator, CSR."""
         geo = self.geo
         return sp.csr_matrix((K_data, geo.indices, geo.indptr), shape=(geo.n, geo.n)) + adv
+
+    # ------------------------------------------------------------------ sharp interface (C4)
+    def _init_ghost(self, D_cu):
+        """Ghost-fluid distance of the Cu2+ interface sink (plan v2 C4, StepGeom.interface='sharp').
+
+        The cut-cell sink of cell p is the interface flux evaluated at the NODE, but the interface is
+        |psi_p| = d_p away from it.  With the interface rate k = ci/(2F c_bulk) [cm/s] (ci = the kinetic
+        rate that maps concentration to current density, (1-theta) gu + theta gs) and the local
+        diffusivity D, the series conductance of 'node -> interface' and 'interface reaction' is
+            k_eff = k / (1 + k d_p / D),  i.e.  ci_eff = ci / (1 + a_p ci),  a_p = d_p / (2F c_bulk D_p),
+        and the interface current density is  ct ci_eff  (reported as i_f, so sum(w i_f) is what the sink
+        actually consumes).  For k d/D << 1 (activation control) this is 1, i.e. identical to the legacy
+        sink; for k d/D >> 1 (limiting current) it gives the diffusive flux D c_bulk/d_p, which makes the
+        1-D planar steady limiting current exact for any front position inside the cell:
+            c_bulk = sum_faces (dx/D) N + d_p/D N + N/k  ->  N = c_bulk/(L/D + 1/k),  L = distance
+        from the front to the Dirichlet plane.  The correction is 2nd order in the front position
+        (first-order error removed), and it is applied to the Cu2+ sink only -- the suppressor and
+        leveller sinks keep the plain interface area w (their rate constants are partly lumped
+        mass-transfer coefficients, so a Damkoehler correction there would not be meaningful)."""
+        self.ghost_d = self.geo.d_if[self.geo.act]
+        self.D_cu_loc = np.asarray(D_cu, dtype=float)[self.geo.act]
+        self.ghost_a = self.ghost_d / (2.0 * F * self.p.c_bulk * np.maximum(self.D_cu_loc, 1e-30))
+
+    def _ghost(self, ci, scale=1.0):
+        """Per-cell 1/(1 + scale * a * ci): the ghost-fluid factor of the sharp-interface sink.
+
+        ci is the interface rate at BULK concentration, ci = (1-theta) gu + theta gs [A/cm2] (the
+        coefficient that maps concentration -> current density), a = |psi_node|/(2F c_bulk D) [cm2/A]
+        and scale = r_react on the tertiary path.  a*ci is the Damkoehler number k d/D of the sink, so
+        the factor is concentration independent and the sink stays LINEAR in c (M-matrix).
+        Returns 1.0 (a Python float, exactly neutral) for the legacy diffuse band."""
+        if self.ghost_a is None:
+            return 1.0
+        return 1.0 / (1.0 + scale * self.ghost_a * np.asarray(ci, dtype=float))
+
+    def _ghost_scaled(self):
+        """The ghost-fluid a of the current transport path: a * r_react (r_react == 1 on the enhanced
+        path, so this is exactly ghost_a there).  None when the interface is diffuse."""
+        return None if self.ghost_a is None else self.ghost_a * self.r_react
 
     # ------------------------------------------------------------------ tertiary transport
     def _init_tertiary(self, Dt, reuse=None, lu_s=None, lu_l=None):
@@ -1232,20 +1583,28 @@ class StepSolver:
             acc_k = acc_now(th_l_new) if lev_on else acc_a
             if p.ohmic:
                 V_new, phi_new, _, nph = newton_potential(geo, self.cs_p, kin, w, ct, thk, acc_k, V, phi,
-                                                          ctrl['I_t'], galvano, eta_gt=self.eta_gt)
+                                                          ctrl['I_t'], galvano, eta_gt=self.eta_gt,
+                                                          i_ghost=self._ghost_scaled())
             else:
                 V_new, phi_new, _, nph = self._nonohmic(w, ct, thk, acc_k, V, ctrl, galvano)
             diag['nph'] += nph
             gu, gs = kin.cath(V_new - phi_new if self.eta_gt is None else V_new - phi_new - self.eta_gt, acc_k)
             ci = (1 - thk) * gu + thk * gs
             extra = p.efficiency * duty_f * w * ci / (2 * F * p.c_bulk)  # Cu2+ sink, time-averaged over PR cycle
+            if self.ghost_a is not None:
+                # C4 ghost-fluid: sink of the cut cell at distance |psi| from its node (see _init_ghost)
+                extra = extra * self._ghost(ci)
             rhs_c = self.bc_c + rev_src
             if self.adv_bc is not None:                       # open-top inflow, bulk normalised to 1
                 rhs_c = rhs_c + self.adv_bc
             if self.tvd_faces is not None:                    # limited (MUSCL) face values, deferred
                 rhs_c = rhs_c - self.TVD_OMEGA * geo.tvd_correction(ct, *self.tvd_faces)
             ct_new = np.clip(self.cs_c.solve(extra, rhs_c), 0.0, 3.0)
-            diag['bal'] = (np.dot(w * ci, ct_new) / ctrl['I_t'] - 1.0) if galvano else 0.0
+            if self.ghost_a is not None:
+                diag['bal'] = (np.dot(w * ci * self._ghost(ci), ct_new) / ctrl['I_t'] - 1.0) \
+                    if galvano else 0.0
+            else:
+                diag['bal'] = (np.dot(w * ci, ct_new) / ctrl['I_t'] - 1.0) if galvano else 0.0
             lev_t = lev_new
             return np.concatenate([th_new, s_new, ct_new, phi_new / self.PHI_SC, [V_new / self.V_SC]])
 
@@ -1314,6 +1673,9 @@ class StepSolver:
                 # scaled by r_react and multiplies c_Cu_total -- the Cu balance still closes because
                 # i_f = r_react * ct * ci is the current that the deposit and the sink both use.
                 sink = p.efficiency * duty_f * w * ci * r_react / (2 * F * p.c_bulk)
+                if self.ghost_a is not None:
+                    # C4 ghost-fluid (see _init_ghost): a = d/(2F c_bulk D_Cu), i = r_react ct ci
+                    sink = sink * self._ghost(ci, scale=r_react)
                 A, bc = geo.sg_operator(phi_g, ph.z_cu, self.D_cu_a, ph.f_RT,
                                         chi_max=p.tertiary_chi_max, adv=self.adv)
                 self.sg_c.base = A
@@ -1336,7 +1698,8 @@ class StepSolver:
                     self.cs_p = CachedSym(geo, kp, lu=self.cs_p.lu if self.cs_p is not None else None)
                     src = self._diff_src(c_cu, c_h, c_s)
                     V_w, phi_w, _, nph = newton_potential(geo, self.cs_p, kin, w, ct_w, thk, acc_k, V_w, phi_w,
-                                                          ctrl['I_t'], galvano, src=src, eta_gt=self.eta_gt)
+                                                          ctrl['I_t'], galvano, src=src, eta_gt=self.eta_gt,
+                                                          i_ghost=self._ghost_scaled())
                 else:
                     V_w, phi_w, _, nph = self._nonohmic(w, ct_w, thk, acc_k, V_w, ctrl, galvano)
                 diag['nph'] += nph
@@ -1347,7 +1710,12 @@ class StepSolver:
             ci = (1 - thk) * gu_w + thk * gs_w
             # galvanostatic balance: newton_potential solved sum(w I) = I_t at this reactive ct, so bal is ~0
             # by construction here; convergence of the tertiary path rests on d_c / d_th (and ter['d_h']).
-            diag['bal'] = (np.dot(w * ci, ct_new * r_react) / ctrl['I_t'] - 1.0) if galvano else 0.0
+            if self.ghost_a is not None:
+                # C4 ghost-fluid: the transported interface flux of the node current r_react ct ci
+                diag['bal'] = (np.dot(w * ci * self._ghost(ci, scale=r_react), ct_new * r_react)
+                               / ctrl['I_t'] - 1.0) if galvano else 0.0
+            else:
+                diag['bal'] = (np.dot(w * ci, ct_new * r_react) / ctrl['I_t'] - 1.0) if galvano else 0.0
             lev_t = lev_new
             return np.concatenate([th_new, s_new, ct_new, phi_w / self.PHI_SC, [V_w / self.V_SC]])
 
@@ -1420,12 +1788,18 @@ class StepSolver:
         thk_f = displace_suppressor(th, ta) if full else th
         acc_f = acc_now(th_l_new) if lev_on else acc_a
         if galvano:
-            V = scalar_V_cathodic(kin, w, ct_r, thk_f, acc_f, phi, ctrl['I_t'], V0=V, eta_gt=self.eta_gt)
+            V = scalar_V_cathodic(kin, w, ct_r, thk_f, acc_f, phi, ctrl['I_t'], V0=V, eta_gt=self.eta_gt,
+                                  i_ghost=self._ghost_scaled())
         eta = V - phi                               # physical (reported) overpotential
         eta_k = eta if self.eta_gt is None else eta - self.eta_gt   # D6: what the kinetics see
         gu, gs = kin.cath(eta_k, acc_f)
         ci = (1 - thk_f) * gu + thk_f * gs
         i_f = ct_r * ci                            # forward cathodic current density per cell (A/cm2)
+        if self.ghost_a is not None:
+            # C4: i_f is reported at the INTERFACE (the node value rejected by the ghost-fluid factor),
+            # so sum(w i_f) is the transported interface current that the sink actually consumes (and
+            # that the Cu2+ balance and the level-set speed use), not the node value ci*ct.
+            i_f = i_f * self._ghost(ci, scale=self.r_react)
         info['I_f'] = float(np.dot(w, i_f))
         st['V'] = V
         if ctrl['pr']:
@@ -1456,7 +1830,8 @@ class StepSolver:
         n = self.geo.n
         phi = np.zeros(n)
         if galvano:
-            V = scalar_V_cathodic(self.kin, w, ct, th, acc, phi, ctrl['I_t'], V0=V, eta_gt=self.eta_gt)
+            V = scalar_V_cathodic(self.kin, w, ct, th, acc, phi, ctrl['I_t'], V0=V, eta_gt=self.eta_gt,
+                                  i_ghost=self._ghost_scaled())
         else:
             V = ctrl['V_set']
         eta = V - phi if self.eta_gt is None else V - phi - self.eta_gt

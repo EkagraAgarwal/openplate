@@ -249,6 +249,20 @@ class Params:
     max_overburden_um: float | None = None     # None -> 0.4 H for d >= 500 um else 80 um
     dx_um: float | None = None                 # None -> clamp(a/15, 0.75, 8)
     corner_cells: float = 1.0                  # initial corner rounding radius in cells
+    # ---- plan v2 C4: interface representation of the transport geometry (fields.StepGeom)
+    #   'diffuse' (default, LEGACY, bit-identical): smoothed-boundary band Hs = 0.5(1+tanh(psi/eps)),
+    #       face conductances weighted by Hs, interface weights w_p = V_p |grad Hs|_p.  The band smears
+    #       the sink over ~1.2 dx, which biases the flux in narrow gaps and at the floor (first-order
+    #       error in the interface position).
+    #   'sharp'  : cut-cell / ghost-fluid interface.  Cell electrolyte fractions from
+    #       levelset.electrolyte_fraction, face apertures from a linear psi interpolation along each
+    #       face, the interface area of a cut cell from the chord of the linear level-set
+    #       reconstruction, and the sink placed on the cut cell (merged into the majority neighbour when
+    #       the cut cell centre lies in the metal) with its rate corrected to the ghost-fluid distance
+    #       |psi| (k_eff = k / (1 + k |psi| / D)).  This makes the 1-D planar steady limiting current
+    #       exact for the discrete resistance chain (2nd order in the front position instead of 1st).
+    #       See fields.StepGeom for the small-cell rule and the documented approximations.
+    interface: str = "diffuse"                 # 'diffuse' | 'sharp'
     # ---- numerics
     eps_fac: float = 1.2                       # interface half-width eps = eps_fac * dx
     n_active_eps: float = 3.5                  # solve where psi > -n_active_eps * eps
@@ -306,6 +320,7 @@ ADV_SCHEMES = ("upwind", "sg", "tvd")
 LS_SCHEMES = ("godunov1", "weno5")
 BULK_PLANES = ("edge", "field_mean", "fixed")
 ADDITIVES_MODES = ("legacy", "cl_ndr", "full")
+INTERFACES = ("diffuse", "sharp")
 
 
 def derive(p: Params, T_C: float) -> Phys:
@@ -327,6 +342,8 @@ def derive(p: Params, T_C: float) -> Phys:
         raise ValueError(f"bulk_plane must be one of {BULK_PLANES}, got {p.bulk_plane!r}")
     if p.additives not in ADDITIVES_MODES:
         raise ValueError(f"additives must be one of {ADDITIVES_MODES}, got {p.additives!r}")
+    if p.interface not in INTERFACES:
+        raise ValueError(f"interface must be one of {INTERFACES}, got {p.interface!r}")
     if p.c_cl_bulk < 0.0:
         raise ValueError(f"c_cl_bulk must be >= 0, got {p.c_cl_bulk!r}")
     if p.c_lev_bulk < 0.0:
