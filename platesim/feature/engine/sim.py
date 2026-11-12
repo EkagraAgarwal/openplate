@@ -11,8 +11,9 @@ import scipy.ndimage as ndi
 
 from .params import F, Params, derive
 from .levelset import (Grid, initial_psi, reinit, extend, advect, band_average, electrolyte_fraction, column_crossing,
-                       contour_lines, curvature_div_n, label_regions, UM)
-from .fields import StepGeom, StepSolver, theta_be
+                       contour_lines, curvature_div_n, label_regions, volume_correct, NARROW_CELLS, UM)
+from .fields import StepGeom, StepSolver, bulk_speciation, theta_be, additive_set
+from .additives import (reverse_pulse_desorption, suppressor_cl_rate)
 from .recipes import Recipe, pr_forward
 
 
@@ -53,6 +54,9 @@ class ViaSim:
                       geometry=p.geometry)
         g = self.g
         self.psi = initial_psi(g, p.corner_cells)
+        # Bulk-plane rule C5 'fixed': freeze the INITIAL face height for the whole run, so the delta plane
+        # stays put while the front rises towards it (the run stops 3 dx short, see run()).
+        self.z_face0 = self._face_height_edge() if p.bulk_plane == "fixed" else None
         shp = (g.nr, g.nz)
         self.st = dict(theta=np.full(shp, p.theta0 if p.suppressor else 0.0), theta_a=np.zeros(shp),
                        s=np.ones(shp), ctil=np.ones(shp), phi=np.zeros(shp), phi_r=np.zeros(shp),
@@ -61,8 +65,39 @@ class ViaSim:
             # explicit species state (absolute mol/cm3); Cu2+ stays normalised in st['ctil'] and the Cu
             # snapshot/series keep reading st['ctil'].  StepSolver would create these lazily, so seeding
             # them here makes the initial state explicit and keeps it in the step-backup/reject cycle.
+            # With speciation these stay the LUMPED analytical pools (fully dissociated reference): the
+            # bulk free-Cu fraction and its activity coefficient are applied to the kinetics and the
+            # conductivity, not to the transported state (frozen-speciation approximation, plan v2 D1b).
             self.st['c_h'] = np.full(shp, self.ph.c_h_bulk)
             self.st['c_so4'] = np.full(shp, self.ph.c_so4_bulk)
+        # ---- plan v2 D2 state.  'cl_ndr'/'full' carry the Cl- adlayer coverage per interface cell (extended
+        # along the front like st['theta']); 'full' additionally carries the leveller coverage and, when the
+        # bath has a leveller (c_lev_bulk > 0), the transported normalised leveller field.
+        self.cl_on = p.additives in ("cl_ndr", "full") and bool(p.suppressor)
+        self.lev_on = p.additives == "full" and p.c_lev_bulk > 0.0
+        self.aset = additive_set(p) if p.additives != "legacy" else None
+        if p.additives != "legacy":
+            if p.suppressor:
+                self.st['theta_cl'] = np.zeros(shp)
+            if p.additives == "full":
+                self.st['theta_l'] = np.zeros(shp)
+                if self.lev_on:
+                    self.st['lev'] = np.ones(shp)
+        # ---- plan v2 E2: Lagrangian H2 bubbles.  bubble_init injects attached bubbles at t = 0 (the
+        # injection hook the tests use for a single bubble on the floor); nucleation then adds bubbles where
+        # the H2 wall layer super-saturates (see advance_bubbles).  Empty and unused when bubbles=False.
+        self.bubbles = []
+        self._bubble_rng = None
+        if p.bubbles:
+            from ...bubbles.shading import Bubble
+            self._bubble_rng = np.random.default_rng(int(p.bubble_seed))
+            for row in tuple(p.bubble_init or ()):
+                x_um, z_um, r_um = (float(v) for v in tuple(row)[:3])
+                self.bubbles.append(Bubble(x_um, z_um, r_um, attached=True,
+                                           theta_deg=float(p.bubble_contact_deg)))
+        # Bulk bath speciation at setup (plan v2 D1b): None when speciation is off.  Computed once here
+        # for diagnostics/tests; StepSolver reuses the cached result through fields.bulk_speciation.
+        self.spec = bulk_speciation(p, self.ph) if (p.transport == "tertiary" and p.speciation) else None
         ef0 = electrolyte_fraction(self.psi, g)
         self.via_mask = g.via_w > 0.5                                           # boolean: used by the sealing test
         self.cav0 = float((g.vol * ef0 * g.via_w).sum())
@@ -78,7 +113,10 @@ class ViaSim:
         self.void_records: list[dict] = []
 
     # ------------------------------------------------------------------ geometry diagnostics
-    def face_height(self, psi=None):
+    def _face_height_edge(self, psi=None):
+        """Legacy plane height (bulk_plane='edge'): mean of the two field columns at x ~ 0 and x ~ pitch for
+        the periodic trench_full cell, the wall column for the half-domain trench, the domain top for the
+        via, or the mean over all columns of a flat slab.  Bit-identical to the pre-C5 rule."""
         if self.g.f_open >= 0.999:                 # 1-D slab test geometry: flat interface
             if not self.g.periodic_x:
                 return self.g.H                    # via / trench slab test: the wall is the top of the domain
@@ -103,6 +141,39 @@ class ViaSim:
             return float(np.mean(zs)) if zs else g.H
         _, z = column_crossing(psi[-1], self.g.zc[0], upper=True)
         return z if z is not None else self.g.H
+
+    def face_height(self, psi=None):
+        """Height z of the diffusion boundary-layer (delta) plane above the deposit.
+
+        bulk_plane (plan v2 C5) only changes the PERIODIC trench_full cell:
+          'edge'       (default, legacy, bit-identical) mean of the two field columns x ~ 0 / x ~ pitch.
+                       Two columns is a poor sample of the field when the deposit on the shoulder differs
+                       from the field far from the wall, so the plane inherits shoulder structure.
+          'field_mean' mean psi = 0 crossing over EVERY column on the field, i.e. whose x lies outside the
+                       trench opening (|x - x_c| > a, Grid.rc / Grid.x_c / Grid.a).  Falls back to 'edge'
+                       when no such column has a crossing (opening spans the pitch).
+          'fixed'      the INITIAL face height frozen at construction (self.z_face0): the plane does not
+                       follow the front at all, so the delta layer thins as the deposit grows.  Callers
+                       report this frozen height as the plane, not as the front (the front is in the
+                       floor_*_um / field_*_um series keys), and run() stops 3 dx before the front reaches
+                       the plane.
+        Non-periodic geometries (via, trench) ignore the switch: there is a single wall column, and the
+        flat-slab test geometry (f_open >= 0.999) keeps its mean-over-all-columns rule from
+        _face_height_edge for every value."""
+        g, p = self.g, self.p
+        if g.periodic_x and g.f_open < 0.999 and p.bulk_plane != "edge":
+            if p.bulk_plane == "fixed":
+                return self.z_face0
+            psi = self.psi if psi is None else psi
+            off = np.abs(g.rc[:, 0] - g.x_c)        # |x - pitch/2|: the trench opening is |x - x_c| <= a
+            zs = []
+            for i in np.nonzero(off > g.a)[0]:      # field columns only
+                _, z = column_crossing(psi[i], g.zc[0], upper=True)
+                if z is not None:
+                    zs.append(z)
+            if zs:
+                return float(np.mean(zs))
+        return self._face_height_edge(psi)
 
     def fill_fraction(self, ef=None):
         ef = electrolyte_fraction(self.psi, self.g) if ef is None else ef
@@ -174,8 +245,80 @@ class ViaSim:
     def solid_volume(self):
         return float((self.g.vol * (1 - electrolyte_fraction(self.psi, self.g))).sum())
 
+    # ------------------------------------------------------------------ H2 micro-bubbles (plan v2 E2)
+    def bubble_mask(self, psi=None):
+        """Per-cell shading factor in [0, 1] of the attached bubbles (1 = unshaded), or None.
+
+        Thin wrapper over ``platesim.bubbles.shading.shading_mask``: the engine grid starts at
+        z_lo = -nbot*dx, so the cell-centre origin is passed explicitly, and x wraps for trench_full.
+        """
+        if not self.bubbles:
+            return None
+        from ...bubbles.shading import shading_mask
+        g = self.g
+        return shading_mask(self.psi if psi is None else psi, g.dx, self.bubbles,
+                            periodic=g.periodic_x,
+                            origin_cm=(float(g.rc[0, 0]), float(g.zc[0, 0])), band_cells=1.0)
+
+    def advance_bubbles(self, geo, out, dt, flow=None, delta_um=None):
+        """One step of the Lagrangian H2 bubbles: supersaturation -> nucleation -> growth/rise/detachment.
+
+        H2 partial current: ONE ``platesim.efficiency.side_reactions.faradaic_efficiency`` solve per step at
+        the interface-mean current density and overpotential.  That module's API is scalar per operating
+        point (it brentq-solves the shared electrode potential and returns ``j_H2_A_cm2``); calling it per
+        cell would cost ~1e3 roots per step, so its j_H2 is distributed over the front cells in proportion
+        to the local cathodic current -- a [J] surrogate for the full shared-potential HER solve (the HER
+        branch is much flatter in eta than the Cu branch, so the true HER field is *more* uniform than this).
+
+        The wall supersaturation (steady 1-D H2 layer), the nucleation draw and the bubble growth all go
+        through ``platesim.bubbles.shading`` (``h2_nucleation_sites`` / ``step_bubbles``).  ``p.bubble_supersat``
+        is an imposed far-field H2 supersaturation entering the same Henry balance (it is what holds a
+        seeded bubble at its equilibrium radius in a bath with no H2 in it).
+
+        ``flow`` is the engine's cell-centred (ux, uz) field: for flow_solver='stokes' that is the
+        stokes solution's own face-to-centre velocity (``solve_stokes(...).ux/uz``), which is what
+        ``step_bubbles`` interpolates; the raw MAC faces are not accepted by that API.
+        """
+        g, p = self.g, self.p
+        from ...bubbles import physics as bphys
+        from ...bubbles import shading as bsh
+        w = geo.w
+        sw = float(w.sum())
+        i_f = out['i_f']
+        jbar = float(np.dot(w, i_f) / sw) if sw > 0.0 else 0.0
+        etabar = float(np.dot(w, out['eta']) / sw) if sw > 0.0 else 0.0
+        d_um = float(p.delta_um if delta_um is None else delta_um)
+        beta_h2 = 0.0
+        if jbar > 0.0:
+            from ...efficiency import side_reactions as sr
+            r = sr.faradaic_efficiency(jbar, etabar, d_um, p.bubble_pH, T_C=self.T_C, use_orr=False)
+            beta_h2 = float(r['j_H2_A_cm2']) / jbar
+        j_h2 = np.zeros((g.nr, g.nz))
+        j_h2[geo.act] = beta_h2 * np.maximum(i_f, 0.0)
+        # ---- nucleation: only where the H2 wall layer exceeds the threshold (the seeded RNG makes a run
+        # reproducible).  c_sat is Henry's law at 1 atm [J]; bubble_supersat is folded in as dissolved H2.
+        c_sat = bphys.K_H_H2_MOL_L_ATM * 1e-3                  # mol/cm3
+        org = (float(g.rc[0, 0]), float(g.zc[0, 0]))
+        room = max(int(p.bubble_max) - len(self.bubbles), 0)
+        nuc = bsh.h2_nucleation_sites(j_h2, float(p.bubble_supersat_threshold), rng=self._bubble_rng,
+                                      delta_cm=d_um * UM,
+                                      c_bulk_mol_cm3=(1.0 + max(float(p.bubble_supersat), 0.0)) * c_sat,
+                                      rate_per_cell=float(p.bubble_rate_per_cell),
+                                      R0_um=float(p.bubble_R0_um), theta_deg=float(p.bubble_contact_deg),
+                                      dx_cm=g.dx, origin_cm=org, periodic=g.periodic_x,
+                                      max_sites=room)
+        if nuc['x_um'] is not None and room > 0:
+            for x, z, r0 in zip(nuc['x_um'], nuc['z_um'], nuc['R0_um']):
+                self.bubbles.append(bsh.Bubble(float(x), float(z), float(r0), attached=True,
+                                               theta_deg=float(p.bubble_contact_deg)))
+        if self.bubbles:
+            bsh.step_bubbles(self.bubbles, dt, flow=flow, supersat_field=nuc['supersat_field'],
+                             psi=self.psi, dx_cm=g.dx, origin_cm=org, periodic=g.periodic_x,
+                             gravity_dir=(0.0, -1.0), T_C=self.T_C)
+            self.bubbles = [b for b in self.bubbles if b.alive]
+
     # ------------------------------------------------------------------ resolved cavity flow (trench_full)
-    def cavity_flow(self, shear_rate_s):
+    def cavity_flow(self, shear_rate_s, delta_um=None):
         """LBM (default) or MAC Stokes shear flow over the current level set.  Returns (ux, uz) arrays shaped
         (nr, nz) in cm/s.
 
@@ -187,16 +330,54 @@ class ViaSim:
         face velocities in self.flow_faces = (u_face_x.T, u_face_z.T), shapes (nr, nz) and (nr, nz+1):
         u_face_x.T[i, j] is the x-face between cells (i-1, j) and (i, j) (face i = 0 is the periodic seam
         between columns nr-1 and 0), u_face_z.T[i, m] is the z-face between rows m-1 and m.  Those are the
-        fluxes of the conservative advection operator (StepGeom.mac_advection)."""
+        fluxes of the conservative advection operator (StepGeom.mac_advection).
+
+        Solutal buoyancy (p.buoyancy, Stokes only): the Boussinesq body force is built from the current
+        normalised Cu2+ field self.st['ctil'] and passed to solve_stokes as body_force, so it is re-derived
+        from the latest concentration on every flow update.  rho = rho0 (1 + beta (c - c_b)) gives the
+        force per unit mass f = (rho/rho0 - 1) g = beta (c - c_b) g with c_b = c_bulk (mol/L), i.e.
+
+            f = g_cm_s2 * beta_cu_L_mol * c_bulk_mol_L * (ctil - 1) * gravity_dir        [cm/s2]
+
+        so a depleted cell (ctil < 1) is pushed AGAINST gravity (lighter electrolyte rises) and gravity_dir
+        is the direction of the gravitational acceleration in the cross-section: (1, 0) across the trench,
+        (0, -1) wafer face-up, (0, 0) along the trench (no in-plane force -> buoyancy is exactly idle).
+        Above the diffusion boundary layer (the delta plane) the bulk is unperturbed, ctil = 1;
+        ``delta_um`` defaults to p.delta_um and the running recipe passes its own value.
+        The max buoyant speed of the field (cm/s) is recorded in self.flow_info['buoyant_speed_cm_s'].
+        """
         from ...trenchflow.geometry import CavityGrid
         g = self.g
+        body = None
+        if self.p.buoyancy:
+            if self.p.flow_solver != "stokes":
+                raise ValueError("buoyancy=True requires flow_solver='stokes': the LBM path of "
+                                 "cavity_lbm.solve_flow has no body-force term.  Set "
+                                 "Params(flow_solver='stokes') or Params(buoyancy=False).")
+            p = self.p
+            gx, gz = (float(v) for v in p.gravity_dir)
+            c_bulk_mol_L = p.c_bulk * 1e3
+            fac = p.g_cm_s2 * p.beta_cu_L_mol * c_bulk_mol_L      # cm/s2 per unit (ctil - 1)
+            ctil = np.array(self.st['ctil'], dtype=np.float64).T  # engine (nr, nz) -> grid (nz, nr)
+            d_um = p.delta_um if delta_um is None else float(delta_um)
+            z_um = (g.zc - g.H).T                                 # height above the wafer plane, um
+            z_plane_um = (self.face_height() + d_um * UM - g.H) / UM
+            ctil = np.where(z_um > z_plane_um + 0.5 * g.dx_um, 1.0, ctil)
+            f = fac * (ctil - 1.0)
+            body = (gx * f, gz * f)
         grid = CavityGrid(dx_um=g.dx_um, x_um=g.rc[:, 0] / UM, z_um=(g.zc[0] - g.H) / UM,
                           solid=(self.psi <= 0).T.copy(), width_um=g.d_um, depth_um=g.H_um,
                           pitch_um=g.R_um, height_um=(g.z_top - g.H) / UM, deposit_um=0.0)
         if self.p.flow_solver == "stokes":
             from ...trenchflow.stokes import solve_stokes
-            ff = solve_stokes(grid, float(shear_rate_s))
+            ff = solve_stokes(grid, float(shear_rate_s), body_force=body)
             self.flow_info = ff.info
+            if body is not None:
+                # max speed of the buoyant part alone: solve it on its own when shear is present (Stokes
+                # is linear, so a shear-only solve plus this one is the combined field)
+                buoy = ff if float(shear_rate_s) == 0.0 else solve_stokes(grid, 0.0, body_force=body)
+                self.flow_info['buoyant_speed_cm_s'] = float(
+                    max(np.abs(buoy.ux).max(), np.abs(buoy.uz).max()))
             self.flow_faces = (np.ascontiguousarray(ff.info["u_face_x"].T),
                                np.ascontiguousarray(ff.info["u_face_z"].T))
             return ff.ux.T.copy(), ff.uz.T.copy()
@@ -298,6 +479,8 @@ class ViaSim:
             series.update({key: [] for key in ('field_mean_um', 'field_min_um', 'field_max_um', 'field_std_um',
                                                'floor_mean_um', 'floor_min_um', 'floor_max_um',
                                                'plane_gap_min_um')})
+        if p.bubbles:                          # plan v2 E2 diagnostics; absent (not NaN) when the switch is off
+            series.update({key: [] for key in ('n_bubbles', 'bubble_shade_frac')})
         frames, next_frame = [], 0.0
         frame_dt = T_total / 240.0
         stop_reason, fill_time = None, None
@@ -317,6 +500,13 @@ class ViaSim:
             if z_plane > g.z_top - 3 * g.dx:
                 stop_reason = 'overburden_exceeded'
                 break
+            if p.bulk_plane == "fixed":
+                # bulk_plane='fixed' (C5): the plane is frozen at the initial height, so the FRONT approaches
+                # it instead.  Stop 3 dx before contact: the Dirichlet layer needs a few cells of electrolyte
+                # above the front (the same margin the moving plane keeps below the domain top).
+                if self._face_height_edge() > z_plane - 3 * g.dx:
+                    stop_reason = 'overburden_exceeded'
+                    break
             geo = StepGeom(g, self.psi, z_plane, p)
             self.update_void_records(geo.void_m, t)
             # ---- stop test: open path sealed (a pocket exists and no open cavity remains below z = H)
@@ -330,7 +520,7 @@ class ViaSim:
                         or abs(z_face - flow_cache[2]) > p.flow_move_cells * g.dx
                         or abs(G_flow - flow_cache[3]) > 1e-9 * max(1.0, abs(G_flow)))
                 if need:
-                    ux_f, uz_f = self.cavity_flow(G_flow)
+                    ux_f, uz_f = self.cavity_flow(G_flow, delta_um=delta_um)
                     flow_cache = (ux_f, uz_f, z_face, G_flow, k, self.flow_faces)
                 flow = flow_cache[:2]
                 flow_faces = flow_cache[5]         # MAC faces (stokes) or None (lbm), engine orientation
@@ -339,7 +529,27 @@ class ViaSim:
                 flow = None
                 flow_faces = None
                 Dt = self.eddy_map(z_face, k_mix)
-            solver = StepSolver(geo, p, ph, Dt, reuse=lu_reuse, flow=flow, flow_faces=flow_faces)
+            # ---- plan v2 E2: bubble shading of the interface weights.  The mask is evaluated on the level set
+            # at the START of the step (causal) and multiplies geo.w inside StepSolver, so the unshaded part of
+            # the front carries the galvanostatic current (sum(w*shade*i) = I_t) and the shaded part does not
+            # grow.  A mask that would leave < 5 % of the interface current-carrying is ignored (degenerate
+            # bubble coverage: the model is not meant to resolve a front that is almost fully covered).
+            shade_act = None
+            mask_full = None
+            if p.bubbles and self.bubbles:
+                mask = self.bubble_mask()
+                if mask is not None:
+                    frac = float(np.dot(geo.w, mask[geo.act]) / max(float(geo.w.sum()), 1e-300))
+                    if frac > 0.05:
+                        shade_act = mask[geo.act]
+                        mask_full = mask
+            solver = StepSolver(geo, p, ph, Dt, reuse=lu_reuse, flow=flow, flow_faces=flow_faces,
+                                shade=shade_act)
+            # interface weights of the fronts that actually carry current: the shaded ones must be used by the
+            # current diagnostics and by the level-set speed, otherwise the deposit volume and q_total would be
+            # the UNSHADED current (E2: the galvanostatic constraint is on sum(w*shade*i)).
+            w_int = geo.w if shade_act is None else geo.w * shade_act
+            w_full_eff = geo.w_full if mask_full is None else geo.w_full * mask_full
             # ---- control
             if step.j_mA_cm2 is not None:
                 pr = step.pr
@@ -386,7 +596,12 @@ class ViaSim:
             i_net = ctrl['duty_f'] * out['i_f'] - ctrl['duty_r'] * out['i_a']      # time-averaged net current (A/cm2)
             icell = np.zeros((g.nr, g.nz))
             icell[act] = i_net
-            i_s = band_average(self.psi, geo.w_full, icell, g)                       # interface value (see levelset)
+            i_s = band_average(self.psi, w_full_eff, icell, g)                       # interface value (see levelset)
+            if mask_full is not None:
+                # plan v2 E2: band_average also averages over unshaded electrolyte cells of the (up to 5 dx
+                # wide) band that project onto the same interface point, so the interface speed must be
+                # masked as well or the front would still advance under a bubble.
+                i_s = i_s * mask_full
             vfield = ph.Mfac * i_s
             vfield[np.abs(self.psi) > 3 * g.dx] = 0.0
             _, vext = extend(self.psi, vfield, g.dx)
@@ -441,17 +656,42 @@ class ViaSim:
                 cu_plane = float(np.sum(np.maximum(-F_top, 0.0) - np.maximum(F_top, 0.0) * c_top))
                 cu_step += cu_plane * p.c_bulk * dt
                 cu_adv_step = 0.0
+            # ---- plan v2 D2 coverage housekeeping with the TRUE dt (the solver integrated dt_pred): theta_be is
+            # re-stepped when the CFL clip shortened the step, the Cl- adlayer is advanced every step, the
+            # leveller coverage likewise, and on a PR recipe every organic loses coverage over the reverse
+            # fraction of the cycle (additives.reverse_pulse_desorption, p.k_rd).
+            v_cell = ph.Mfac * (ctrl['duty_f'] * out['i_f'] - ctrl['duty_r'] * out['i_a'])   # cm/s, growth > 0
             if p.suppressor and dt < 0.9 * dt_pred:
                 # shorter step than predicted: redo the (cell-local) coverage update with the true dt
-                acc = (1.0 + p.b_acc * st['theta_a'][act]) if p.use_accel else 1.0
-                b_ex = p.k_rd * ctrl['duty_r'] * out['i_a'] / 1e-3 if ctrl['pr'] else 0.0
-                th = theta_be(out['th0'], dt, p.k_plus * p.s_bulk * out['s_t'], ph.Mfac * out['ct'] * out['gu'],
-                              ph.Mfac * out['ct'] * out['gs'], p.k_minus * ctrl['duty_f'], b_ex)
+                acc = (1.0 + p.b_acc * st['theta_a'][act]) if (p.use_accel or p.additives == "full") else 1.0
+                b_ex = (0.0 if p.additives == "full" else
+                        (p.k_rd * ctrl['duty_r'] * out['i_a'] * (1.0 - p.pr_dl_fraction) / 1e-3
+                         if ctrl['pr'] else 0.0))
+                a_rate = p.k_plus * p.s_bulk * out['s_t']
+                if self.cl_on:
+                    a_rate = suppressor_cl_rate(p.s_bulk * out['s_t'], st['theta_cl'][act],
+                                                p.k_plus, n_cl=self.aset.n_cl)
+                th = theta_be(out['th0'], dt, a_rate,
+                              ph.Mfac * out['ct_react'] * out['gu'],
+                              ph.Mfac * out['ct_react'] * out['gs'], p.k_minus * ctrl['duty_f'], b_ex)
                 st['theta'][act] = th
+            if self.cl_on:
+                st['theta_cl'][act] = self.aset.chloride_step(backup['theta_cl'][act], dt,
+                                                              c_cl=p.c_cl_bulk, v=v_cell)
+            if self.lev_on and dt < 0.9 * dt_pred:
+                st['theta_l'][act] = self.aset.leveller_step(
+                    backup['theta_l'][act], dt, c_l=p.c_lev_bulk * np.clip(st['lev'][act], 0.0, None),
+                    v=v_cell)
+            if p.additives == "full" and ctrl['pr'] and p.k_rd > 0.0:
+                dt_rev = dt * ctrl['duty_r'] * (1.0 - p.pr_dl_fraction)
+                for key in ('theta', 'theta_a', 'theta_l'):
+                    if key in st:
+                        st[key][act] = reverse_pulse_desorption(st[key][act], dt_rev, out['i_a'],
+                                                               k_rd=p.k_rd, i_ref=1e-3)
             # ---- diagnostics before the interface moves
             ef = electrolyte_fraction(self.psi, g)
             fill = self.fill_fraction(ef)
-            I_net = float(np.dot(geo.w, ctrl['duty_f'] * out['i_f'] - ctrl['duty_r'] * out['i_a']))
+            I_net = float(np.dot(w_int, ctrl['duty_f'] * out['i_f'] - ctrl['duty_r'] * out['i_a']))
             z_fl, (eta_fl, th_fl, c_fl) = self.sample_column(
                 g.nr // 2 if g.periodic_x else 0,
                 [st['V'] - st['phi'] if p.ohmic else np.full((g.nr, g.nz), st['V']), st['theta'], st['ctil']])
@@ -480,6 +720,11 @@ class ViaSim:
             if g.periodic_x:                   # trench_full: whole-pitch front statistics (see field_floor_metrics)
                 for key, val in self.field_floor_metrics(z_plane).items():
                     series[key].append(val)
+            if p.bubbles:
+                series['n_bubbles'].append(float(sum(1 for b in self.bubbles if b.alive)))
+                series['bubble_shade_frac'].append(
+                    0.0 if shade_act is None else
+                    float(1.0 - np.dot(geo.w, shade_act) / max(float(geo.w.sum()), 1e-300)))
             max_bal = max(max_bal, abs(info['bal']))
             tot_it += info['it']
             if progress is not None:
@@ -498,22 +743,56 @@ class ViaSim:
                 stop_reason = 'filled'
                 break
             # ---- advance the interface
-            psi_new = advect(self.psi, vext, dt, g)
-            if p.use_accel:
+            psi_new = advect(self.psi, vext, dt, g, scheme=p.ls_scheme,
+                             band_cells=(p.ls_band_cells if p.ls_narrow_band else None))
+            if p.ls_volume_correct:
+                # Plan v2 C3: the Godunov/WENO5 advance conserves neither the enclosed volume (0.2-0.8 %
+                # Faraday error per fill) nor the corners.  Shift psi inside the narrow band to the solid
+                # volume the charge passed so far must have deposited, solid0 + q*Mfac (Mfac = M_Cu/(2 F rho)
+                # x efficiency, the same convention as the growth velocity and the reported Faraday check).
+                # Done BEFORE the reinit/extend below, as a volume-preserving redistancing would be; the shift
+                # is a pure translation of the zero set, so it does not move corners.
+                q_step = self.q_total + I_net * dt
+                band_cells = float(p.ls_band_cells) if p.ls_narrow_band else float(NARROW_CELLS)
+                psi_new = volume_correct(psi_new, self.solid0 + q_step * ph.Mfac, g, band_cells)
+            if p.use_accel and p.additives != "full":
                 kap = np.clip(-curvature_div_n(self.psi, g), -1 / (2 * g.dx), 1 / (2 * g.dx))
                 ta = st['theta_a']
                 ta = np.clip(ta + dt * (p.k_acc * p.c_acc * (1 - ta) + ta * kap * vext), 0.0, 1.0)
                 st['theta_a'] = ta
+            if p.additives == "full":
+                # Plan v2 D2: the CEAC accelerator uses the exact exponential Langmuir step and the area-change
+                # (curvature) term of additives.accelerator_step on the pre-step level set.  Sign: the engine's
+                # `kap` above is -div n and the update is ta*(1 + kap*v*dt), i.e. d theta/dt = ... - theta kappa v
+                # with kappa = div n, which is exactly the argument accelerator_step expects.
+                kap_a = np.clip(curvature_div_n(self.psi, g), -1 / (2 * g.dx), 1 / (2 * g.dx))
+                st['theta_a'] = self.aset.accelerator_step(st['theta_a'], dt, c_a=p.c_acc, v=vext,
+                                                           kappa=kap_a)
             d_new, th_ext = (extend(psi_new, st['theta'], g.dx, periodic=g.periodic_x)
                              if p.suppressor else (None, None))
             if p.suppressor:
                 st['theta'] = th_ext
-            if p.use_accel:
+            if self.cl_on:
+                _, st['theta_cl'] = extend(psi_new, st['theta_cl'], g.dx, periodic=g.periodic_x)
+            if p.use_accel or p.additives == "full":
                 _, st['theta_a'] = extend(psi_new, st['theta_a'], g.dx, periodic=g.periodic_x)
+            if p.additives == "full":
+                _, st['theta_l'] = extend(psi_new, st['theta_l'], g.dx, periodic=g.periodic_x)
             if k % p.reinit_every == 0:
                 self.psi = d_new if d_new is not None else reinit(psi_new, g.dx, periodic=g.periodic_x)
+                if p.ls_volume_correct:
+                    # The FMM re-initialisation re-solves |grad psi| = 1 without the Sussman constraint, so it
+                    # drifts the enclosed volume again (measured ~3e-3 of the deposit over 13 steps at dx 8).
+                    # Re-impose the SAME per-step target after it, so the switch holds the deposit volume at
+                    # the Faraday value at the end of every step too (before-reinit correction above handles
+                    # the advection drift, this one the redistancing drift).  Only on steps that reinitialise.
+                    self.psi = volume_correct(self.psi, self.solid0 + q_step * ph.Mfac, g, band_cells)
             else:
                 self.psi = psi_new
+            if p.bubbles:
+                # plan v2 E2: grow / rise / detach on the ADVANCED level set with the accepted dt, so the next
+                # step's shading mask sees the bubbles at the current front.
+                self.advance_bubbles(geo, out, dt, flow=flow, delta_um=delta_um)
             self.q_total += I_net * dt                          # charge of the step just taken (front advanced)
             self.cu_influx += cu_step                           # ... and its Cu2+ influx (same accepted steps)
             self.cu_adv += cu_adv_step                          # ... and its net advective Cu2+ source
@@ -539,6 +818,14 @@ class ViaSim:
                 series[key].append(series[key][-1] if series[key] else np.nan)
         cu_dep = self.q_total * p.efficiency / (2 * F)      # moles of Cu in the deposit (net charge x efficiency)
         self.cu_balance_rel = float(self.cu_influx / cu_dep - 1.0) if cu_dep > 0 else None
+        # Faraday check of the level set (plan v2 C3): deposit volume as electrolyte_fraction sees it vs the
+        # volume the charge must have deposited, q * Mfac with Mfac = M_Cu/(2 F rho_Cu) * efficiency (cm3/C),
+        # which is the growth velocity's own factor.  This is the number convergence.py quotes (0.2-0.8 %
+        # before ls_volume_correct, ~0 with it - by construction, so it is a robustness check, not a
+        # measurement of scheme accuracy).
+        faraday_volume = self.q_total * ph.Mfac
+        faraday_error_rel = (float((self.solid_volume() - self.solid0 - faraday_volume) / faraday_volume)
+                             if faraday_volume > 0 else None)
         # honest version for the OPEN-top trench_full cell: the advective Cu2+ crossing of the Dirichlet plane
         # is not in cu_influx, and the 'gradient' operator is not discretely conservative, so the net advective
         # source of the operator is added on top of the diffusive influx (equal to cu_balance_rel when the
@@ -552,6 +839,7 @@ class ViaSim:
                     wall_s=_time.time() - t0_wall, face_thickness_um=(self.face_height() - g.H) / UM,
                     voids=[dict(rec, cls=self.classify(rec)) for rec in self.void_records],
                     solid_gain=self.solid_volume() - self.solid0, q_total=self.q_total,
+                    faraday_volume=faraday_volume, faraday_error_rel=faraday_error_rel,
                     cu_influx=self.cu_influx, cu_balance_rel=self.cu_balance_rel,
                     cu_adv=self.cu_adv, cu_balance_adv_rel=self.cu_balance_adv_rel)
         if progress is not None:

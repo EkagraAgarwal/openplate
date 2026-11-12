@@ -10,6 +10,11 @@ Checks (runtime budget < 60 s):
 * the suppressor mask (theta_block) blocks deposition on the masked columns;
 * the rate conversions F = j/(2 e N_s) and the bond-counted Arrhenius rate.
 
+E3b (dynamic additive layer): Langmuir isotherm (2 %), burial consumption
+theta = a / (a + p_incorp F), chloride-mediated co-adsorption, class-list
+bookkeeping (f_block / f_accel), effective_rates recovery (synthetic and kMC)
+and bit-identical default behaviour with the additive options off.
+
 The Family rule is used for the exponent test because the default Arrhenius
 parameters (E_d = 0.40 eV at 300 K -> 1.9e6 hops/s against F = 31 ML/s) put the
 physical model deep in the relaxation-limited regime: no growth regime is
@@ -23,8 +28,10 @@ import numpy as np
 import pytest
 
 from platesim.kmc import (
-    deposition_rate, deposition_rate_mA, hop_rate, interface_width, run_sos,
+    Additive, deposition_rate, deposition_rate_mA, effective_rates, hop_rate,
+    interface_width, run_sos,
 )
+from platesim.kmc.additive import A, BLOCKED, CL, EMPTY, S, AdditiveLayer
 
 F15 = deposition_rate_mA(15.0)          # 31.2075 /s at N_s = 1.5e15 cm^-2 [J]
 TARGETS_EW = (2.0, 3.0, 4.0, 6.0, 8.0, 12.0, 16.0, 24.0, 32.0)
@@ -173,3 +180,168 @@ def test_default_parameters_report():
     assert abs(beta_f - 0.25) <= 0.08
     assert res["W_final"] < 1.5, "300 K default must stay smooth (sub-2 ML width)"
 
+
+
+# ------------------------------------------------------------------- E3b: additive layer
+def _late_mean(res, key="cov_theta_S", fraction=0.5):
+    """Time-averaged coverage over the second (steady-state) half of the run."""
+    y = np.asarray(res[key], dtype=float)
+    return float(y[int(fraction * y.size):].mean())
+
+
+def test_additive_langmuir_isotherm():
+    """No deposition: theta -> K c / (1 + K c) with K = k_ads / k_des within 2 %.
+
+    Mean-field balance per site:  dtheta/dt = k_ads c (1 - theta) - k_des theta,
+    so theta_ss = a / (a + k_des) = K c / (1 + K c), a = k_ads c [1/s].
+    Columns are independent (F = 0, no hops), so time averaging removes the
+    binomial noise.
+    """
+    k_ads, k_des = 1.0e8, 100.0          # cm3/(mol s), 1/s [J]
+    for c, target in ((1.0e-6, 0.5), (3.0e-6, 0.75)):
+        res = run_sos(L=512, F=0.0, E_d_eV=10.0, coverage_ML=None,
+                      max_events=30_000, seed=1,
+                      additive=Additive(k_ads_S=k_ads, c_S=c, k_des_S=k_des))
+        theta = _late_mean(res)
+        print(f"\nLangmuir: c = {c:.1e} mol/cm3, K c = {k_ads * c / k_des:.0f}, "
+              f"theta = {theta:.4f} (target {target:.2f})")
+        assert abs(theta - target) / target <= 0.02, (theta, target)
+        assert res["events"]["deposition"] == 0
+        assert res["events"]["ads_S"] > 0 and res["events"]["des_S"] > 0
+
+
+def test_additive_burial_consumption():
+    """Deposition + p_incorp: theta -> a / (a + p_incorp F) for f_block = 0.
+
+    Derivation (per site, f_block = 0, k_des = 0): adsorption a (1 - theta);
+    burial p_incorp * F per deposition on the covered site, i.e. p_incorp F theta
+    in the mean field (deposition on a covered site still runs at F when
+    f_block = 0).  Steady state a (1 - theta) = p_incorp F theta.
+    """
+    k_ads, c, p_inc, F = 1.0e8, 1.0e-6, 0.2, F15
+    a = k_ads * c
+    target = a / (a + p_inc * F)
+    res = run_sos(L=256, F=F, E_d_eV=10.0, coverage_ML=None, max_events=60_000,
+                  seed=5, additive=Additive(k_ads_S=k_ads, c_S=c, p_incorp=p_inc,
+                                            f_block=0.0))
+    theta = _late_mean(res)
+    print(f"\nburial: a = {a:.1f} /s, p_incorp F = {p_inc * F:.2f} /s, "
+          f"theta = {theta:.4f} (target {target:.4f}), incorporated "
+          f"{res['additive']['n_incorp_S']}")
+    assert abs(theta - target) / target <= 0.02, (theta, target)
+    assert res["additive"]["n_incorp_S"] > 0
+    assert res["heights"].sum() == res["depositions"]
+    assert sum(res["events"].values()) == res["n_events"]
+    assert (res["events"]["ads_S"] - res["events"]["des_S"]
+            == res["additive"]["n_incorp_S"]
+            + round(res["additive"]["theta_S"] * res["L"]))
+
+
+def test_additive_cl_mediated_coadsorption():
+    """cl_mediated: no suppressor without an adsorbed Cl-, suppressor appears with it."""
+    kw: dict[str, Any] = {"L": 256, "F": 0.0, "E_d_eV": 10.0,
+                          "coverage_ML": None, "max_events": 20_000, "seed": 2}
+    bare = run_sos(**kw, additive=Additive(k_ads_S=1.0e8, c_S=1.0e-6, k_des_S=100.0,
+                                           cl_mediated=True))
+    assert bare["events"]["ads_S"] == 0
+    assert bare["additive"]["theta_S"] == 0.0
+    cl = run_sos(L=256, F=0.0, E_d_eV=10.0, coverage_ML=None, max_events=40_000,
+                 seed=2, additive=Additive(
+                     k_ads_S=1.0e8, c_S=1.0e-6, k_des_S=30.0, cl_mediated=True,
+                     k_ads_Cl=2.0e7, c_Cl=1.0e-6, k_des_Cl=200.0))
+    assert cl["events"]["ads_Cl"] > 0 and cl["events"]["ads_S"] > 0
+    assert 0.0 < cl["additive"]["theta_S"] < 1.0
+    assert 0.0 < cl["additive"]["theta_Cl"] < 1.0
+    print(f"\nCl-mediated: theta_S = {cl['additive']['theta_S']:.3f}, "
+          f"theta_Cl = {cl['additive']['theta_Cl']:.3f}, "
+          f"ads_S = {cl['events']['ads_S']}")
+
+
+def test_additive_class_bookkeeping():
+    """Deposition weights and the Cl- adjacency list (f_block, f_accel)."""
+    L = 6
+    left = [i - 1 if i > 0 else L - 1 for i in range(L)]
+    right = [i + 1 if i + 1 < L else 0 for i in range(L)]
+    spec = [EMPTY, S, A, CL, BLOCKED, EMPTY]
+    lay = AdditiveLayer(left, right, Additive(f_block=1.0, f_accel=3.0,
+                                              cl_mediated=True), spec)
+    w = lay.dep_weights(10.0, 1.0 - 1.0, 3.0)      # (empty, A, S, Cl)
+    assert w == pytest.approx((20.0, 30.0, 0.0, 10.0)), w
+    assert lay.additive_rates() == (0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+    # Cl- at column 0 makes columns 1 and L-1 the only S-adsorption candidates
+    empty = AdditiveLayer(left, right, Additive(cl_mediated=True),
+                          [EMPTY] * L)
+    assert empty.elig == []
+    empty.set_spec(0, CL)
+    assert set(empty.elig) == {1, L - 1}
+    empty.set_spec(1, S)
+    assert set(empty.elig) == {L - 1}
+    empty.set_spec(0, EMPTY)                       # Cl- leaves: no eligible site
+    assert empty.elig == []
+
+
+def test_effective_rates_synthetic():
+    """effective_rates inverts the continuum theta equation on a synthetic tallies run."""
+    L, k_ads, c, theta = 100, 1.0e8, 1.0e-6, 0.5
+    k_minus, v_ml, d_ml, T = 1.0e6, 0.4, 2.0e-8, 1.0
+    flux_ads = k_ads * c * (1.0 - theta)                 # 1/s per site
+    flux_inc = k_minus * v_ml * d_ml * theta             # 1/s per site
+    t = np.array([0.0, 0.5, 1.0, 1.5, 2.0])              # steady window = [1.0, 2.0]
+    res = {
+        "L": L,
+        "params": {"F": v_ml, "d_ML_cm": d_ml},
+        "additive_params": {"c_S": c},
+        "cov_t": t,
+        "cov_theta_S": np.array([0.0, theta, theta, theta, theta]),
+        "cum_ads_S": np.array([0.0, 0.0, 1000.0, 3000.0,
+                               1000.0 + flux_ads * L * T]),
+        "cum_inc_S": np.array([0.0, 0.0, 0.1, 0.2, 0.1 + flux_inc * L * T]),
+        "cum_inc_A": np.zeros(5),
+        "cum_h": np.array([0.0, 0.0, 10.0, 25.0, 10.0 + v_ml * L * T]),
+    }
+    eff = effective_rates(res)
+    print(f"\nsynthetic: theta = {eff['theta_S']:.3f}, k_plus = {eff['k_plus']:.3e} "
+          f"+- {eff['k_plus_err']:.1e} (input {k_ads:.1e}), k_minus = "
+          f"{eff['k_minus']:.3e} +- {eff['k_minus_err']:.1e} (input {k_minus:.1e})")
+    assert eff["theta_S"] == pytest.approx(theta, abs=1e-12)
+    assert eff["k_plus"] == pytest.approx(k_ads, rel=1e-10)
+    assert eff["k_minus"] == pytest.approx(k_minus, rel=1e-10)
+    assert eff["window_s"] == pytest.approx(T)
+    assert eff["k_plus_err"] > 0.0 and eff["k_minus_err"] > 0.0
+
+
+def test_effective_rates_recovers_kmc_inputs():
+    """A growth run with burial returns the input k_ads and p_incorp / d_ML."""
+    k_ads, c, p_inc = 1.0e8, 1.0e-6, 0.2
+    res = run_sos(L=256, F=F15, E_d_eV=10.0, coverage_ML=None, max_events=60_000,
+                  seed=5, additive=Additive(k_ads_S=k_ads, c_S=c, p_incorp=p_inc,
+                                            f_block=0.0))
+    eff = effective_rates(res)
+    k_minus_in = p_inc / eff["d_ML_cm"]                  # p_incorp / (F d_ML) * F
+    print(f"\nkMC: k_plus = {eff['k_plus']:.3e} +- {eff['k_plus_err']:.1e} "
+          f"(input {k_ads:.1e}), k_minus = {eff['k_minus']:.3e} +- "
+          f"{eff['k_minus_err']:.1e} (input {k_minus_in:.3e}), "
+          f"theta = {eff['theta_S']:.3f} +- {eff['theta_S_err']:.3f}")
+    assert abs(eff["k_plus"] - k_ads) / k_ads <= 0.05
+    assert abs(eff["k_minus"] - k_minus_in) / k_minus_in <= 0.05
+    assert eff["k_plus_err"] > 0.0 and eff["k_minus_err"] > 0.0
+
+
+def test_additive_off_is_bit_identical():
+    """additive=None (default) reproduces the E3a trajectory bit for bit."""
+    ref_t = 0.060334268683723685
+    ref_h = (1, 2, 3, 2, 1, 1, 2, 2, 3, 0, 3, 1, 2, 2, 5, 1, 1, 6, 3, 2, 3, 0,
+             1, 4, 4, 0, 2, 3, 1, 1, 2, 0)
+    kw: dict[str, Any] = dict(L=32, F=F15, E_d_eV=10.0, coverage_ML=2.0, seed=3)
+    base = run_sos(**kw)
+    explicit = run_sos(**kw, additive=None)
+    for key in ("t", "W", "h_mean", "heights"):
+        assert np.array_equal(base[key], explicit[key]), key
+    assert base["time_s"] == ref_t
+    assert base["n_events"] == 64
+    assert tuple(int(x) for x in base["heights"]) == ref_h
+    assert "additive" not in base and "cov_t" not in base
+
+    snap = run_sos(L=64, F=F15, T_K=350.0, coverage_ML=3.0, snapshots=4, seed=7)
+    assert snap["time_s"] == pytest.approx(0.09441597701608512, rel=0, abs=1e-15)
+    assert tuple(np.round(snap["h_mean"], 12)) == (0.0, 0.5, 0.921875, 1.65625, 3.0)

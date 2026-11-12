@@ -3,13 +3,19 @@
 Runtime budget < 2 min: one coupon pipeline solve (memoised across the tests), a
 handful of quick feature-scale predictions (dx 8 um, 2 flow stages), and two
 solver-free checks (summarize() intervals, resolution threading under monkeypatch).
+
+The two-way (Plan F1) tests at the bottom use SYNTHETIC sites and the coupon
+conditions of the memoised solve, so they need none of the withheld data files.
 """
 import math
 
+import numpy as np
 import pytest
 
 from platesim.feature.calibrate import load_sites
-from platesim.multiscale import cache_stats, clear_cache, predict_trench, site_conditions
+from platesim.multiscale import (cache_stats, clear_cache, coupon_area_map,
+                                 effective_area_factor, predict_trench,
+                                 rescale_coupon_currents, site_conditions)
 from platesim.multiscale.validate import GRID_CM, TRENCH_RUN, summarize
 from platesim.trenchflow.model import model_constants
 
@@ -191,3 +197,205 @@ def test_evaluate_grid_threads_resolution(monkeypatch):
     out = V.evaluate_grid(quick=True, jobs=1, resolution="fine")
     assert len(out) == len(V.GRID_CM) ** 2
     assert seen == ["fine"] * len(out)
+
+
+# ---------------------------------------------------------------------------
+# Plan F1: two-way coupon <-> trench coupling.
+# Synthetic sites only (the same keys ``load_sites`` validates), so none of the
+# withheld data files is needed.
+# ---------------------------------------------------------------------------
+_SYNTH_KEYS = ("width_um", "depth_um", "T_C", "j_mA_cm2", "hours", "field_um",
+               "floor_um")
+
+
+def _synthetic_site(site_id, width_um, depth_um, T_C=22.0, j_mA_cm2=15.0,
+                    hours=4.5, field_um=80.0, floor_um=53.0) -> dict:
+    """A synthetic SEM site: exactly the keys ``feature.calibrate.load_sites`` validates."""
+    site = {"id": site_id,
+            "width_um": float(width_um), "depth_um": float(depth_um),
+            "T_C": float(T_C), "j_mA_cm2": float(j_mA_cm2),
+            "hours": float(hours),
+            "field_um": {"best": float(field_um), "lo": float(field_um) - 11.0,
+                         "hi": float(field_um)},
+            "floor_um": {"best": float(floor_um), "lo": float(floor_um) - 3.0,
+                         "hi": float(floor_um) + 3.0}}
+    assert set(_SYNTH_KEYS) <= set(site)
+    return site
+
+
+@pytest.fixture(scope="module")
+def synthetic_sites():
+    return {"narrow": _synthetic_site("syn_narrow", 227.0, 88.0),
+            "wide": _synthetic_site("syn_wide", 944.0, 97.0),
+            "flat": _synthetic_site("syn_flat", 227.0, 0.0)}
+
+
+@pytest.fixture(scope="module")
+def narrow_area_map(centre, synthetic_sites):
+    """One 2x2 coupon two-way map for the narrow site (built once for the module)."""
+    return coupon_area_map(synthetic_sites["narrow"], f_open=0.2, n=2)
+
+
+def test_effective_area_factor_limits_and_report(centre, synthetic_sites):
+    """A_eff -> 1 without trenches, > 1 for a deep array; report narrow/wide at 0.2."""
+    narrow = synthetic_sites["narrow"]
+    wide = synthetic_sites["wide"]
+    flat = synthetic_sites["flat"]
+
+    # no trenches: zero depth is EXACTLY the flat surface; f_open -> 0 vanishes
+    assert effective_area_factor(flat, 0.2, centre)["a_eff"] == 1.0
+    a_tiny = effective_area_factor(narrow, 1e-6, centre)
+    assert a_tiny["a_eff"] == pytest.approx(1.0, abs=1e-5)
+    assert a_tiny["pitch_um"] == pytest.approx(227.0e6)
+
+    a20 = effective_area_factor(narrow, 0.2, centre)
+    a40 = effective_area_factor(narrow, 0.4, centre)
+    # more open area -> shorter pitch -> more wall area per pitch -> larger factor
+    assert a40["a_eff"] > a20["a_eff"] > 1.0
+    # all surfaces share k, so the factor is BELOW the bare true-area ratio
+    true_area_ratio = 1.0 + 2.0 * 88.0 / a20["pitch_um"]
+    assert a20["a_eff"] < true_area_ratio
+    assert 0.0 < a20["floor_over_field"] < 1.0
+    assert a20["k_cm_s"] > 0.0 and a20["flow_solver"] == "stokes"
+
+    report = {}
+    for name in ("narrow", "wide"):
+        site = synthetic_sites[name]
+        r = effective_area_factor(site, 0.2, centre)
+        report[name] = r["a_eff"]
+        print(f"A_eff({name} {site['width_um']:.0f}x{site['depth_um']:.0f} um, "
+              f"f_open=0.2) = {r['a_eff']:.6f}  pitch={r['pitch_um']:.0f} um  "
+              f"floor/wall ratios={r['floor_over_field']:.4f}/"
+              f"{r['wall_up_over_field']:.4f}/{r['wall_down_over_field']:.4f}")
+    assert report["narrow"] > 1.0
+    assert report["wide"] > 1.0
+
+    # the factor is memoised: the cached dict is the same object
+    assert effective_area_factor(wide, 0.2, centre) is effective_area_factor(
+        wide, 0.2, centre)
+
+
+def test_rescale_coupon_currents_conserves_total():
+    """The galvanostatic rescaling redistributes current and conserves the total."""
+    j = np.array([[10.0, 12.0], [14.0, 16.0]])
+    a = np.array([[1.10, 1.20], [1.05, 1.00]])
+    jf, mean = rescale_coupon_currents(j, a)
+    assert jf.sum() == pytest.approx(j.sum(), rel=1e-12)
+    assert mean == pytest.approx((j * a).sum() / j.sum(), rel=1e-15)
+    w = np.array([[1.0, 2.0], [3.0, 4.0]])
+    jf2, mean2 = rescale_coupon_currents(j, a, w)
+    assert float((w * jf2).sum()) == pytest.approx(float((w * j).sum()), rel=1e-12)
+    assert mean2 == pytest.approx(float((w * j * a).sum()) / float((w * j).sum()))
+    # A_eff == 1 everywhere is the identity (the one-way limit)
+    jf3, mean3 = rescale_coupon_currents(j, np.ones_like(j))
+    assert np.allclose(jf3, j, rtol=0.0, atol=0.0) and mean3 == pytest.approx(1.0)
+    with pytest.raises(ValueError):
+        rescale_coupon_currents(j, a, w[:1])
+
+
+def test_two_way_default_is_bit_identical_and_inert(centre, synthetic_sites,
+                                                    monkeypatch):
+    """two_way=False (default) reproduces the one-way result and never solves A_eff."""
+    site = synthetic_sites["narrow"]
+    ref = predict_trench(site, centre, "flow", quick=True)
+    off = predict_trench(site, centre, "flow", quick=True, two_way=False)
+    assert ref == off
+    assert ref["two_way"] is False and ref["a_eff"] is None
+    assert ref["a_eff_mean"] is None and ref["two_way_converged"] is None
+    assert ref["two_way_iterations"] == 0 and ref["two_way_history"] == []
+    # the local current is the coupon current, untouched
+    assert ref["j_mA_cm2"] == centre["j_mA_cm2"]
+    assert ref["j_coupon_mA_cm2"] == centre["j_mA_cm2"]
+    # the mfac Faraday relation of the one-way flow path still holds exactly
+    mfac = float(model_constants(float(site["T_C"]))[2])
+    expected = (centre["j_mA_cm2"] * 1e-3 * mfac * centre["efficiency"]
+                * float(site["hours"]) * 3600.0 / 1e-4)
+    assert ref["field_um"] == pytest.approx(expected, rel=1e-12)
+
+    import platesim.multiscale.bridge as B
+
+    def _boom(*args, **kwargs):
+        raise AssertionError("the one-way path must not solve the area factor")
+
+    monkeypatch.setattr(B, "effective_area_factor", _boom)
+    monkeypatch.setattr(B, "coupon_area_map", _boom)
+    again = predict_trench(site, centre, "flow", quick=True)
+    assert again == ref
+
+
+def test_two_way_fixed_point_and_current_conservation(narrow_area_map):
+    """The coupon <-> feature sweep converges in < 10 iterations and keeps the current."""
+    m = narrow_area_map
+    assert m["converged"] is True
+    assert 1 <= m["iterations"] < 10
+    assert len(m["history"]) == m["iterations"]
+    assert m["history"][-1]["max_change"] < 1e-3
+    changes = [h["max_change"] for h in m["history"]]
+    assert all(b <= a + 1e-12 for a, b in zip(changes, changes[1:]))  # contracting
+
+    w = m["weights"]
+    total_in = float((w * m["j_coupon_mA_cm2"]).sum())
+    total_out = float((w * m["j_field_mA_cm2"]).sum())
+    assert total_out == pytest.approx(total_in, rel=1e-9)
+    assert np.all(m["j_field_mA_cm2"] > 0.0)
+    # each node draws j_coupon * A_eff / <A_eff>
+    assert np.allclose(m["j_field_mA_cm2"],
+                       m["j_coupon_mA_cm2"] * m["a_eff"] / m["a_eff_mean"],
+                       rtol=1e-12, atol=0.0)
+    assert m["a_eff_mean_area"] > 1.0
+    assert m["a_eff_mean"] == pytest.approx(m["a_eff_mean_area"], rel=1e-3)
+    assert m["f_open"] == 0.2 and m["n"] == 2
+
+    # memoised: a second identical request is free and identical
+    again = coupon_area_map(_synth_narrow_site(), f_open=0.2, n=2)
+    assert again is m
+
+
+def _synth_narrow_site() -> dict:
+    return _synthetic_site("syn_narrow", 227.0, 88.0)
+
+
+def test_two_way_predict_rescales_local_current(centre, synthetic_sites,
+                                                narrow_area_map):
+    """two_way=True runs the feature model at j_coupon * A_eff / <A_eff>."""
+    site = synthetic_sites["narrow"]
+    m = narrow_area_map
+    one = predict_trench(site, centre, "flow", quick=True)
+    two = predict_trench(site, centre, "flow", quick=True, two_way=True,
+                         two_way_map=m, f_open=0.2)
+    assert two["two_way"] is True and two["error"] is None
+    assert two["j_coupon_mA_cm2"] == centre["j_mA_cm2"]
+    # the centre sits within 0.1 % of the coupon mean, so the factor is ~1 there;
+    # the rescaling itself is exactly j_coupon * A_eff / <A_eff>
+    assert two["j_mA_cm2"] == pytest.approx(
+        centre["j_mA_cm2"] * two["a_eff"] / two["a_eff_mean"], rel=1e-12)
+    assert two["j_mA_cm2"] / two["j_coupon_mA_cm2"] == pytest.approx(
+        two["a_eff"] / m["a_eff_mean"], rel=1e-12)
+    assert 0.99 < two["j_mA_cm2"] / two["j_coupon_mA_cm2"] < 1.01
+    assert two["two_way_iterations"] == m["iterations"]
+    assert two["two_way_converged"] is True
+    assert len(two["two_way_history"]) == m["iterations"]
+    # flow: field thickness is linear in the local current -> the ratio is exact
+    assert two["field_um"] / one["field_um"] == pytest.approx(
+        two["j_mA_cm2"] / one["j_mA_cm2"], rel=1e-12)
+
+    # at a map node whose A_eff is above the coupon mean, the local current RISES
+    node = {**centre, "x_cm": float(m["x_cm"][0]), "y_cm": float(m["y_cm"][0])}
+    two_node = predict_trench(site, node, "flow", quick=True, two_way=True,
+                              two_way_map=m, f_open=0.2)
+    assert two_node["j_mA_cm2"] > two_node["j_coupon_mA_cm2"]
+    assert two_node["field_um"] > one["field_um"]
+
+    lv = predict_trench(site, node, "levelset", quick=True, two_way=True,
+                        two_way_map=m, f_open=0.2)
+    assert lv["error"] is None and lv["field_um"] > 0.0
+    assert lv["two_way"] is True
+    assert lv["j_mA_cm2"] > lv["j_coupon_mA_cm2"]           # same rescaling
+
+    # a map built for another geometry / open fraction is rejected
+    with pytest.raises(ValueError):
+        predict_trench(synthetic_sites["wide"], centre, "flow", quick=True,
+                       two_way=True, two_way_map=m, f_open=0.2)
+    with pytest.raises(ValueError):
+        predict_trench(site, centre, "flow", quick=True, two_way=True,
+                       two_way_map=m, f_open=0.3)

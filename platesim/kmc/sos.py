@@ -18,6 +18,12 @@ events, no time discretisation).
 validation: deposit on a random free column, then relax the adatom to the lowest
 of {i-1, i, i+1} (the Family deposition rule, Edwards-Wilkinson universality
 class in 1+1 D).
+
+``additive=Additive(...)`` (plan item E3b, see :mod:`platesim.kmc.additive`) adds
+a dynamic per-column additive layer (suppressor S, accelerator A, chloride) with
+adsorption / desorption / burial events in the same BKL bookkeeping; deposition
+is blocked on S columns by ``f_block`` and enhanced on A columns by ``f_accel``.
+With ``additive=None`` (the default) the trajectory is bit-identical to E3a.
 """
 from __future__ import annotations
 
@@ -27,7 +33,10 @@ from typing import Any, Sequence
 
 import numpy as np
 
-from .units import NU0_HZ, deposition_rate_mA, hop_rate
+from .additive import (
+    A, BLOCKED, CL, EMPTY, S, Additive, AdditiveLayer, additive_params_dict,
+)
+from .units import NU0_HZ, deposition_rate_mA, hop_rate, monolayer_thickness_cm
 
 ASSUMPTIONS = [
     "1+1 D SOS: the interface is a column-height vector h[i] with periodic x; no "
@@ -41,6 +50,13 @@ ASSUMPTIONS = [
     "directions equiprobable, half the site rate each).",
     "theta_block: static random mask of columns that never accept deposit (additive "
     "suppressor hook); it is not desorbed or re-randomised during the run.",
+    "additive layer (Additive): one additive slot per column (S / A / Cl-), bound to "
+    "the column top; hops do not carry it.  Deposition factor is 1 - f_block on S "
+    "columns, f_accel on A columns, 1 on empty and Cl- columns [J].",
+    "Additive burial: a deposition on an S/A column removes the additive with "
+    "probability p_incorp (the continuum k_minus consumption by growth) [J].",
+    "cl_mediated: suppressor adsorption requires an adjacent adsorbed Cl- column; "
+    "Cl- has its own Langmuir adsorption/desorption and does not block deposition [J].",
     "W(t) is the population standard deviation (ddof = 0) of the column heights.",
     "'family' model: not a rate model, only for the EW growth-exponent check.",
 ]
@@ -77,6 +93,7 @@ def run_sos(
     t_max_s: float | None = None,
     max_events: int | None = None,
     heights0: Sequence[int] | None = None,
+    additive: Additive | None = None,
 ) -> dict[str, Any]:
     """Run one SOS kMC trajectory.
 
@@ -104,13 +121,20 @@ def run_sos(
     t_max_s    extra stop condition on the KMC time [s].
     max_events hard cap on the total number of events.
     heights0   optional initial heights (list of L non-negative ints).
+    additive   optional :class:`platesim.kmc.additive.Additive` dynamic layer; the
+               default ``None`` reproduces the E3a trajectory bit for bit.
 
     Returns
     -------
     dict with ``time_s``, ``t``/``W``/``h_mean`` (snapshot arrays), ``heights``
     (final), ``W_final``, ``h_final``, ``n_events``, ``depositions``, ``events``
-    ({"deposition", "hop"}), ``hop_by_class`` (counts for n = 0, 1, 2), ``blocked``
-    (bool mask), and the echoed parameters under ``params``.
+    ({"deposition", "hop"} plus the additive channels when enabled),
+    ``hop_by_class`` (counts for n = 0, 1, 2), ``blocked`` (bool mask), and the
+    echoed parameters under ``params``.  With ``additive`` set it also returns
+    ``additive`` (final coverages and event tallies), ``additive_params``,
+    ``cov_t``/``cov_theta_S``/``cov_theta_A``/``cov_theta_Cl`` (coverage time
+    series) and the cumulative tallies ``cum_ads_S``/``cum_inc_S``/``cum_inc_A``/
+    ``cum_h`` aligned with ``cov_t`` (input for :func:`effective_rates`).
     """
     L = int(L)
     if L < 8:
@@ -149,6 +173,17 @@ def run_sos(
 
     LEFT = [i - 1 if i > 0 else L - 1 for i in range(L)]
     RIGHT = [i + 1 if i + 1 < L else 0 for i in range(L)]
+
+    # dynamic additive layer (spec[] per column; BLOCKED = the static mask)
+    layer = None
+    if additive is not None:
+        spec = [BLOCKED if blocked[i] else EMPTY for i in range(L)]
+        if additive.theta0_S > 0.0:
+            p0 = additive.theta0_S
+            for i in range(L):
+                if spec[i] == EMPTY and rng.random() < p0:
+                    spec[i] = S
+        layer = AdditiveLayer(LEFT, RIGHT, additive, spec)
 
     # ---- per-class rate bookkeeping -------------------------------------
     rates = [0.0, 0.0, 0.0] if model == "family" else [
@@ -190,7 +225,7 @@ def run_sos(
         coverage_ML=coverage_ML, theta_block=theta_block, snapshots=snapshots,
         model=model, t_max_s=t_max_s, max_events=max_events, h=h,
         blocked=blocked, free_idx=free_idx, n_free=n_free, LEFT=LEFT, RIGHT=RIGHT,
-        rates=rates, members=members, _setc=_setc, rng=rng, seed=seed,
+        rates=rates, members=members, _setc=_setc, rng=rng, seed=seed, layer=layer,
     )
 
 
@@ -218,14 +253,26 @@ def _snapshot_targets(snapshots: int | Sequence[float] | None, height_mode: bool
 
 def _run_loop(*, L, F, T_K, E_d_eV, E_b_eV, nu0_Hz, coverage_ML, theta_block,
               snapshots, model, t_max_s, max_events, h, blocked, free_idx, n_free,
-              LEFT, RIGHT, rates, members, _setc, rng, seed):
+              LEFT, RIGHT, rates, members, _setc, rng, seed, layer=None):
     """BKL event loop (split out of :func:`run_sos` for readability)."""
     family = model == "family"
     height_mode = coverage_ML is not None and F > 0.0 and n_free > 0
     r0c, r1c, r2c = rates
     dep_rate = F * n_free
 
+    add = layer is not None
+    if add:
+        p_add = layer.p
+        fb = 1.0 - p_add.f_block          # deposition factor on S columns
+        fa = p_add.f_accel                # deposition factor on A columns
+        p_inc = p_add.p_incorp
+    else:
+        fb = fa = p_inc = 0.0
+
     r_tot0 = dep_rate
+    if add:
+        w0 = layer.dep_weights(F, fb, fa)
+        r_tot0 = w0[0] + w0[1] + w0[2] + w0[3] + sum(layer.additive_rates())
     for c in (0, 1, 2):
         r_tot0 += rates[c] * len(members[c])
     horizon = t_max_s
@@ -240,14 +287,38 @@ def _run_loop(*, L, F, T_K, E_d_eV, E_b_eV, nu0_Hz, coverage_ML, theta_block,
     n_dep = 0
     n_hop = 0
     hop_c = [0, 0, 0]
+    n_ads_S = n_des_S = n_ads_A = n_des_A = 0
+    n_ads_Cl = n_des_Cl = n_inc_S = n_inc_A = 0
     ts: list[float] = []
     ws: list[float] = []
     hms: list[float] = []
+    # coverage samples (thinned to <= 512 points) + cumulative tallies
+    cov_t: list[float] = []
+    cov_S: list[float] = []
+    cov_A: list[float] = []
+    cov_Cl: list[float] = []
+    cum_ads: list[int] = []
+    cum_inc: list[int] = []
+    cum_incA: list[int] = []
+    cum_h: list[int] = []
+    sample_step = 64
 
     def _record() -> None:
         ts.append(t)
         ws.append(float(np.std(h)))
         hms.append(total_h / L)
+
+    def _sample() -> None:
+        assert layer is not None
+        cov_t.append(t)
+        cov_S.append(layer.theta(S))
+        cov_A.append(layer.theta(A))
+        cov_Cl.append(layer.theta(CL))
+        cum_ads.append(n_ads_S)
+        cum_inc.append(n_inc_S)
+        cum_incA.append(n_inc_A)
+        cum_h.append(total_h)
+
 
     if n_targets:
         _record()
@@ -255,6 +326,8 @@ def _run_loop(*, L, F, T_K, E_d_eV, E_b_eV, nu0_Hz, coverage_ML, theta_block,
     rnd = rng.random
     rr = rng.randrange
     log = math.log
+    wd: tuple[float, ...] = ()
+    ras = rds = raa = rda = rac = rdc = 0.0
     h_stop = None if coverage_ML is None else int(math.ceil(coverage_ML * L))
     limit = -1 if max_events is None else int(max_events)
     k = 0
@@ -277,7 +350,16 @@ def _run_loop(*, L, F, T_K, E_d_eV, E_b_eV, nu0_Hz, coverage_ML, theta_block,
         r0 = r0c * m0
         r1 = r1c * m1
         r2 = r2c * m2
+        if add:
+            wd = layer.dep_weights(F, fb, fa)
+            dep_rate = wd[0] + wd[1] + wd[2] + wd[3]
+            ras, rds, raa, rda, rac, rdc = layer.additive_rates()
+            r_add = ras + rds + raa + rda + rac + rdc
+        else:
+            r_add = 0.0
         r_tot = dep_rate + r0 + r1 + r2
+        if add:
+            r_tot += r_add
         if r_tot <= 0.0:
             break
 
@@ -286,7 +368,17 @@ def _run_loop(*, L, F, T_K, E_d_eV, E_b_eV, nu0_Hz, coverage_ML, theta_block,
         r = rnd() * r_tot
 
         if r < dep_rate:
-            i = free_idx[rr(n_free)]
+            if add:
+                i = layer.pick_deposition(rnd, rr, wd)
+                if (p_inc > 0.0 and layer.spec[i] in (S, A) and rnd() < p_inc):
+                    # incorporation / burial by growth
+                    if layer.spec[i] == S:
+                        n_inc_S += 1
+                    else:
+                        n_inc_A += 1
+                    layer.set_spec(i, EMPTY)
+            else:
+                i = free_idx[rr(n_free)]
             h[i] += 1
             if family:
                 li = LEFT[i]
@@ -320,6 +412,38 @@ def _run_loop(*, L, F, T_K, E_d_eV, E_b_eV, nu0_Hz, coverage_ML, theta_block,
                 _setc(RIGHT[i])
             total_h += 1
             n_dep += 1
+        elif add and r < dep_rate + r_add:
+            v = r - dep_rate
+            if v < ras:
+                i = layer.pick_ads_S(rr)
+                if i >= 0:
+                    layer.set_spec(i, S)
+                    n_ads_S += 1
+            elif v < ras + rds:
+                i = layer.pick(S, rr)
+                if i >= 0:
+                    layer.set_spec(i, EMPTY)
+                    n_des_S += 1
+            elif v < ras + rds + raa:
+                i = layer.pick(EMPTY, rr)
+                if i >= 0:
+                    layer.set_spec(i, A)
+                    n_ads_A += 1
+            elif v < ras + rds + raa + rda:
+                i = layer.pick(A, rr)
+                if i >= 0:
+                    layer.set_spec(i, EMPTY)
+                    n_des_A += 1
+            elif v < ras + rds + raa + rda + rac:
+                i = layer.pick(EMPTY, rr)
+                if i >= 0:
+                    layer.set_spec(i, CL)
+                    n_ads_Cl += 1
+            else:
+                i = layer.pick(CL, rr)
+                if i >= 0:
+                    layer.set_spec(i, EMPTY)
+                    n_des_Cl += 1
         else:
             r -= dep_rate
             if r < r0:
@@ -357,11 +481,21 @@ def _run_loop(*, L, F, T_K, E_d_eV, E_b_eV, nu0_Hz, coverage_ML, theta_block,
                 _record()
                 k += 1
 
+        if add and n_events % sample_step == 0:
+            _sample()
+            if len(cov_t) > 512:       # thin the series, keep memory O(1)
+                for lst in (cov_t, cov_S, cov_A, cov_Cl, cum_ads, cum_inc,
+                            cum_incA, cum_h):
+                    del lst[1::2]
+                sample_step *= 2
+
     if not ts or ts[-1] != t:
         _record()
+    if add and (not cov_t or cov_t[-1] != t):
+        _sample()
 
     W_final = ws[-1] if ws else float(np.std(h))
-    return {
+    out: dict[str, Any] = {
         "model": model,
         "L": L,
         "time_s": t,
@@ -382,5 +516,28 @@ def _run_loop(*, L, F, T_K, E_d_eV, E_b_eV, nu0_Hz, coverage_ML, theta_block,
             "theta_block": theta_block, "seed": seed, "model": model,
         },
     }
+    if add:
+        out["events"].update({
+            "ads_S": n_ads_S, "des_S": n_des_S, "ads_A": n_ads_A,
+            "des_A": n_des_A, "ads_Cl": n_ads_Cl, "des_Cl": n_des_Cl,
+        })   # every entry is one BKL event, so the values sum to n_events
+        out["additive"] = {
+            "theta_S": layer.theta(S), "theta_A": layer.theta(A),
+            "theta_Cl": layer.theta(CL), "spec": np.asarray(layer.spec, dtype=int),
+            "n_ads_S": n_ads_S, "n_des_S": n_des_S, "n_ads_A": n_ads_A,
+            "n_des_A": n_des_A, "n_ads_Cl": n_ads_Cl, "n_des_Cl": n_des_Cl,
+            "n_incorp_S": n_inc_S, "n_incorp_A": n_inc_A,
+        }
+        out["additive_params"] = additive_params_dict(p_add)  # type: ignore[arg-type]
+        out["params"]["d_ML_cm"] = monolayer_thickness_cm()
+        out["cov_t"] = np.asarray(cov_t, dtype=float)
+        out["cov_theta_S"] = np.asarray(cov_S, dtype=float)
+        out["cov_theta_A"] = np.asarray(cov_A, dtype=float)
+        out["cov_theta_Cl"] = np.asarray(cov_Cl, dtype=float)
+        out["cum_ads_S"] = np.asarray(cum_ads, dtype=int)
+        out["cum_inc_S"] = np.asarray(cum_inc, dtype=int)
+        out["cum_inc_A"] = np.asarray(cum_incA, dtype=int)
+        out["cum_h"] = np.asarray(cum_h, dtype=int)
+    return out
 
 

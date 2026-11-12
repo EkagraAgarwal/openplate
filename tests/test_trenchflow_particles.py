@@ -15,15 +15,26 @@ higher-statistics comparison shows which is closer to the continuum.  Tests 7-10
 flow drift (bilinear == nearest far from the wall, where the stencil is all fluid), the mirror
 geometry of the wall rule, and the flat-wall 1-D flux with both wall rules (same seed, same particle
 count) against ``1/(1/k + H/D)``.
+
+E1b adds the compiled transport kernel and the migration drift.  The last tests pin the new
+interfaces: ``backend="numpy"`` is bit-identical to the default call, ``backend="numba"`` reproduces
+the numpy flat-wall flux within counting noise, a uniform potential on a flat wall reproduces the
+analytic Nernst-Planck flux enhancement, ``grid_from_levelset`` round-trips an engine level set, and
+the (slow) high-statistics decision run resolves the four interp x wall combinations against the
+continuum.
 """
+import time
+
 import numpy as np
 import pytest
 
+from platesim.core.constants import F, R_GAS
 from platesim.trenchflow.geometry import FlowField, couette_flow, flat_grid, trench_grid
 from platesim.trenchflow.particles import (
     _bilinear,
     _specular_reflect,
     _velocity_at,
+    grid_from_levelset,
     region_means,
     simulate,
 )
@@ -288,4 +299,449 @@ def test_flat_wall_specular_vs_return():
     assert abs(f_s - f_r) / f_r < 0.03, (
         f"wall rules differ by {100.0 * abs(f_s - f_r) / f_r:.2f} % "
         f"(specular {f_s:.3e}, return {f_r:.3e})")
+
+
+# ---------------------------------------------------------------------------------------------
+# E1b: compiled backend, migration drift, engine geometry, high-statistics decision run
+# ---------------------------------------------------------------------------------------------
+def _np_flux(k_cm_s, h_cm=H_CM, d_cm2_s=D, drift_cm_s=0.0):
+    """1-D steady flux with a uniform drift ``drift_cm_s`` towards the wall [C].
+
+    Steady state of d/dz(-D dc/dz + w c) = 0 with c(H) = 1 and D dc/dz|_0 = k c(0), for a drift w
+    pointing at the wall:  J = 1 / [ (H/D) (1 - e^-P)/P + e^-P / k ],  P = w H / D.  ``w = 0``
+    reduces to ``1/(1/k + H/D)`` (:func:`_exact_flux`), the reaction resistance in series with the
+    diffusion resistance.
+    """
+    if drift_cm_s == 0.0:
+        return _exact_flux(k_cm_s, h_cm, d_cm2_s)
+    P = float(drift_cm_s) * float(h_cm) / float(d_cm2_s)
+    return 1.0 / (float(h_cm) / float(d_cm2_s) * (1.0 - np.exp(-P)) / P
+                  + np.exp(-P) * (0.0 if np.isinf(k_cm_s) else 1.0 / k_cm_s))
+
+
+def test_defaults_bit_identical_with_numpy_backend():
+    """``backend="numpy"`` (the default) and the new keyword arguments change nothing.
+
+    The pre-E1b call, the explicit numpy backend with the new defaults, and a run with a *uniform*
+    potential (zero gradient -> zero drift) must give bit-identical particle counts, fluxes and
+    concentration fields.
+    """
+    g = flat_grid(pitch_um=40, height_um=40, dx_um=4)
+    kw = {"D_cm2_s": D, "k_cm_s": 1e-3, "n_ref_per_um2": 0.5, "t_burn_s": 0.5, "t_sample_s": 0.5,
+          "seed": 11}
+    a = simulate(g, None, **kw)
+    b = simulate(g, None, backend="numpy", phi=None, z_ion=2, T_C=22.0, **kw)
+    c = simulate(g, None, phi=np.zeros(g.shape), z_ion=2, T_C=22.0, **kw)
+    assert a["backend"] == b["backend"] == "numpy"
+    assert a["migration"] is False and c["migration"] is True
+    for res in (b, c):
+        assert np.array_equal(a["surf_counts"], res["surf_counts"])
+        assert np.array_equal(a["surf_flux_density"], res["surf_flux_density"])
+        assert np.array_equal(a["c"], res["c"], equal_nan=True)
+        assert np.array_equal(a["x_final_um"], res["x_final_um"])
+        assert (a["steps"], a["dt_s"], a["P_abs"]) == (res["steps"], res["dt_s"], res["P_abs"])
+    assert a["surf_counts"].sum() > 0
+
+
+def test_migration_drift_matches_nernst_planck():
+    """Uniform potential gradient on a flat wall: flux = the analytic Nernst-Planck value.
+
+    ``phi = a z`` gives the constant drift ``u = -z_ion F D/(R T) dphi/dz = 0.5 D/H`` towards the
+    wall (P = uH/D = 0.5), i.e. a 40 % flux enhancement over ``1/(1/k + H/D)``.  The particle flux
+    is compared with :func:`_np_flux` and must also be *enhanced* with respect to the no-drift value.
+    """
+    g = flat_grid(pitch_um=80, height_um=H_UM, dx_um=4)
+    T_C = 22.0
+    mob = 2.0 * D * F / (R_GAS * (T_C + 273.15))          # cm2/(s V) for z_ion = 2
+    u = 0.5 * D / H_CM                                     # drift towards the wall, cm/s
+    a = u / (mob * 1e4)                                    # phi = a z, V per um
+    phi = a * np.broadcast_to(np.asarray(g.z_um)[:, None], g.shape)
+    res = simulate(g, None, D_cm2_s=D, k_cm_s=1e-3, n_ref_per_um2=1.5, t_sample_s=4.0, seed=0,
+                   phi=phi, T_C=T_C)
+    f = float(np.asarray(res["surf_flux_density"]).mean())
+    n = float(res["surf_counts"].sum())
+    exact = _np_flux(1e-3, drift_cm_s=u)
+    assert res["migration"] is True
+    assert n > 2000.0, f"too few absorptions ({n:.0f}), Poisson error > 2 %"
+    assert abs(f / exact - 1.0) < 0.06, (
+        f"drift flux {f:.3e} vs Nernst-Planck {exact:.3e} (ratio {f / exact:.3f}, n {n:.0f}, "
+        f"Poisson {100.0 / np.sqrt(n):.2f} %)")
+    # the enhancement is real and of the analytic size (1.40 at P = 0.5)
+    assert f > 1.25 * _exact_flux(1e-3), (f, _exact_flux(1e-3))
+    assert 1.3 < f / _exact_flux(1e-3) < 1.5, f / _exact_flux(1e-3)
+
+
+def test_numba_backend_matches_numpy_flat_wall():
+    """``backend="numba"`` reproduces the numpy flat-wall flux within 3 standard errors.
+
+    The two backends draw from different random streams (numpy's ``default_rng`` vs the kernel's
+    counter-based per-particle streams), so they agree statistically, not bit for bit.  Both must
+    also land on the analytic 1-D value; the residual is the cell-size boundary layer they share.
+    """
+    pytest.importorskip("numba")
+    g = flat_grid(pitch_um=80, height_um=H_UM, dx_um=4)
+    kw = {"D_cm2_s": D, "k_cm_s": 1e-3, "n_ref_per_um2": 1.5, "t_sample_s": 5.0, "seed": 0}
+    r_np = simulate(g, None, backend="numpy", **kw)
+    r_nb = simulate(g, None, backend="numba", **kw)
+    f_np = float(np.asarray(r_np["surf_flux_density"]).mean())
+    f_nb = float(np.asarray(r_nb["surf_flux_density"]).mean())
+    n_np = float(r_np["surf_counts"].sum())
+    n_nb = float(r_nb["surf_counts"].sum())
+    assert r_nb["backend"] == "numba" and r_np["backend"] == "numpy"
+    assert r_nb["tracks"] is None
+    assert (r_np["steps"], r_np["dt_s"], r_np["P_abs"]) == (r_nb["steps"], r_nb["dt_s"], r_nb["P_abs"])
+    assert r_nb["migration"] is False
+    assert n_np > 2000 and n_nb > 2000, (n_np, n_nb)
+    se = f_np * np.sqrt(1.0 / n_np + 1.0 / n_nb)          # standard error of the difference
+    assert abs(f_nb - f_np) <= 3.0 * se, (
+        f"numba flux {f_nb:.3e} vs numpy {f_np:.3e}: {abs(f_nb - f_np) / se:.2f} se "
+        f"(se {se:.2e}, counts {n_np:.0f}/{n_nb:.0f})")
+    exact = _exact_flux(1e-3)
+    for name, f in (("numpy", f_np), ("numba", f_nb)):
+        assert abs(f / exact - 1.0) < 0.05, (name, f, exact)
+    # the concentration field is the same to counting noise
+    assert np.allclose(np.asarray(r_nb["c"]), np.asarray(r_np["c"]), atol=0.1, equal_nan=True)
+    # invariants of the compiled path: every particle ends in the electrolyte
+    x = np.asarray(r_nb["x_final_um"])
+    z = np.asarray(r_nb["z_final_um"])
+    assert x.size > 0 and np.all(x >= 0.0) and np.all(x < g.pitch_um)
+    assert np.all(z >= g.z_um[0] - 0.5 * g.dx_um) and np.all(z <= g.height_um)
+    iz, ix = _cell_of(g, x, z)
+    assert not np.any(np.asarray(g.solid)[iz, ix])
+
+
+def test_grid_from_levelset_round_trip():
+    """``grid_from_levelset`` maps an engine level set to the tracer's CavityGrid.
+
+    Same conventions as :meth:`platesim.feature.engine.sim.ViaSim.cavity_flow`: ``solid = psi <= 0``
+    transposed from (nr, nz) to (nz, nx), engine centimetres converted to um, ``z = 0`` the wafer
+    plane and ``height_um`` the top Dirichlet plane.  The returned grid must be usable by
+    :func:`simulate` as it is.
+    """
+    ls = pytest.importorskip("platesim.feature.engine.levelset")
+    g = ls.Grid(120.0, 60.0, 0.5, 32.0, dx_um=6.0, geometry="trench_full")
+    psi = ls.initial_psi(g, 2)
+    grid = grid_from_levelset(psi, g)
+
+    assert grid.shape == (g.nz, g.nr)
+    assert np.array_equal(grid.solid, (psi <= 0.0).T)
+    assert np.allclose(grid.x_um, g.rc[:, 0] / ls.UM)
+    assert np.allclose(grid.z_um, (g.zc[0] - g.H) / ls.UM)
+    assert grid.dx_um == pytest.approx(g.dx_um)
+    assert grid.pitch_um == pytest.approx(g.R_um)
+    assert (grid.width_um, grid.depth_um) == pytest.approx((g.d_um, g.H_um))
+    assert grid.height_um == pytest.approx((g.z_top - g.H) / ls.UM)
+    z_bottom = grid.z_um[0] - 0.5 * grid.dx_um          # particles.simulate's ze0
+    assert z_bottom == pytest.approx((g.z_lo - g.H) / ls.UM)
+    assert z_bottom + grid.shape[0] * grid.dx_um == pytest.approx(grid.height_um)
+    # the level set's solid is the wafer + trench metal: bottom rows solid, top row electrolyte
+    assert grid.solid[0].all() and not grid.solid[-1].any()
+    mid = grid.shape[1] // 2
+    assert grid.z_um[int(np.argmax(~grid.solid[:, mid]))] < -50.0        # trench floor at -60 um
+    assert grid.z_um[int(np.argmax(~grid.solid[:, 0]))] > 0.0            # field plane at z = 0
+
+    res = simulate(grid, None, D_cm2_s=D, k_cm_s=1e-3, n_ref_per_um2=0.5, t_burn_s=1.0,
+                   t_sample_s=1.0, seed=0)
+    assert res["steps"] > 0 and res["surf_counts"].sum() > 0
+    x = np.asarray(res["x_final_um"])
+    z = np.asarray(res["z_final_um"])
+    assert x.size > 0 and np.all(x >= 0.0) and np.all(x < grid.pitch_um)
+    iz, ix = _cell_of(grid, x, z)
+    assert not np.any(grid.solid[iz, ix])
+
+    with pytest.raises(ValueError):
+        grid_from_levelset(psi[:-1], g)
+    with pytest.raises(ValueError):
+        grid_from_levelset(np.where(np.eye(*psi.shape) > 0, np.nan, psi), g)
+
+
+def _high_stat_cross_check(n_ref_per_um2=10.0, t_burn_s=30.0, t_sample_s=30.0, seed=0):
+    """E1b decision run: ``convergence.particle_cross_check``'s recipe at high statistics.
+
+    Same geometry, flow and rate constant as
+    :func:`platesim.trenchflow.convergence.particle_cross_check` (120 x 60 um trench, dx 6 um, LBM
+    shear flow from ``shear_from_delta(128, D)``, ``k`` from ``c_wall_target = 0.7``), but
+    ``n_ref_per_um2 = 10`` instead of 0.25 and ``backend="numba"``.  The absorption counts grow by
+    ~40x, so the Poisson standard error of floor/field drops to < 0.005 (wall/field to ~0.005) and
+    the four interp x wall combinations can be ranked.  Nothing here changes a default.
+    """
+    from platesim.trenchflow.cavity_lbm import solve_flow
+    from platesim.trenchflow.convergence import NU_CM2_S, _k_for_wall_concentration
+    from platesim.trenchflow.model import model_constants, shear_from_delta
+    from platesim.trenchflow.particles import region_means as particle_region_means
+    from platesim.trenchflow.transport import region_means as continuum_region_means
+    from platesim.trenchflow.transport import solve_concentration
+
+    d_cm2_s = float(model_constants(22.0)[0])
+    grid = trench_grid(120.0, 60.0, height_um=90.0, dx_um=6.0)
+    flow = solve_flow(grid, float(shear_from_delta(128.0, d_cm2_s)), nu_cm2_s=NU_CM2_S)
+    k_cm_s = _k_for_wall_concentration(grid, flow, d_cm2_s, 0.7)
+    crm = continuum_region_means(solve_concentration(grid, flow, D_cm2_s=d_cm2_s, k_cm_s=k_cm_s),
+                                 grid)
+    out = {"k_cm_s": float(k_cm_s), "grid_shape": tuple(int(v) for v in grid.shape),
+           "n_ref_per_um2": float(n_ref_per_um2), "t_burn_s": float(t_burn_s),
+           "t_sample_s": float(t_sample_s),
+           "continuum": {key: float(crm[key])
+                         for key in ("floor_over_field", "wall_over_field")},
+           "combinations": {}}
+    for interp, wall in (("nearest", "return"), ("nearest", "specular"),
+                         ("bilinear", "return"), ("bilinear", "specular")):
+        t0 = time.perf_counter()
+        res = simulate(grid, flow, D_cm2_s=d_cm2_s, k_cm_s=k_cm_s,
+                       n_ref_per_um2=float(n_ref_per_um2), t_burn_s=float(t_burn_s),
+                       t_sample_s=float(t_sample_s), seed=int(seed), interp=interp, wall=wall,
+                       backend="numba")
+        wall_s = time.perf_counter() - t0
+        prm = particle_region_means(res, grid)
+        row = {"wall_s": wall_s, "kernel_s": float(res.get("kernel_s", float("nan"))),
+               "n_particles_mean": float(res["n_particles_mean"]), "interp": interp, "wall": wall}
+        for key in ("floor_over_field", "wall_over_field"):
+            a, b = key.split("_over_")
+            n_a = float(prm.get(a + "_counts", 0.0))
+            n_b = float(prm.get(b + "_counts", 0.0))
+            p = float(prm[key])
+            c = float(crm[key])
+            se_rel = float(np.sqrt(1.0 / n_a + 1.0 / n_b)) if (n_a > 0 and n_b > 0) else float("nan")
+            se_abs = abs(p) * se_rel if np.isfinite(se_rel) else float("nan")
+            row[key] = {"particles": p, "continuum": c, "difference": p - c,
+                        "se_rel": se_rel, "se_abs": se_abs,
+                        "counts": (n_a, n_b),
+                        "within_2se": bool(np.isfinite(se_abs) and abs(p - c) <= 2.0 * se_abs)}
+        out["combinations"][f"{interp}+{wall}"] = row
+    return out
+
+
+@pytest.mark.slow
+def test_high_statistics_wall_rule_decision():
+    """E1b decision run: floor/field and wall/field to a standard error below 0.005.
+
+    Prints the four interp x wall combinations against the continuum (run with ``-s``) and asserts
+    the statistical requirement -- floor/field resolved to ``se_abs < 0.005`` and wall/field to
+    ``se_abs < 0.006`` (its counts are 2.5x smaller) -- plus that the best combination lands within
+    2 % of the continuum, the band set by the two discretisations themselves (the continuum's
+    upwind numerical diffusion and the tracer's source layer; see ``simulate``'s docstring).  Which
+    combination is closest is the lead's decision, not something this test should pin.
+    """
+    pytest.importorskip("numba")
+    out = _high_stat_cross_check()
+    print("\nE1b decision run: 120 x 60 um, dx 6, LBM flow, "
+          f"k = {out['k_cm_s']:.4e} cm/s, n_ref {out['n_ref_per_um2']:g}/um2, "
+          f"{out['t_burn_s']:g} s burn + {out['t_sample_s']:g} s sample, numba backend")
+    print(f"continuum floor/field {out['continuum']['floor_over_field']:.4f}  "
+          f"wall/field {out['continuum']['wall_over_field']:.4f}")
+    print(f"{'interp+wall':21s} {'floor/field':>11s} {'diff':>8s} {'se':>7s} {'2se':>5s} "
+          f"{'wall/field':>11s} {'diff':>8s} {'se':>7s} {'2se':>5s} {'counts':>13s} {'s':>6s}")
+    for name, row in out["combinations"].items():
+        ff, wf = row["floor_over_field"], row["wall_over_field"]
+        print(f"{name:21s} {ff['particles']:11.4f} {ff['difference']:+8.4f} {ff['se_abs']:7.4f} "
+              f"{str(ff['within_2se']):>5s} {wf['particles']:11.4f} {wf['difference']:+8.4f} "
+              f"{wf['se_abs']:7.4f} {str(wf['within_2se']):>5s} "
+              f"{ff['counts'][0]:6.0f}/{ff['counts'][1]:6.0f} {row['wall_s']:6.1f}")
+    for name, row in out["combinations"].items():
+        for key in ("floor_over_field", "wall_over_field"):
+            cell = row[key]
+            assert np.isfinite(cell["particles"]) and np.isfinite(cell["continuum"])
+            limit = 0.005 if key == "floor_over_field" else 0.006
+            assert cell["se_abs"] < limit, (name, key, cell)
+    # the closest rule reproduces floor/field within the 2 % comparison band
+    best = min(abs(row["floor_over_field"]["difference"]) for row in out["combinations"].values())
+    assert best <= 0.02, best
+
+
+# ---------------------------------------------------------------------------------------------
+# E1b: Erban-Chapman second-order (Andrews-Bray) reactive boundary
+# ---------------------------------------------------------------------------------------------
+def test_wall_touch_prob_is_the_andrews_bray_term():
+    """``_wall_touch_prob`` = 1 - prod(1 - exp(-d_old d_new /(D dt))) over the solid faces.
+
+    Erban & Chapman (2007) Sec. 2.2.  Exact values first (flat wall: exp(-d_old d_new / D_dt)), then
+    the geometry: a step that crossed a face does not double count, an interior particle can never
+    touch a wall, and a trench side wall is found exactly.
+    """
+    from platesim.trenchflow.particles import _wall_touch_prob
+
+    g = flat_grid(pitch_um=80, height_um=40, dx_um=4)
+    nz, nx = g.shape
+    ze0 = float(g.z_um[0]) - 0.5 * float(g.dx_um)
+    solid = np.asarray(g.solid, dtype=bool)
+    nb = np.zeros(g.shape, dtype=int)
+    nb += np.roll(solid, 1, axis=1) + np.roll(solid, -1, axis=1)
+    nb[1:] += solid[:-1]
+    nb[:-1] += solid[1:]
+    surf = (~solid) & (nb > 0)
+
+    D_dt = 0.25 * 0.5                                   # um2, arbitrary but > 0
+    z_row = int(np.argmax(g.z_um >= 0.0))               # first fluid row, z in [0, 4]
+    assert g.z_um[z_row] == 2.0
+    iz0 = np.full(3, z_row)
+    ix0 = np.full(3, 3)
+    z_old = np.array([0.5, 1.0, 3.0])                   # distances to the wall at z = 0
+    z_new = np.array([0.2, 1.0, 3.0])                   # stays on the fluid side
+    got = _wall_touch_prob(np.full(3, g.x_um[3]), z_old, np.zeros(3), z_new - z_old, iz0, ix0,
+                           solid, surf, ze0, float(g.dx_um), nz, nx, D_dt)
+    assert np.allclose(got, np.exp(-z_old * z_new / D_dt), rtol=1e-12), got
+    # a step that ends inside the wall is the crossing branch's job: no double count
+    got = _wall_touch_prob(np.full(1, g.x_um[3]), np.array([0.5]), np.zeros(1), np.array([-1.0]),
+                           np.array([z_row]), np.array([3]), solid, surf, ze0,
+                           float(g.dx_um), nz, nx, D_dt)
+    assert got[0] == 0.0
+    # an interior particle (no solid face neighbour) can never touch a wall
+    iz_c = int(np.argmax(g.z_um >= 20.0))
+    assert not surf[iz_c, 3]
+    got = _wall_touch_prob(np.full(1, g.x_um[3]), np.array([20.0]), np.zeros(1), np.zeros(1),
+                           np.array([iz_c]), np.array([3]), solid, surf, ze0,
+                           float(g.dx_um), nz, nx, D_dt)
+    assert got[0] == 0.0
+
+    # trench side wall: the first fluid cell inside the trench has solid to its left
+    t = trench_grid(64.0, 32.0, height_um=64.0, dx_um=4.0)
+    nz2, nx2 = t.shape
+    solid2 = np.asarray(t.solid, dtype=bool)
+    ze2 = float(t.z_um[0]) - 0.5 * float(t.dx_um)
+    nb2 = np.zeros(t.shape, dtype=int)
+    nb2 += np.roll(solid2, 1, axis=1) + np.roll(solid2, -1, axis=1)
+    nb2[1:] += solid2[:-1]
+    nb2[:-1] += solid2[1:]
+    sur2 = (~solid2) & (nb2 > 0)
+    iz_w = int(np.argmax(t.z_um >= -15.0))
+    ix_w = int(np.argmax(~solid2[iz_w]))
+    assert solid2[iz_w, ix_w - 1], "expected a solid cell left of the first trench cell"
+    d_old, d_new = 1.0, 0.5
+    got = _wall_touch_prob(np.array([ix_w * float(t.dx_um) + d_old]), np.array([t.z_um[iz_w]]),
+                           np.array([-(d_old - d_new)]), np.zeros(1),
+                           np.array([iz_w]), np.array([ix_w]),
+                           solid2, sur2, ze2, float(t.dx_um), nz2, nx2, D_dt)
+    assert got[0] == pytest.approx(float(np.exp(-d_old * d_new / D_dt)), rel=1e-12)
+
+
+def test_second_order_reactive_boundary_matches_robin_flux():
+    """Erban-Chapman (a)+(b) boundary on a 1-D reactive slab: analytic Robin flux within 3 se.
+
+    ``reactive="second"`` is their two-part rule: a step that ends in the wall reacts with
+    ``p = k sqrt(pi dt/D)/2`` and, in addition, a step that *touched* the wall and came back reacts
+    with ``exp(-d_old d_new/(D dt)) p`` (the Andrews-Bray term (b)).  Both parts together give the
+    Robin constant ``K = 2 p sqrt(D/(pi dt)) = k``, so to first order the flux is unchanged but the
+    O(sqrt(dt)) boundary-layer error drops out.
+
+    The reference is ``1/(1/k + H_eff/D)`` with ``H_eff = H - l_src``: the top reservoir imposes
+    c = 1 over the source layer (thickness ``max(3 sigma, dx)``), so the column the tracer really
+    solves is shorter by that layer.  Without the correction the same run reads +2 to +5 % high for
+    every wall rule at dx 4-8 (measured), i.e. the residual is the reservoir, not the reaction rule.
+    """
+    g = flat_grid(pitch_um=160, height_um=H_UM, dx_um=4)
+    kw = dict(D_cm2_s=D, k_cm_s=1e-3, n_ref_per_um2=0.8, t_burn_s=6.0, t_sample_s=9.0, seed=0,
+              wall="specular")
+    r2 = simulate(g, None, reactive="second", **kw)
+    r1 = simulate(g, None, reactive="first", **kw)
+    f1 = float(np.asarray(r1["surf_flux_density"]).mean())
+    f2 = float(np.asarray(r2["surf_flux_density"]).mean())
+    n1 = float(r1["surf_counts"].sum())
+    n2 = float(r2["surf_counts"].sum())
+    assert r2["reactive"] == "second" and r1["reactive"] == "first"
+    assert n1 > 3000 and n2 > 3000, (n1, n2)
+    # the per-touch probability is halved and the two-part rule makes up for it
+    assert r2["P_abs"] == pytest.approx(0.5 * r1["P_abs"], rel=1e-12)
+    assert (r1["steps"], r1["dt_s"], r1["P_abs_first_order"]) == (r2["steps"], r2["dt_s"],
+                                                                 r2["P_abs_first_order"])
+    l_src = max(3.0 * float(r2["sigma_um"]), float(g.dx_um))
+    h_cm = (float(g.height_um) - l_src) * 1e-4
+    exact = 1.0 / (h_cm / D + 1.0 / 1e-3)
+    se2 = 1.0 / np.sqrt(n2)
+    assert abs(f2 / exact - 1.0) <= 3.0 * se2, (
+        f"second-order flux {f2:.3e} vs analytic {exact:.3e} (ratio {f2 / exact:.4f}, "
+        f"se {se2 * 100:.2f} %, H_eff {h_cm * 1e4:.1f} um)")
+    # the two rules agree: same leading-order Robin constant
+    se_diff = np.hypot(1.0 / np.sqrt(n1), 1.0 / np.sqrt(n2))
+    assert abs(f2 - f1) <= 3.0 * se_diff * f1, (
+        f"first {f1:.3e} vs second {f2:.3e} order differ by "
+        f"{100.0 * abs(f2 - f1) / f1:.2f} % (se {100.0 * se_diff:.2f} %)")
+    # k = 0 must not absorb through the Andrews-Bray term
+    r0 = simulate(g, None, D_cm2_s=D, k_cm_s=0.0, n_ref_per_um2=0.5, t_burn_s=1.0,
+                  t_sample_s=1.0, seed=0, reactive="second")
+    assert r0["P_abs"] == 0.0 and float(r0["surf_counts"].sum()) == 0.0
+    with pytest.raises(ValueError):
+        simulate(g, None, reactive="third")
+
+
+def test_second_order_boundary_numba_matches_numpy():
+    """The compiled kernel implements the same (a)+(b) rule (statistical agreement, small trench)."""
+    pytest.importorskip("numba")
+    g = trench_grid(96, 48, height_um=96, dx_um=8)
+    kw = dict(D_cm2_s=D, k_cm_s=1e-2, n_ref_per_um2=0.6, t_burn_s=3.0, t_sample_s=3.0, seed=5,
+              reactive="second")
+    a = simulate(g, None, backend="numpy", **kw)
+    b = simulate(g, None, backend="numba", **kw)
+    assert b["reactive"] == a["reactive"] == "second"
+    assert b["backend"] == "numba"
+    assert b["P_abs"] == pytest.approx(a["P_abs"], rel=1e-12)
+    na, nb = float(a["surf_counts"].sum()), float(b["surf_counts"].sum())
+    assert na > 500 and nb > 500, (na, nb)
+    assert abs(na - nb) <= 4.0 * np.sqrt(na + nb), (na, nb)
+    ma, mb = region_means(a, g), region_means(b, g)
+
+    def _se(m, key):
+        a_, b_ = key.split("_over_")
+        return abs(m[key]) * np.sqrt(1.0 / m[a_ + "_counts"] + 1.0 / m[b_ + "_counts"])
+
+    for key in ("floor_over_field", "wall_over_field"):
+        assert abs(ma[key] - mb[key]) <= 3.0 * np.hypot(_se(ma, key), _se(mb, key)) + 0.02, (
+            key, ma[key], mb[key])
+
+
+def test_divergence_free_field_does_not_accumulate():
+    """An incompressible flow keeps the tracer uniform; a compressive one piles it up.
+
+    The stream function psi = A sin(2 pi x/P) sin^2(pi z/H) gives an exactly divergence-free field
+    that vanishes on the wall and on the reservoir plane (ux = d psi/dz, uz = -d psi/dx).  With k = 0
+    the steady state of the tracer is c = 1 everywhere, so any cell-to-cell structure beyond counting
+    noise is spurious accumulation -- the failure mode of a non-solenoidal advection.  The control
+    uses div u != 0 and must concentrate, which shows the metric has power.
+    """
+    g = flat_grid(pitch_um=80.0, height_um=40.0, dx_um=4.0)
+    nz, nx = g.shape
+    zz = np.asarray(g.z_um)[:, None]
+    xx = np.asarray(g.x_um)[None, :]
+    H, P = float(g.height_um), float(g.pitch_um)
+    A = 400.0                                   # um2/s, so |u| ~ 30 um/s (advection ~ diffusion)
+    ux = np.where(g.solid, 0.0, A * (np.pi / H) * np.sin(2 * np.pi * xx / P)
+                  * np.sin(2 * np.pi * zz / H) * 1e-4)
+    uz = np.where(g.solid, 0.0, -A * (2 * np.pi / P) * np.cos(2 * np.pi * xx / P)
+                  * np.sin(np.pi * zz / H) ** 2 * 1e-4)
+    # the input field really is divergence-free (central differences on the fluid cells)
+    fluid = ~np.asarray(g.solid)
+    div = np.zeros(g.shape)
+    div[:, 1:-1] = (ux[:, 2:] - ux[:, :-2]) / (2 * g.dx_um)
+    div[1:-1, :] += (uz[2:, :] - uz[:-2, :]) / (2 * g.dx_um)
+    scale = max(np.abs(ux).max(), np.abs(uz).max()) / g.dx_um
+    inner = fluid.copy()
+    inner[0] = inner[-1] = False
+    inner[:, 0] = inner[:, -1] = False
+    inner[1:-1] &= fluid[:-2] & fluid[2:]        # central differences need fluid neighbours
+    assert np.abs(div[inner]).max() < 0.02 * scale, np.abs(div[inner]).max() / scale
+
+    flow = FlowField(grid=g, ux=ux, uz=uz, shear_rate_s=0.0)
+    kw = dict(D_cm2_s=D, k_cm_s=0.0, n_ref_per_um2=1.5, t_burn_s=3.0, t_sample_s=6.0, seed=5,
+              interp="bilinear")
+
+    def blocks(c, half=2):
+        """Mean c over 2 x 2 cell blocks (suppresses the per-cell Poisson noise)."""
+        out = []
+        for j in range(half, nz - half, 2):
+            for i in range(0, nx, 2):
+                blk = c[j - half:j + half, i:i + 2]
+                if np.all(np.isfinite(blk)):
+                    out.append(blk.mean())
+        return np.array(out)
+
+    bl = blocks(np.asarray(simulate(g, flow, **kw)["c"]))
+    assert bl.size > 20
+    assert bl.max() < 1.10 and bl.min() > 0.90, (bl.min(), bl.max())
+    # compressive control: ux = B sin(2 pi x/P) sin(pi z/H), uz = 0 -> div u != 0
+    B = 30.0                                   # um/s
+    uxc = np.where(g.solid, 0.0, B * np.sin(2 * np.pi * xx / P) * np.sin(np.pi * zz / H) * 1e-4)
+    flowc = FlowField(grid=g, ux=uxc, uz=np.zeros(g.shape), shear_rate_s=0.0)
+    blc = blocks(np.asarray(simulate(g, flowc, **kw)["c"]))
+    assert blc.max() - blc.min() > 0.5 and blc.max() > 1.2, (blc.min(), blc.max())
+
+
 

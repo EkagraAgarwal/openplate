@@ -7,6 +7,10 @@ license = {file = "LICENSE"}
 requires-python = ">=3.11"
 dependencies = ["numpy", "scipy", "fastapi", "uvicorn", "scikit-fmm", "contourpy", "scikit-fem", "gmsh", "tifffile", "scikit-image", "emcee"]
 
+[project.optional-dependencies]
+# Optional JIT kernels (plan v2 B4/B8). Every numba path has a pure-numpy fallback.
+fast = ["numba"]
+
 [tool.setuptools.packages.find]
 include = ["platesim*"]
 

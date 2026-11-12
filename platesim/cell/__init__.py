@@ -12,7 +12,8 @@ import numpy as np
 
 from ..core.bath import Bath
 from ..core.cell import CellGeometry
-from .solver import ASSUMPTIONS, CellResult, solve_cell, solve_duct
+from .solver import (ASSUMPTIONS, CellResult, MarchResult, MarchStage, march_cell,
+                     solve_cell, solve_duct)
 
 MODEL_SPEC = {
     "id": "cell_current",
@@ -165,4 +166,5 @@ def run(params: dict, progress=lambda frac, msg="": None) -> dict:
             "warnings": warnings, "assumptions": assumptions}
 
 
-__all__ = ["MODEL_SPEC", "run", "solve_cell", "solve_duct", "CellResult", "ASSUMPTIONS"]
+__all__ = ["MODEL_SPEC", "run", "solve_cell", "solve_duct", "march_cell", "CellResult",
+           "MarchResult", "MarchStage", "ASSUMPTIONS"]

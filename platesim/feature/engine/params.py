@@ -26,6 +26,10 @@ from ...core.constants import F, M_CU, RHO_CU   # identical values to the resear
 # would shift Arrhenius i0 by ~0.005 % and break the bit-identical via regression in the tests)
 R_GAS = 8.314          # J/(mol K)
 
+# Molar volume of solid Cu [m3/mol], from the same constants the growth velocity uses (M_CU g/mol,
+# RHO_CU g/cm3).  Entered into the Gibbs-Thomson shift eta_GT = -gamma * Omega * kappa / (2F) (plan v2 D6).
+OMEGA_CU_M3_MOL = (M_CU * 1e-3) / (RHO_CU * 1e3)      # ~7.09e-6 m3/mol
+
 
 # ---------------------------------------------------------------- transport helpers (copied from
 # research/agent_reports_2026-10-17/fill_model_v2.py so this folder is self-contained)
@@ -149,7 +153,86 @@ class Params:
     #   the boundary-layer sense.  The top Dirichlet plane keeps its diffusive coupling plus the upwind
     #   advective terms (it is a modelling boundary, not a resolved face).  Not available for
     #   transport='tertiary' (derive raises NotImplementedError).
-    adv_scheme: str = "upwind"                 # 'upwind' | 'sg'
+    adv_scheme: str = "upwind"                 # 'upwind' | 'sg' | 'tvd'
+    # 'tvd' (plan v2 C1): second-order limited (MUSCL / van Leer) advective face values on the Stokes MAC
+    #   fluxes, applied by deferred correction on top of the upwind operator (Stokes path only).
+    # ---- plan v2 wave-b switches: all OFF / legacy by default, so every default run is unchanged
+    # Solutal buoyancy (plan v2 D4): Boussinesq body force rho0 * beta * (c - c_bulk) * g in the Stokes
+    # flow (flow_solver='stokes', geometry='trench_full' only).  Depleted electrolyte is lighter.
+    buoyancy: bool = False
+    gravity_dir: tuple = (0.0, -1.0)           # unit (g_x, g_z) in the trench cross-section; (0, 0) = gravity
+                                               # along the trench (out of plane: no in-plane body force).  A
+                                               # vertical coupon has gravity in the wafer plane, i.e. (+-1, 0)
+                                               # or (0, 0) depending on the trench orientation on the coupon.
+    beta_cu_L_mol: float = 0.15                # solutal expansion coefficient of CuSO4, L/mol [J, not measured]
+    g_cm_s2: float = 981.0
+    # Bath speciation in the tertiary path (plan v2 D1 / A3): HSO4- <-> H+ + SO4^2- (Ka2 above) and the
+    # CuSO4^0 ion pair, re-equilibrated locally (platesim.core.speciation).  transport='tertiary' only.
+    speciation: bool = False
+    logK_ip: float = 2.3                       # log10 of the CuSO4^0 ion-pair constant [J, not verified]
+    activity: str = "davies"                   # 'ideal' | 'davies' | 'bdot' (core.speciation)
+    # ---- plan v2 D2: full additive system.  Switch:
+    #   'legacy' (default): today's single transported suppressor (Cl factor implicitly 1), non-transported
+    #            accelerator behind use_accel, no leveller.  BIT-IDENTICAL to the pre-D2 engine.
+    #   'cl_ndr'          : + chloride coverage theta_cl per interface cell, computed from the BULK Cl-
+    #            concentration c_cl_bulk (no Cl transport, see the justification below) and the local growth
+    #            velocity; the suppressor adsorption rate is gated by theta_cl**n_cl (Braun et al. 2019/2020
+    #            Cl-/polyether co-adsorption S-NDR), which feeds the existing theta_be balance in place of
+    #            k_plus*s_bulk*s_t and the transported-suppressor sink coefficient.
+    #   'full'            : 'cl_ndr' + the CEAC accelerator (area-conserving, curvature term, displacing the
+    #            suppressor; p.c_acc/p.k_acc/p.b_acc as in use_accel) + a TRANSPORTED leveller (same machinery
+    #            as the suppressor: diffusion + Dirichlet bulk + interface sink) whose coverage blocks i0, and
+    #            reverse-pulse coverage desorption (additives.reverse_pulse_desorption, p.k_rd) on a PR recipe.
+    # Cl- transport justification: the net irreversible Cl- consumption at the front is only the burial term
+    # k_inc_cl * v * Gamma_cl * theta_cl (~1e-12 mol/cm2/s at v ~ 1e-6 cm/s, theta_cl ~ 0.1), i.e. ~1e-7 A/cm2
+    # equivalent, because thermal desorption returns Cl- to the boundary layer.  The pure-diffusion supply limit
+    # for 1 mM Cl- (D ~ 2e-5 cm2/s) at delta = 64 um is F D c/delta ~ 0.3 mA/cm2, some 3e3 times larger, so Cl-
+    # is NOT transport limited at the 5-30 mA/cm2 of these runs and the bulk concentration is used at the front.
+    # The assumption degrades below ~1 uM Cl- or with a much larger k_inc_cl [J].
+    additives: str = "legacy"                  # 'legacy' | 'cl_ndr' | 'full'
+    c_cl_bulk: float = 1.0e-6                  # mol/cm3 bulk Cl- (1 mM, Braun high-k S-NDR set [B19])
+    # Leveller (plan v2 D2, 'full' only): transported species, c_lev_bulk = 0 -> no leveller at all (factor 1).
+    c_lev_bulk: float = 0.0                    # mol/cm3 (~10 uM bath, [J])
+    k_lev: float = 1.0e-3                      # cm/s supply (mass-transfer) velocity [J]
+    Gamma_lev: float = 2.0e-10                 # mol/cm2 saturation coverage [J]
+    D_lev25: float = 1.0e-6                    # cm2/s at 25 C (PEG-type polymer, same order as D_s25) [J]
+    # ---- plan v2 E2: Lagrangian H2 micro-bubbles attached to the front (bubble shading of the electrode).
+    # bubbles=False keeps every legacy path (no import of platesim.bubbles, no extra series keys).
+    bubbles: bool = False
+    bubble_contact_deg: float = 45.0            # [J] gas-side contact angle (Fritz / contact disc radius)
+    bubble_supersat_threshold: float = 0.0      # S-1 of the wall H2 layer above which a cell may nucleate
+    bubble_seed: int = 0                        # RNG seed of the nucleation draw (same seed -> same sites)
+    bubble_init: tuple = ()                     # ((x_um, z_um, R_um), ...) attached bubbles injected at t = 0
+    bubble_rate_per_cell: float = 1.0           # nucleation probability 1 - exp(-rate (S-1-threshold))
+    bubble_R0_um: float = 1.0                   # [J] mean seeded radius (0.5-1.5 x)
+    bubble_max: int = 40                        # cap on the live bubble count (step cost)
+    bubble_supersat: float = 0.0                # [J] imposed far-field H2 supersaturation added to the HER estimate
+    bubble_pH: float = 1.7                      # [J] bath pH for the HER side-reaction estimate (side_reactions)
+    # Pulse-reverse double-layer correction (plan v2 D3): fraction of each reverse pulse's charge that
+    # charges the double layer instead of dissolving Cu (platesim.feature.pulse_cycle gives 0.27-0.41
+    # for the team waveform).  Scales only mechanisms tied to the FARADAIC anodic current (k_rd term);
+    # the net deposit is fixed by the galvanostat and is unaffected.  0 = legacy.
+    pr_dl_fraction: float = 0.0
+    # Level-set numerics (plan v2 B4 / C3)
+    ls_scheme: str = "godunov1"                # 'godunov1' (legacy first-order) | 'weno5' (WENO5 + TVD-RK3)
+    ls_narrow_band: bool = False               # restrict band operations to |psi| < ls_band_cells * dx
+    ls_band_cells: float = 8.0
+    # Volume-preserving advance (plan v2 C3): after every advection step shift psi inside the narrow band so
+    # the level-set solid volume equals solid0 + Faraday volume of the accumulated charge.  Off by default:
+    # the correction hides the scheme's own (0.2-0.8 %) volume drift, so it is a reporting/robustness knob,
+    # not evidence of scheme accuracy (see tests/test_feature_engine_hooks.py).
+    ls_volume_correct: bool = False
+    # Bulk (delta) plane rule (plan v2 C5; only the periodic trench_full geometry has a field to average):
+    #   'edge'       legacy: average the two field columns at x ~ 0 and x ~ pitch (bit-identical default)
+    #   'field_mean' mean psi = 0 crossing over every column on the FIELD (outside the trench opening)
+    #   'fixed'      the plane stays at the INITIAL face height + delta for the whole run; the run stops
+    #                when the front comes within 3 dx of it (the Dirichlet layer must keep a few cells)
+    bulk_plane: str = "edge"
+    # Gibbs-Thomson capillarity (plan v2 D6): curvature shift of the local cathodic overpotential,
+    # eta_eff = eta + gamma * Omega * kappa / (2F) with Omega = M_CU/rho_CU (params.OMEGA_CU_M3_MOL),
+    # kappa = levelset.curvature_div_n (positive on a convex metal protrusion), |kappa| <= 1/(2 dx) clipped.
+    gibbs_thomson: bool = False
+    gamma_cu_J_m2: float = 1.8                 # [J/m2] solid Cu surface energy (order of magnitude, not measured)
     # ---- growth
     efficiency: float = 1.0                    # current efficiency for growth velocity and Cu2+ sink/source
     # ---- model switches
@@ -166,6 +249,20 @@ class Params:
     max_overburden_um: float | None = None     # None -> 0.4 H for d >= 500 um else 80 um
     dx_um: float | None = None                 # None -> clamp(a/15, 0.75, 8)
     corner_cells: float = 1.0                  # initial corner rounding radius in cells
+    # ---- plan v2 C4: interface representation of the transport geometry (fields.StepGeom)
+    #   'diffuse' (default, LEGACY, bit-identical): smoothed-boundary band Hs = 0.5(1+tanh(psi/eps)),
+    #       face conductances weighted by Hs, interface weights w_p = V_p |grad Hs|_p.  The band smears
+    #       the sink over ~1.2 dx, which biases the flux in narrow gaps and at the floor (first-order
+    #       error in the interface position).
+    #   'sharp'  : cut-cell / ghost-fluid interface.  Cell electrolyte fractions from
+    #       levelset.electrolyte_fraction, face apertures from a linear psi interpolation along each
+    #       face, the interface area of a cut cell from the chord of the linear level-set
+    #       reconstruction, and the sink placed on the cut cell (merged into the majority neighbour when
+    #       the cut cell centre lies in the metal) with its rate corrected to the ghost-fluid distance
+    #       |psi| (k_eff = k / (1 + k |psi| / D)).  This makes the 1-D planar steady limiting current
+    #       exact for the discrete resistance chain (2nd order in the front position instead of 1st).
+    #       See fields.StepGeom for the small-cell rule and the documented approximations.
+    interface: str = "diffuse"                 # 'diffuse' | 'sharp'
     # ---- numerics
     eps_fac: float = 1.2                       # interface half-width eps = eps_fac * dx
     n_active_eps: float = 3.5                  # solve where psi > -n_active_eps * eps
@@ -198,6 +295,7 @@ class Phys:
     D_cu: float          # cm2/s plain Cu2+ diffusivity
     D_c: float           # enhanced: E_mig*D_cu (migration lumped in); tertiary: D_cu (explicit potential)
     D_s: float           # suppressor diffusivity
+    D_lev: float         # leveller diffusivity (plan v2 D2 'full' only; 0 when the mode is off)
     kappa: float         # S/cm
     i0_u: float
     i0_s: float
@@ -218,7 +316,11 @@ class Phys:
 TRANSPORTS = ("enhanced", "tertiary")
 ADV_FORMS = ("gradient", "divergence")
 FLOW_SOLVERS = ("lbm", "stokes")
-ADV_SCHEMES = ("upwind", "sg")
+ADV_SCHEMES = ("upwind", "sg", "tvd")
+LS_SCHEMES = ("godunov1", "weno5")
+BULK_PLANES = ("edge", "field_mean", "fixed")
+ADDITIVES_MODES = ("legacy", "cl_ndr", "full")
+INTERFACES = ("diffuse", "sharp")
 
 
 def derive(p: Params, T_C: float) -> Phys:
@@ -234,7 +336,33 @@ def derive(p: Params, T_C: float) -> Phys:
         raise ValueError(f"flow_solver must be one of {FLOW_SOLVERS}, got {p.flow_solver!r}")
     if p.adv_scheme not in ADV_SCHEMES:
         raise ValueError(f"adv_scheme must be one of {ADV_SCHEMES}, got {p.adv_scheme!r}")
-    if p.adv_scheme == "sg" and p.transport == "tertiary":
+    if p.ls_scheme not in LS_SCHEMES:
+        raise ValueError(f"ls_scheme must be one of {LS_SCHEMES}, got {p.ls_scheme!r}")
+    if p.bulk_plane not in BULK_PLANES:
+        raise ValueError(f"bulk_plane must be one of {BULK_PLANES}, got {p.bulk_plane!r}")
+    if p.additives not in ADDITIVES_MODES:
+        raise ValueError(f"additives must be one of {ADDITIVES_MODES}, got {p.additives!r}")
+    if p.interface not in INTERFACES:
+        raise ValueError(f"interface must be one of {INTERFACES}, got {p.interface!r}")
+    if p.c_cl_bulk < 0.0:
+        raise ValueError(f"c_cl_bulk must be >= 0, got {p.c_cl_bulk!r}")
+    if p.c_lev_bulk < 0.0:
+        raise ValueError(f"c_lev_bulk must be >= 0, got {p.c_lev_bulk!r}")
+    if not 0.0 <= p.bubble_contact_deg <= 180.0:
+        raise ValueError(f"bubble_contact_deg must be in [0, 180], got {p.bubble_contact_deg!r}")
+    if p.bubble_max < 0:
+        raise ValueError(f"bubble_max must be >= 0, got {p.bubble_max!r}")
+    if p.gamma_cu_J_m2 < 0.0:
+        raise ValueError(f"gamma_cu_J_m2 must be >= 0, got {p.gamma_cu_J_m2!r}")
+    if p.activity not in ("ideal", "davies", "bdot"):
+        raise ValueError(f"activity must be 'ideal', 'davies' or 'bdot', got {p.activity!r}")
+    if not 0.0 <= p.pr_dl_fraction < 1.0:
+        raise ValueError(f"pr_dl_fraction must be in [0, 1), got {p.pr_dl_fraction!r}")
+    if p.speciation and p.transport != "tertiary":
+        raise ValueError("speciation=True requires transport='tertiary'")
+    if len(tuple(p.gravity_dir)) != 2:
+        raise ValueError(f"gravity_dir must be a (g_x, g_z) pair, got {p.gravity_dir!r}")
+    if p.adv_scheme in ("sg", "tvd") and p.transport == "tertiary":
         raise NotImplementedError(
             "adv_scheme='sg' is not implemented for transport='tertiary': that path already carries the "
             "Scharfetter-Gummel migration flux in StepGeom.sg_operator, and folding the advective Peclet "
@@ -246,6 +374,7 @@ def derive(p: Params, T_C: float) -> Phys:
     return Phys(
         T_C=T_C, T_K=T_K, f_RT=f_RT,
         D_cu=D_cu, D_c=D_cu if tertiary else p.E_mig * D_cu, D_s=p.D_s25 * fD,
+        D_lev=(p.D_lev25 * fD if p.additives == "full" else 0.0),
         kappa=p.kappa_22 * (1 + p.kappa_per_K * (T_C - 22.0)),
         i0_u=p.i0_u * arr, i0_s=p.i0_s * arr, i0_a=p.i0_a * arr,
         Mfac=M_CU / (2 * F * RHO_CU) * p.efficiency,

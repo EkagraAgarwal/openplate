@@ -46,6 +46,34 @@ solved by a fixed-point loop around the unchanged Newton solve (inner solve ->
 j on the front face -> 2-D sheet Poisson on a structured grid -> relax -> repeat).
 With seed_R_sq = None no offset is applied and the result is bit-identical to the
 equipotential model.
+
+F3: pulse reverse (duty-averaged), OFF by default
+-------------------------------------------------
+`solve_cell(..., pr={...})` takes the team waveform {'t_f_ms': 9, 't_r_ms': 0.5,
+'t_off_ms': 0.5, 'rr': 2} at the NET current and uses
+`platesim.feature.engine.recipes.pr_forward` for the forward current
+I_f = I_total * P / (t_f - rr*t_r) and the duties (t_f/P, t_r/P).  Two steady solves
+are made with the same mesh/kinetics: +I_f (deposition) and -rr*I_f.  In the second
+solve the coupon is the ANODE: `_solve_core` carries the sign through the
+galvanostatic row, so the coupon BV equation returns an anodic (negative) j, and the
+counter electrode plates with the anodic BV form (no Nernst term - an approximation
+for that phase [J]).  The returned j(x, y) is the duty-weighted NET
+duty_f*j_fwd - (1 - f_dl)*duty_r*rr*j_rev; the two phase maps are kept in
+`j_forward_mA_cm2` / `j_reverse_mA_cm2` (the latter as a positive removal density,
+area-averaged over the facet fluxes to remove the edge-node singularity of the
+anodic phase).  The reverse-phase correction for double-layer charging is NOT
+applied unless `pr_dl_fraction` (default 0) is set: `platesim.feature.pulse_cycle`
+finds about 1/3 of the reverse charge goes to the double layer, which scales the
+reverse faradaic current by (1 - pr_dl_fraction).
+
+F4: time-marched coupon (terminal effect feedback), OFF by default
+------------------------------------------------------------------
+`march_cell` splits a run into stages, rebuilds the sheet-resistance map from the
+accumulated local deposit R_s(x) = R_s0 * t_seed / (t_seed + t_dep(x)) (bulk form
+rho/(t_seed + t_dep) with t_seed = rho_cu/R_s0), solves the cell with that map
+(`seed_R_sq` accepts a (GRID_N, GRID_N) array) and advances the deposit with
+Faraday from the local net current.  It reports per-stage ratios and the final map;
+`solve_cell` itself stays a single steady state.
 """
 from __future__ import annotations
 
@@ -62,7 +90,8 @@ from skfem import BilinearForm, CellBasis, ElementTetP1, FacetBasis, Functional,
 
 from ..core.bath import Bath
 from ..core.cell import CellGeometry
-from ..core.constants import F, thickness_um
+from ..core.constants import F, M_CU, RHO_CU, thickness_um
+from ..feature.engine.recipes import pr_forward
 from .mesh import COUPON_T_CM, CellMesh, build_cell_mesh, build_duct_mesh
 
 GRID_N = 41                     # output j(x, y) grid resolution [spec]
@@ -150,6 +179,11 @@ def _anode_mass(u, v, w):
     return _anode_dj(w.eta, w.i0, w.ac, w.aa, w.fnum) * u * v
 
 
+@LinearForm
+def _unit(v, w):
+    return 1.0 * v
+
+
 @Functional
 def _area(w):
     return 0.0 * w.x[0] + 1.0
@@ -164,16 +198,20 @@ def _mean_eta(w):
 
 def _v_hint(I: float, gap: float, kappa: float, area: float, i0: float,
             ac: float, aa: float, f: float) -> float:
-    """Initial cell-voltage guess: ohmic + Tafel-ish kinetic terms [J]."""
-    j = max(I / area, 1e-9)
-    v_ohm = I * gap / (kappa * area) if kappa > 0 else 1.0
+    """Initial cell-voltage guess: ohmic + Tafel-ish kinetic terms [J].
+
+    Signed: I < 0 (pulse-reverse, the coupon is the anode) returns the mirrored guess.
+    """
+    sgn = 1.0 if I >= 0 else -1.0
+    j = max(abs(I) / area, 1e-9)
+    v_ohm = abs(I) * gap / (kappa * area) if kappa > 0 else 1.0
     if j > i0:
         eta_c = np.log(j / i0) / (ac * f)
         eta_a = np.log(j / i0) / (aa * f)
     else:
         eta_c = j / (i0 * ac * f)
         eta_a = j / (i0 * aa * f)
-    return float(max(v_ohm + eta_c + eta_a, 0.01))
+    return float(sgn * max(v_ohm + eta_c + eta_a, 0.01))
 
 
 def _solve_core(cm: CellMesh, kappa: float, I_total: float, i0: float,
@@ -188,9 +226,16 @@ def _solve_core(cm: CellMesh, kappa: float, I_total: float, i0: float,
     (vm is zero off the front face).  `vm=None` reproduces the equipotential model
     bit-for-bit.  d eta_c / d phi_l is still -1, so the Jacobian is unchanged.
     `phi0=(phi, phi_a)` warm-starts the Newton iteration.
+
+    `I_total < 0` is the pulse-reverse case: the galvanostatic constraint then pins
+    the cathode facets to a NET ANODIC current, i.e. the coupon dissolves while the
+    counter electrode plates (it is evaluated with the anodic BV form, which has no
+    Nernst-layer term - an approximation for that phase [J]).  The sign is carried by
+    `Fc.sum() - I_total` and the residual scale uses |I_total|, so the Newton system
+    is unchanged; the returned jc_nodes is negative on the dissolving face.
     """
-    if I_total <= 0:
-        raise ValueError("I_total must be positive")
+    if I_total == 0:
+        raise ValueError("I_total must be non-zero")
     m = cm.mesh
     elem = ElementTetP1()
     basis = CellBasis(m, elem)
@@ -240,7 +285,7 @@ def _solve_core(cm: CellMesh, kappa: float, I_total: float, i0: float,
         Rc = float(Fc.sum() - I_total)
         return Rl, Rc, Fc, Fa
 
-    scale = max(I_total, 1e-30)
+    scale = max(abs(I_total), 1e-30)
     Rl, Rc, _, _ = residual(phi, phi_a)
     Rn = max(np.abs(Rl).max(), abs(Rc)) / scale
     n_iter = 0
@@ -291,7 +336,9 @@ def _solve_core(cm: CellMesh, kappa: float, I_total: float, i0: float,
     eta_a = phi_a - phi
     Fc = asm(_cath_flux, fb_c, eta=eta_c, jlim=jlim, **kw)
     Fa = asm(_anode_flux, fb_a, eta=eta_a, **kw)
-    I_front = float(asm(_cath_flux, fb_f, eta=eta_c, jlim=jlim, **kw).sum())
+    Ff = asm(_cath_flux, fb_f, eta=eta_c, jlim=jlim, **kw)   # per front facet, A
+    A_fl = asm(_unit, fb_f)                                  # lumped facet areas, cm2
+    I_front = float(Ff.sum())
     jc_nodes = _cath_j(eta_c, jlim, i0, ac, aa, f)          # A/cm2 at every node
     eta_bar_c = float(asm(_mean_eta, fb_c, eta=eta_c) / A_cath)
     eta_bar_a = float(asm(_mean_eta, fb_a, eta=eta_a) / A_anode)
@@ -303,6 +350,7 @@ def _solve_core(cm: CellMesh, kappa: float, I_total: float, i0: float,
         eta_bar_c=eta_bar_c, eta_bar_a=eta_bar_a,
         jlim_cath_mean=jlim_cath_mean, n_iter=n_iter, residual=Rn,
         basis=basis, fb_c=fb_c, fb_f=fb_f, fb_a=fb_a, bnd=bnd,
+        jf_facet=Ff, af_facet=A_fl,
     )
 
 
@@ -381,8 +429,8 @@ def _uniformity(j: np.ndarray, half_w: float, half_h: float) -> dict:
 _CLIP_EDGES = ("top", "bottom", "left", "right")
 
 
-def _sheet_poisson(j_grid: np.ndarray, R_sq: float, hx: float, hz: float,
-                   clip_edge: str = "top") -> np.ndarray:
+def _sheet_poisson(j_grid: np.ndarray, R_sq, hx: float, hz: float,
+                   clip_edge: str = "top", anodic: bool = False) -> np.ndarray:
     """Metal potential V_m(s) on the coupon front-face grid, in volts.
 
     Solves the thin-film equation  div_s((1/R_s) grad_s V_m) = -j  on the
@@ -390,18 +438,30 @@ def _sheet_poisson(j_grid: np.ndarray, R_sq: float, hx: float, hz: float,
     edges (finite differences on the structured (nz, nx) grid, direct sparse
     solve; `j_grid` is the cathodic current density into the metal, A/cm2).
 
+    `R_sq` is a scalar (ohm/sq) or a (nz, nx) map for a deposit whose sheet
+    resistance varies over the face (F4 time march: R_s = rho / (t_seed + t_dep)).
+    `anodic=True` keeps the sign of j (pulse-reverse phase, current leaves the
+    metal over the face) instead of clipping it to the cathodic branch.
+
     Sign: current enters the film everywhere and leaves through the clip, so
     V_m >= 0 and grows with distance from the clip (max at the far edge/corner).
     """
     if clip_edge not in _CLIP_EDGES:
         raise ValueError(f"clip_edge must be one of {_CLIP_EDGES}, got {clip_edge!r}")
     nz, nx = j_grid.shape
+    rs = np.asarray(R_sq, dtype=float)
+    if rs.ndim == 2 and rs.shape != (nz, nx):
+        raise ValueError(f"seed_R_sq map shape {rs.shape} != j grid {(nz, nx)}")
+    if np.any(rs <= 0):
+        raise ValueError("seed_R_sq must be > 0 ohm/sq everywhere")
     n = nz * nx
     ihx2, ihz2 = 1.0 / (hx * hx), 1.0 / (hz * hz)
     clip_x = clip_edge in ("left", "right")
     clip_z = clip_edge in ("top", "bottom")
     clip_lo = clip_edge in ("bottom", "left")
-    rhs = -R_sq * np.maximum(j_grid, 0.0).ravel().copy()
+    j_face = np.asarray(j_grid, dtype=float) if anodic else np.maximum(j_grid, 0.0)
+    rhs = (-rs.ravel() * j_face.ravel() if rs.ndim
+           else -float(rs) * j_face.ravel().copy())
 
     rows: list[int] = []
     cols: list[int] = []
@@ -449,6 +509,23 @@ def _sheet_poisson(j_grid: np.ndarray, R_sq: float, hx: float, hz: float,
     from scipy.sparse import csc_matrix as _csc
     A = _csc((vals, (rows, cols)), shape=(n, n))
     return spsolve(A, rhs).reshape(nz, nx)
+
+
+def _nodal_face_j(core: SimpleNamespace, n_nodes: int) -> np.ndarray:
+    r"""Area-weighted nodal current density on the coupon front face, A/cm2.
+
+    `jf_facet` is the FE load vector of the front-face flux (node k holds
+    \int j phi_k dA) and `af_facet` the lumped facet areas (\int phi_k dA), so the
+    ratio is a smooth nodal average that integrates back to the exact facet
+    current sum(jf) = I_front.  Unlike the raw P1 nodal flux it has no edge-node
+    singularity, so it is used for the pulse-reverse ANODIC map, where the coupon
+    edge carries a sharp primary singularity and no mass-transfer smoothing.
+    """
+    num = np.asarray(core.jf_facet, dtype=float)
+    den = np.asarray(core.af_facet, dtype=float)
+    if num.size != n_nodes or den.size != n_nodes:
+        raise ValueError(f"facet load vector size {num.size} != n_nodes {n_nodes}")
+    return num / np.where(den > 0.0, den, 1.0)
 
 
 def _grid_to_nodes(xy_nodes: np.ndarray, v_grid: np.ndarray,
@@ -538,6 +615,17 @@ class CellResult:
     domain: str
     warnings: list[str] = field(default_factory=list)
     assumptions: list[str] = field(default_factory=lambda: list(ASSUMPTIONS))
+    # ---- F3 pulse reverse (all None / 0 on the DC path)
+    pr: dict | None = None            # waveform used, None = DC
+    pr_dl_fraction: float = 0.0       # share of reverse charge sent to the double layer
+    duty_f: float | None = None
+    duty_r: float | None = None
+    I_forward_A: float | None = None  # forward-phase current (positive)
+    I_reverse_A: float | None = None  # reverse-phase current (negative: coupon is the anode)
+    I_net_A: float | None = None      # duty-weighted net current the net map integrates to
+    I_front_net_A: float | None = None  # net current landing on the coupon FRONT face
+    j_forward_mA_cm2: np.ndarray | None = None
+    j_reverse_mA_cm2: np.ndarray | None = None   # anodic removal density, positive
 
     def to_dict(self) -> dict:
         def _clean(v):
@@ -570,30 +658,22 @@ def _cached_mesh(geom: CellGeometry, resolution: str) -> CellMesh:
     return _MESH_CACHE[key]
 
 
-def solve_cell(geom: CellGeometry, bath: Bath, I_total_A: float, t_s: float = 3600,
-               efficiency: float = 1.0, delta_um: float = 60.0,
-               delta_map: dict | None = None, suppressed: bool = True,
-               resolution: str = "coarse", *, seed_R_sq: float | None = None,
-               clip_edge: str = "top", clip_R_ohm: float = 0.0,
-               progress=None) -> CellResult:
-    """Solve the 3-D beaker cell at galvanostatic total current `I_total_A`.
+def _steady_core(geom: CellGeometry, bath: Bath, I_total_A: float, *,
+                 delta_um: float = 60.0, delta_map: dict | None = None,
+                 suppressed: bool = True, resolution: str = "coarse",
+                 seed_R_sq=None, clip_edge: str = "top", progress=None,
+                 anodic: bool = False, vm0: np.ndarray | None = None,
+                 phi0: tuple[np.ndarray, float] | None = None) -> SimpleNamespace:
+    """One steady state of the beaker cell at the SIGNED current `I_total_A`.
 
-    `seed_R_sq` (ohm/sq) enables the thin-seed terminal-effect correction: the
-    coupon front face gets a metal potential V_m(s) from the sheet equation
-    div_s((1/R_s) grad_s V_m) = -j, V_m = 0 on the `clip_edge` ("top" | "bottom"
-    | "left" | "right") and zero flux elsewhere; the front-face overpotential
-    becomes eta_c = V_m - phi_l.  None (default) keeps the metal equipotential.
-    `clip_R_ohm` adds I_total * clip_R_ohm to V_cell (lumped clip contact, no
-    effect on the current distribution).
+    Shared by `solve_cell` (one call, DC), its pulse-reverse branch (forward at
+    +I_f and reverse at -rr*I_f) and `march_cell` (one call per stage).  Holds the
+    mesh, the front-face grid/node set, the Nernst-limited jlim field, the Newton
+    core and the seed sheet-resistance fixed point, so all three use identical
+    physics.  `anodic=True` (reverse phase) keeps the sign of j in the sheet
+    equation; `vm0` warm-starts V_m across march stages.
     """
-    t_start = time.perf_counter()
-    if progress:
-        progress(0.05, f"meshing beaker cell ({resolution})")
     cm = _cached_mesh(geom, resolution)
-    mesh_time = cm.mesh_time_s
-    if progress:
-        progress(0.15, f"mesh ready: {cm.n_nodes} nodes, {cm.n_elems} tets")
-
     i0 = bath.i0_cu_supp if suppressed else bath.i0_cu
     jlim, warns = _delta_to_jlim(cm, bath, delta_um, delta_map)
     warnings = list(cm.warnings) + warns
@@ -616,28 +696,38 @@ def solve_cell(geom: CellGeometry, bath: Bath, I_total_A: float, t_s: float = 36
     if seed_R_sq is None:
         core = _solve_core(cm, bath.kappa, I_total_A, i0, bath.alpha_c, bath.alpha_a,
                            bath.f_RT, jlim, geom.gap, taped=geom.taped,
-                           on_iter=on_iter)
+                           on_iter=on_iter, phi0=phi0)
         vm_nodes, n_seed, vm_max_V = None, 0, 0.0
     else:
         if clip_edge not in _CLIP_EDGES:
             raise ValueError(f"clip_edge must be one of {_CLIP_EDGES}, got {clip_edge!r}")
-        if seed_R_sq <= 0:
-            raise ValueError("seed_R_sq must be > 0 ohm/sq (use None for equipotential)")
+        rs = np.asarray(seed_R_sq, dtype=float)
+        if rs.ndim == 2 and rs.shape != (GRID_N, GRID_N):
+            raise ValueError(f"seed_R_sq map shape {rs.shape} != (GRID_N, GRID_N) = "
+                             f"{(GRID_N, GRID_N)}")
+        if np.any(rs <= 0):
+            raise ValueError("seed_R_sq must be > 0 ohm/sq everywhere "
+                             "(use None for equipotential)")
         hx = float(x_grid[1] - x_grid[0])
         hz = float(z_grid[1] - z_grid[0])
         vm_nodes = np.zeros(m.p.shape[1])
-        phi0, n_seed, vm_max_V = None, 0, 0.0
+        if vm0 is not None:                      # march warm start (same node set)
+            vm_nodes[front_nodes] = np.asarray(vm0, float)[front_nodes]
+        phi0s, n_seed, vm_max_V = phi0, 0, 0.0
         alpha, prev_step = 1.0, np.inf
         for it in range(1, 31):
             core = _solve_core(cm, bath.kappa, I_total_A, i0, bath.alpha_c,
                                bath.alpha_a, bath.f_RT, jlim, geom.gap,
                                taped=geom.taped, on_iter=on_iter,
-                               vm=vm_nodes, phi0=phi0)
-            phi0 = (core.phi, core.phi_a)
-            j_faces = np.maximum(_grid_interp(xy, core.jc_nodes[front_nodes],
-                                              x_grid, z_grid), 0.0)       # A/cm2
-            vm_new = _grid_to_nodes(xy, _sheet_poisson(j_faces, seed_R_sq, hx, hz,
-                                                       clip_edge), x_grid, z_grid)
+                               vm=vm_nodes, phi0=phi0s)
+            phi0s = (core.phi, core.phi_a)
+            j_node = core.jc_nodes[front_nodes]
+            j_faces = _grid_interp(xy, j_node, x_grid, z_grid)              # A/cm2
+            if not anodic:
+                j_faces = np.maximum(j_faces, 0.0)
+            vm_new = _grid_to_nodes(xy, _sheet_poisson(j_faces, rs, hx, hz,
+                                                       clip_edge, anodic=anodic),
+                                    x_grid, z_grid)
             vm_old = vm_nodes[front_nodes].copy()
             step = float(np.abs(vm_new - vm_old).max()) if vm_old.size else 0.0
             if step > prev_step:                 # oscillating -> under-relax
@@ -654,41 +744,136 @@ def solve_cell(geom: CellGeometry, bath: Bath, I_total_A: float, t_s: float = 36
         else:
             warnings.append("seed sheet-resistance fixed point did not reach 1e-6 V "
                             "in 30 iterations")
-        vm_max_V = float(np.max(vm_nodes[front_nodes])) if front_nodes.size else 0.0
-        warnings.append(f"seed terminal effect: R_s = {seed_R_sq:g} ohm/sq, clip on the "
+        vm_max_V = float(np.max(np.abs(vm_nodes[front_nodes]))) if front_nodes.size else 0.0
+        rs_txt = f"{float(rs):g}" if rs.ndim == 0 else f"{rs.min():.3g}-{rs.max():.3g}"
+        warnings.append(f"seed terminal effect: R_s = {rs_txt} ohm/sq, clip on the "
                         f"{clip_edge} edge, max metal drop {vm_max_V * 1e3:.2f} mV")
         if not geom.taped:
             warnings.append("seed_R_sq is applied as a nodal metal-potential offset on the "
                             "coupon front face only; the untaped back/sidewall facets share "
                             "their perimeter nodes and inherit part of that offset")
     solve_time = time.perf_counter() - t_solve
+    return SimpleNamespace(
+        cm=cm, core=core, jlim=jlim, warnings=warnings, mesh_time=cm.mesh_time_s,
+        solve_time=solve_time, front_nodes=front_nodes, xy=xy,
+        x_grid=x_grid, z_grid=z_grid, vm_nodes=vm_nodes, n_seed=n_seed,
+        vm_max_V=vm_max_V,
+    )
+
+
+def solve_cell(geom: CellGeometry, bath: Bath, I_total_A: float, t_s: float = 3600,
+               efficiency: float = 1.0, delta_um: float = 60.0,
+               delta_map: dict | None = None, suppressed: bool = True,
+               resolution: str = "coarse", *, seed_R_sq=None,
+               clip_edge: str = "top", clip_R_ohm: float = 0.0,
+               pr: dict | None = None, pr_dl_fraction: float = 0.0,
+               progress=None) -> CellResult:
+    """Solve the 3-D beaker cell at galvanostatic total current `I_total_A`.
+
+    `seed_R_sq` (ohm/sq) enables the thin-seed terminal-effect correction: the
+    coupon front face gets a metal potential V_m(s) from the sheet equation
+    div_s((1/R_s) grad_s V_m) = -j, V_m = 0 on the `clip_edge` ("top" | "bottom"
+    | "left" | "right") and zero flux elsewhere; the front-face overpotential
+    becomes eta_c = V_m - phi_l.  None (default) keeps the metal equipotential.
+    A (GRID_N, GRID_N) array is accepted as an R_s map over the face (F4 march).
+    `clip_R_ohm` adds I_total * clip_R_ohm to V_cell (lumped clip contact, no
+    effect on the current distribution).
+
+    `pr` (F3) is a pulse-reverse dict {'t_f_ms', 't_r_ms', 't_off_ms', 'rr'} at the
+    NET current `I_total_A`: `platesim.feature.engine.recipes.pr_forward` gives the
+    forward current I_f = I_total*P/(t_f - rr*t_r) and the duties.  The forward
+    phase is solved at +I_f and the reverse phase at -rr*I_f (the coupon is then
+    the anode, see `_solve_core`); the returned `j_mA_cm2` / `thickness_um` are the
+    duty-weighted NET maps, and `j_forward_mA_cm2` / `j_reverse_mA_cm2` keep the two
+    phase maps (the latter as a positive removal current density).
+    DOUBLE LAYER: the F3 duty average gives the whole reverse charge to Faraday
+    (dissolution).  `platesim.feature.pulse_cycle` finds ~1/3 of the reverse charge
+    goes to the double layer instead; that is NOT applied unless `pr_dl_fraction`
+    (default 0) is given, which scales the reverse faradaic current by
+    (1 - pr_dl_fraction).  With pr_dl_fraction > 0 the net faradaic (deposition)
+    charge then exceeds I_total * t_s by pr_dl_fraction * duty_r * rr * I_f * t_s,
+    because the double layer absorbs that part of the dissolution charge.
+    """
+    if progress:
+        progress(0.05, f"meshing beaker cell ({resolution})")
+
+    if pr is not None:
+        j_f_rel, duty_f, duty_r = pr_forward(1.0, pr)
+        rr = float(pr["rr"])
+        if not np.isfinite(j_f_rel) or float(pr["t_f_ms"]) - rr * float(pr["t_r_ms"]) <= 0:
+            raise ValueError(f"pr waveform is not net cathodic: t_f_ms must exceed "
+                             f"rr*t_r_ms, got {pr!r}")
+        I_f = float(I_total_A) * float(j_f_rel)
+    p_f = _steady_core(geom, bath, I_f if pr is not None else I_total_A, delta_um=delta_um,
+                       delta_map=delta_map, suppressed=suppressed, resolution=resolution,
+                       seed_R_sq=seed_R_sq, clip_edge=clip_edge, progress=progress)
+    cm, core, warnings = p_f.cm, p_f.core, p_f.warnings
+    mesh_time, solve_time = p_f.mesh_time, p_f.solve_time
+    front_nodes, xy = p_f.front_nodes, p_f.xy
+    x_grid, z_grid = p_f.x_grid, p_f.z_grid
+
     if progress:
         progress(0.85, "post-processing: j map on coupon face")
 
     # ---- regular grid j(x, y) on the coupon front face (corrected j when seeded)
     j_nodes_mA = core.jc_nodes[front_nodes] * 1e3
-    j_grid = _grid_interp(xy, j_nodes_mA, x_grid, z_grid)
-    j_grid = np.maximum(j_grid, 0.0)
+    j_fwd = np.maximum(_grid_interp(xy, j_nodes_mA, x_grid, z_grid), 0.0)
+    I_phase = float(I_total_A)
+    I_front_net = float(core.I_front)
+    pr_fields: dict = {}
+    if pr is None:
+        j_grid = j_fwd
+    else:
+        I_r = -rr * I_f
+        I_phase = I_f
+        p_r = _steady_core(geom, bath, I_r, delta_um=delta_um, delta_map=delta_map,
+                           suppressed=suppressed, resolution=resolution,
+                           seed_R_sq=seed_R_sq, clip_edge=clip_edge, progress=progress,
+                           anodic=True, phi0=(core.phi, core.phi_a))
+        j_rev = np.maximum(-_grid_interp(xy, _nodal_face_j(p_r.core, cm.n_nodes)
+                                         [front_nodes] * 1e3, x_grid, z_grid), 0.0)
+        dlf = float(np.clip(pr_dl_fraction, 0.0, 1.0))
+        j_grid = duty_f * j_fwd - (1.0 - dlf) * duty_r * j_rev
+        # forward Fc > 0 (deposition), reverse Fc < 0 -> the reverse term subtracts
+        I_net = duty_f * float(core.I_cath) + (1.0 - dlf) * duty_r * float(p_r.core.I_cath)
+        I_front_net = (duty_f * float(core.I_front)
+                       + (1.0 - dlf) * duty_r * float(p_r.core.I_front))
+        warnings += list(p_r.warnings)
+        warnings.append(
+            f"PR: forward {I_f * 1e3:.2f} mA at duty {duty_f:.3f}, reverse "
+            f"{-I_r * 1e3:.2f} mA at duty {duty_r:.3f} -> duty-weighted net map "
+            f"(I_net {I_net * 1e3:.3f} mA); double-layer share {dlf:g} "
+            f"{'' if dlf == 0 else '(reverse faradaic current scaled by 1 - share)'}")
+        pr_fields = dict(pr=dict(pr), pr_dl_fraction=dlf, duty_f=duty_f, duty_r=duty_r,
+                         I_forward_A=float(I_f), I_reverse_A=float(I_r),
+                         I_net_A=float(I_net), j_forward_mA_cm2=j_fwd,
+                         j_reverse_mA_cm2=j_rev)
     th_grid = thickness_um(j_grid, t_s, efficiency)
 
     metrics = _uniformity(j_grid, geom.coupon_w / 2, geom.coupon_h / 2)
 
+    i0 = bath.i0_cu_supp if suppressed else bath.i0_cu
+    vm_max_V, n_seed = p_f.vm_max_V, p_f.n_seed
+    rs_used = np.asarray(seed_R_sq, dtype=float) if seed_R_sq is not None else None
+    seed_field = (None if rs_used is None else
+                  (float(rs_used) if rs_used.ndim == 0 else float(rs_used.mean())))
+
     # ---- overpotentials, ohmic drop, Wagner number
     eta_bar_c, eta_bar_a = core.eta_bar_c, core.eta_bar_a
-    V_cell = float(core.phi_a) + I_total_A * clip_R_ohm
+    V_cell = float(core.phi_a) + I_phase * clip_R_ohm
     V_ohm = V_cell - eta_bar_a + eta_bar_c
     g_mean = abs(float(_cath_dj(np.array([eta_bar_c]), np.array([core.jlim_cath_mean]),
                                 i0, bath.alpha_c, bath.alpha_a, bath.f_RT)[0]))
     Wa = bath.kappa / (g_mean * geom.coupon_w) if g_mean > 0 else float("inf")
 
-    front_fraction = core.I_front / I_total_A
+    front_fraction = core.I_front / I_phase
     loss_fraction = 1.0 - front_fraction
     if geom.taped and geom.stray_area <= 0:
         loss_fraction = 0.0            # nothing but the front face is active by construction
         front_fraction = 1.0
-    if abs(core.I_cath - I_total_A) / I_total_A > 1e-4:
+    if abs(core.I_cath - I_phase) / I_phase > 1e-4:
         warnings.append(f"cathode charge balance off by "
-                        f"{abs(core.I_cath - I_total_A) / I_total_A:.2e} (solver residual)")
+                        f"{abs(core.I_cath - I_phase) / I_phase:.2e} (solver residual)")
     if not geom.taped:
         warnings.append(f"untaped: {100 * loss_fraction:.1f} % of I_total plates the back/"
                         f"sidewalls/stray patch instead of the front face")
@@ -713,9 +898,230 @@ def solve_cell(geom: CellGeometry, bath: Bath, I_total_A: float, t_s: float = 36
         front_area_cm2=core.A_front, cathode_area_cm2=core.A_cath,
         anode_area_cm2=core.A_anode,
         n_nodes=cm.n_nodes, n_elems=cm.n_elems, n_newton=core.n_iter,
-        seed_R_sq=seed_R_sq, vm_max_mV=float(vm_max_V * 1e3), n_seed_iter=n_seed,
+        seed_R_sq=seed_field, vm_max_mV=float(vm_max_V * 1e3), n_seed_iter=n_seed,
         mesh_time_s=mesh_time, solve_time_s=solve_time, domain=cm.domain,
-        warnings=warnings,
+        warnings=warnings, I_front_net_A=float(I_front_net), **pr_fields,
+    )
+
+
+def _near_far_ratio(field: np.ndarray, clip_edge: str = "top") -> float:
+    """Mean over the third nearest the clip edge / mean over the third farthest.
+
+    Rows of the solution grid are z (bottom -> top), columns are x (left -> right),
+    so the default "top" clip compares the top third against the bottom third.
+    """
+    nz, nx = field.shape
+    if clip_edge in ("top", "bottom"):
+        band = max(1, nz // 3)
+        top, bot = field[-band:, :].mean(), field[:band, :].mean()
+        near, far = (top, bot) if clip_edge == "top" else (bot, top)
+    else:
+        band = max(1, nx // 3)
+        right, left = field[:, -band:].mean(), field[:, :band].mean()
+        near, far = (right, left) if clip_edge == "right" else (left, right)
+    return float(near / far) if far else float("nan")
+
+
+def _edge_center_ratio(field: np.ndarray, geom: CellGeometry) -> float:
+    """Edge/centre ratio of a coupon-grid map (same masks as `_uniformity`)."""
+    return float(_uniformity(field, geom.coupon_w / 2, geom.coupon_h / 2)["edge_center_ratio"])
+
+
+@dataclass
+class MarchStage:
+    """One stage of the F4 time march (cumulative deposit at the stage end)."""
+    index: int
+    t_end_h: float
+    j_mA_cm2: np.ndarray             # net local current density this stage
+    dep_um: np.ndarray               # thickness added in this stage
+    thickness_um: np.ndarray         # cumulative deposit after this stage
+    R_s_ohm_sq: np.ndarray | None    # sheet resistance used for this stage
+    R_s_mean_ohm_sq: float
+    V_cell_V: float
+    I_net_A: float
+    charge_scale: float              # grid map -> solver charge (see march_cell)
+    front_fraction: float
+    loss_fraction: float
+    edge_center_j_ratio: float
+    near_far_j_ratio: float
+    edge_center_thickness_ratio: float
+    near_far_thickness_ratio: float
+    mass_g: float
+    mass_faraday_g: float
+
+    def to_dict(self) -> dict:
+        d = {}
+        for k, v in self.__dict__.items():
+            if isinstance(v, np.ndarray):
+                d[k] = np.where(np.isfinite(v), v, np.nan).tolist()
+            elif v is None:
+                d[k] = None
+            elif isinstance(v, (np.floating, np.integer)):
+                d[k] = v.item()
+            else:
+                d[k] = v
+        return d
+
+
+@dataclass
+class MarchResult:
+    """F4 result: per-stage maps + ratios, the final thickness map and mass balance."""
+    x_cm: np.ndarray
+    z_cm: np.ndarray
+    hours: float
+    n_stages: int
+    stages: list[MarchStage]
+    thickness_um: np.ndarray         # final cumulative deposit
+    j_mA_cm2: np.ndarray             # net j of the last stage
+    R_s_ohm_sq: np.ndarray | None    # sheet resistance at the end of the run
+    seed_R_sq0: float | None
+    seed_t_um: float | None
+    rho_cu_ohm_cm: float
+    pr: dict | None
+    mass_g: float
+    mass_faraday_g: float
+    mass_balance: float              # mass_g / mass_faraday_g
+    V_cell_first_V: float
+    V_cell_last_V: float
+    solve_time_s: float
+    n_newton_total: int = 0
+    warnings: list[str] = field(default_factory=list)
+    assumptions: list[str] = field(default_factory=lambda: list(ASSUMPTIONS))
+
+    def to_dict(self) -> dict:
+        d = {}
+        for k, v in self.__dict__.items():
+            if isinstance(v, np.ndarray):
+                d[k] = np.where(np.isfinite(v), v, np.nan).tolist()
+            elif isinstance(v, list) and v and isinstance(v[0], MarchStage):
+                d[k] = [s.to_dict() for s in v]
+            elif v is None:
+                d[k] = None
+            elif isinstance(v, (np.floating, np.integer)):
+                d[k] = v.item()
+            elif isinstance(v, float) and not np.isfinite(v):
+                d[k] = None
+            else:
+                d[k] = v
+        return d
+
+
+def march_cell(geom: CellGeometry, bath: Bath, I_total_A: float, hours: float,
+               n_stages: int = 6, seed_R_sq0: float | None = 0.05,
+               seed_t_um: float | None = None, rho_cu_ohm_cm: float = 1.7e-6,
+               pr: dict | None = None, pr_dl_fraction: float = 0.0,
+               efficiency: float = 1.0, delta_um: float = 60.0,
+               delta_map: dict | None = None, suppressed: bool = True,
+               resolution: str = "coarse", clip_edge: str = "top",
+               clip_R_ohm: float = 0.0, progress=None) -> MarchResult:
+    """Time-marched coupon cell (F4): the sheet resistance falls as copper deposits.
+
+    The run is split into `n_stages` equal galvanostatic stages.  At every stage the
+    local sheet resistance is rebuilt from the accumulated local deposit,
+
+        R_s(x) = seed_R_sq0 * t_seed / (t_seed + t_dep(x))      [ohm/sq]
+        t_seed = rho_cu_ohm_cm / seed_R_sq0   (unless seed_t_um is given)
+
+    i.e. the bulk form R_s = rho/(t_seed + t_dep) with the measured seed sheet
+    resistance setting the seed thickness, so the edge build-up that evolves over
+    the run feeds back into the terminal effect.  The cell is then solved with that
+    R_s map (`solve_cell(seed_R_sq=<map>)`, plus the F3 pulse-reverse duty average
+    when `pr` is given) and the deposit is advanced with Faraday from the local NET
+    current density.  `efficiency` is applied to the deposit, `pr_dl_fraction` to the
+    reverse phase (see `solve_cell`).
+
+    Thickness is advanced from the GridN x GridN map, so the stage increment is
+    renormalised by `charge_scale` = (solver net current) / (trapezoid integral of
+    the map) each stage; the 41x41 resampling of the P1 field otherwise carries a
+    ~1 % area-integral error.  The reported `j_mA_cm2` maps are NOT renormalised.
+
+    `seed_R_sq0 = None` keeps the metal equipotential (no terminal effect) for the
+    whole run, i.e. the march degenerates to n_stages identical DC solves.
+    """
+    hours = float(hours)
+    n_stages = int(n_stages)
+    if hours <= 0 or n_stages < 1:
+        raise ValueError("hours must be > 0 and n_stages >= 1")
+    if seed_R_sq0 is not None and float(seed_R_sq0) <= 0:
+        raise ValueError("seed_R_sq0 must be > 0 ohm/sq (use None for equipotential)")
+    t_seed_um = (None if seed_R_sq0 is None else
+                 (float(seed_t_um) if seed_t_um is not None
+                  else float(rho_cu_ohm_cm) * 1e4 / float(seed_R_sq0)))
+    dt_s = hours * 3600.0 / n_stages
+    t_start = time.perf_counter()
+
+    dep = np.zeros((GRID_N, GRID_N))
+    x_cm = np.linspace(-geom.coupon_w / 2, geom.coupon_w / 2, GRID_N)
+    z_cm = np.linspace(geom.coupon_center_z - geom.coupon_h / 2,
+                       geom.coupon_center_z + geom.coupon_h / 2, GRID_N)
+    w = np.ones(GRID_N)
+    w[0] = w[-1] = 0.5
+    W = np.outer(w, w)
+    dA = (x_cm[1] - x_cm[0]) * (z_cm[1] - z_cm[0])       # cm2 per grid cell
+    A_eff = float(W.sum() * dA)
+
+    stages: list[MarchStage] = []
+    warnings: list[str] = []
+    mass_faraday_g = 0.0
+    n_newton = 0
+    V_first = float("nan")
+    for k in range(1, n_stages + 1):
+        if seed_R_sq0 is None:
+            R_map = None
+        else:
+            R_map = float(seed_R_sq0) * t_seed_um / (t_seed_um + np.maximum(dep, 0.0))
+        if progress:
+            progress(0.05 + 0.9 * (k - 1) / n_stages,
+                     f"F4 stage {k}/{n_stages}: R_s "
+                     f"{'off' if R_map is None else f'{R_map.mean():.3g} ohm/sq'}")
+        res = solve_cell(geom, bath, I_total_A, t_s=dt_s, efficiency=efficiency,
+                         delta_um=delta_um, delta_map=delta_map, suppressed=suppressed,
+                         resolution=resolution, seed_R_sq=R_map, clip_edge=clip_edge,
+                         clip_R_ohm=clip_R_ohm, pr=pr, pr_dl_fraction=pr_dl_fraction)
+        j = np.asarray(res.j_mA_cm2, float)
+        I_ch = float(res.I_front_net_A if res.I_front_net_A is not None
+                     else res.I_cathode_A)
+        q_map = float((j * W).sum()) * dA * 1e-3        # mA/cm2 * cm2 -> A
+        q_scale = (I_ch / q_map) if q_map > 0 else 1.0
+        dep_stage = np.maximum(thickness_um(np.maximum(j, 0.0) * q_scale, dt_s, efficiency),
+                               0.0)
+        dep = dep + dep_stage
+        if k == 1:
+            V_first = float(res.V_cell_V)
+        n_newton += int(res.n_newton)
+        mass_faraday_g += float(M_CU / (2.0 * F) * abs(I_ch) * dt_s * efficiency)
+        mass_g = float((dep * W).sum()) * dA * 1e-4 * RHO_CU         # um cm2 -> g
+        warnings_stage = [w_ for w_ in res.warnings if "charge balance" in w_]
+        warnings += warnings_stage
+        stages.append(MarchStage(
+            index=k, t_end_h=dt_s * k / 3600.0, j_mA_cm2=j, dep_um=dep_stage,
+            thickness_um=dep.copy(),
+            R_s_ohm_sq=None if R_map is None else np.asarray(R_map, float),
+            R_s_mean_ohm_sq=float("nan") if R_map is None else float(np.mean(R_map)),
+            V_cell_V=float(res.V_cell_V), I_net_A=I_ch, charge_scale=float(q_scale),
+            front_fraction=float(res.front_fraction),
+            loss_fraction=float(res.loss_fraction),
+            edge_center_j_ratio=float(res.edge_center_ratio),
+            near_far_j_ratio=_near_far_ratio(j, clip_edge),
+            edge_center_thickness_ratio=_edge_center_ratio(dep, geom),
+            near_far_thickness_ratio=_near_far_ratio(dep, clip_edge),
+            mass_g=mass_g, mass_faraday_g=mass_faraday_g,
+        ))
+    solve_time = time.perf_counter() - t_start
+    mass_g = float((dep * W).sum()) * dA * 1e-4 * RHO_CU
+    if progress:
+        progress(1.0, "F4 march done")
+    return MarchResult(
+        x_cm=x_cm, z_cm=z_cm, hours=hours, n_stages=n_stages, stages=stages,
+        thickness_um=dep, j_mA_cm2=np.asarray(stages[-1].j_mA_cm2, float),
+        R_s_ohm_sq=None if seed_R_sq0 is None else
+        float(seed_R_sq0) * t_seed_um / (t_seed_um + np.maximum(dep, 0.0)),
+        seed_R_sq0=seed_R_sq0, seed_t_um=t_seed_um,
+        rho_cu_ohm_cm=float(rho_cu_ohm_cm), pr=(None if pr is None else dict(pr)),
+        mass_g=mass_g, mass_faraday_g=mass_faraday_g,
+        mass_balance=(mass_g / mass_faraday_g) if mass_faraday_g else float("nan"),
+        V_cell_first_V=V_first, V_cell_last_V=float(stages[-1].V_cell_V),
+        solve_time_s=solve_time, n_newton_total=n_newton, warnings=warnings,
     )
 
 

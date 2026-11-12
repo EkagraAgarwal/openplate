@@ -6,14 +6,18 @@ Tags: [J] judgement (parameter choice), no literature citation is implied.
 * ``K_B_EV``      Boltzmann constant in eV/K, exact SI value.
 * ``N_SITES_CM2`` Cu surface site density 1.5e15 cm^-2 [J] (fcc (111)-like packing;
   (100) is ~1.53e15 cm^-2, (111) ~1.77e15 cm^-2, so this is a round mid value).
+* ``N_A``         Avogadro constant, exact SI value.
 """
 from __future__ import annotations
 
 import math
 
+from ..core.constants import M_CU, RHO_CU
+
 E_CHARGE_C = 1.602176634e-19   # C
 K_B_EV = 8.617333262e-5        # eV/K
 N_SITES_CM2 = 1.5e15           # cm^-2 [J]
+N_A = 6.02214076e23            # 1/mol, exact SI
 
 NU0_HZ = 1.0e13                # attempt frequency [J]
 E_D_EV = 0.40                  # Cu adatom terrace diffusion barrier [J]
@@ -38,6 +42,24 @@ def deposition_rate(j_A_cm2: float, n_sites_cm2: float = N_SITES_CM2) -> float:
 def deposition_rate_mA(j_mA_cm2: float, n_sites_cm2: float = N_SITES_CM2) -> float:
     """Convenience wrapper: same as ``deposition_rate`` but takes mA/cm2."""
     return deposition_rate(1.0e-3 * j_mA_cm2, n_sites_cm2)
+
+
+def monolayer_thickness_cm(n_sites_cm2: float = N_SITES_CM2,
+                           m_cu_g_mol: float = M_CU, rho_cu_g_cm3: float = RHO_CU) -> float:
+    """Thickness of one equivalent Cu monolayer [cm]: ``Omega * N_s``.
+
+    ``Omega = M_Cu / (rho_Cu N_A)`` is the atomic volume, so one deposited atom
+    per surface site adds ``Omega / (1 / N_s) = Omega N_s`` cm of thickness.
+    With the defaults this is 1.767e-8 cm (0.177 nm, close to the 0.209 nm
+    Cu(111) interlayer spacing).  Used to convert a kMC growth rate in ML/s
+    into the continuum growth velocity v [cm/s].
+    """
+    if n_sites_cm2 <= 0.0 or m_cu_g_mol <= 0.0 or rho_cu_g_cm3 <= 0.0:
+        raise ValueError("monolayer thickness needs positive density/mass arguments")
+    return (m_cu_g_mol / (rho_cu_g_cm3 * N_A)) * n_sites_cm2
+
+
+MONOLAYER_CM = monolayer_thickness_cm()   # cm per ML, 1.767e-8
 
 
 def hop_rate(n_bonds: int, T_K: float, E_d_eV: float = E_D_EV,
