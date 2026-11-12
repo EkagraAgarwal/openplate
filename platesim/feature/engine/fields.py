@@ -982,7 +982,7 @@ class StepSolver:
             eta = V - phi
             gu, gs = kin.cath(eta, acc)
             if p.suppressor:
-                b_ex = p.k_rd * duty_r * Ia / 1e-3 if ctrl['pr'] else 0.0
+                b_ex = p.k_rd * duty_r * Ia * (1.0 - p.pr_dl_fraction) / 1e-3 if ctrl['pr'] else 0.0
                 th_new = theta_be(th0, dt, p.k_plus * p.s_bulk * s_t, Mf * ct * gu, Mf * ct * gs,
                                   p.k_minus * duty_f, b_ex)
                 extra = w * p.Gamma * p.k_plus * (1 - th_new)          # sink = Gamma k_plus s (1-theta)
@@ -1027,7 +1027,7 @@ class StepSolver:
             eta = V - phi
             gu, gs = kin.cath(eta, acc)
             if p.suppressor:
-                b_ex = p.k_rd * duty_r * Ia / 1e-3 if ctrl['pr'] else 0.0
+                b_ex = p.k_rd * duty_r * Ia * (1.0 - p.pr_dl_fraction) / 1e-3 if ctrl['pr'] else 0.0
                 th_new = theta_be(th0, dt, p.k_plus * p.s_bulk * s_t, Mf * ct * gu, Mf * ct * gs,
                                   p.k_minus * duty_f, b_ex)
                 extra = w * p.Gamma * p.k_plus * (1 - th_new)

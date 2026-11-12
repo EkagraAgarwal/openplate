@@ -162,6 +162,16 @@ class Params:
                                                # or (0, 0) depending on the trench orientation on the coupon.
     beta_cu_L_mol: float = 0.15                # solutal expansion coefficient of CuSO4, L/mol [J, not measured]
     g_cm_s2: float = 981.0
+    # Bath speciation in the tertiary path (plan v2 D1 / A3): HSO4- <-> H+ + SO4^2- (Ka2 above) and the
+    # CuSO4^0 ion pair, re-equilibrated locally (platesim.core.speciation).  transport='tertiary' only.
+    speciation: bool = False
+    logK_ip: float = 2.3                       # log10 of the CuSO4^0 ion-pair constant [J, not verified]
+    activity: str = "davies"                   # 'ideal' | 'davies' | 'bdot' (core.speciation)
+    # Pulse-reverse double-layer correction (plan v2 D3): fraction of each reverse pulse's charge that
+    # charges the double layer instead of dissolving Cu (platesim.feature.pulse_cycle gives 0.27-0.41
+    # for the team waveform).  Scales only mechanisms tied to the FARADAIC anodic current (k_rd term);
+    # the net deposit is fixed by the galvanostat and is unaffected.  0 = legacy.
+    pr_dl_fraction: float = 0.0
     # Level-set numerics (plan v2 B4 / C3)
     ls_scheme: str = "godunov1"                # 'godunov1' (legacy first-order) | 'weno5' (WENO5 + TVD-RK3)
     ls_narrow_band: bool = False               # restrict band operations to |psi| < ls_band_cells * dx
@@ -253,6 +263,12 @@ def derive(p: Params, T_C: float) -> Phys:
         raise ValueError(f"adv_scheme must be one of {ADV_SCHEMES}, got {p.adv_scheme!r}")
     if p.ls_scheme not in LS_SCHEMES:
         raise ValueError(f"ls_scheme must be one of {LS_SCHEMES}, got {p.ls_scheme!r}")
+    if p.activity not in ("ideal", "davies", "bdot"):
+        raise ValueError(f"activity must be 'ideal', 'davies' or 'bdot', got {p.activity!r}")
+    if not 0.0 <= p.pr_dl_fraction < 1.0:
+        raise ValueError(f"pr_dl_fraction must be in [0, 1), got {p.pr_dl_fraction!r}")
+    if p.speciation and p.transport != "tertiary":
+        raise ValueError("speciation=True requires transport='tertiary'")
     if len(tuple(p.gravity_dir)) != 2:
         raise ValueError(f"gravity_dir must be a (g_x, g_z) pair, got {p.gravity_dir!r}")
     if p.adv_scheme in ("sg", "tvd") and p.transport == "tertiary":

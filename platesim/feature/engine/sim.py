@@ -482,7 +482,7 @@ class ViaSim:
             if p.suppressor and dt < 0.9 * dt_pred:
                 # shorter step than predicted: redo the (cell-local) coverage update with the true dt
                 acc = (1.0 + p.b_acc * st['theta_a'][act]) if p.use_accel else 1.0
-                b_ex = p.k_rd * ctrl['duty_r'] * out['i_a'] / 1e-3 if ctrl['pr'] else 0.0
+                b_ex = p.k_rd * ctrl['duty_r'] * out['i_a'] * (1.0 - p.pr_dl_fraction) / 1e-3 if ctrl['pr'] else 0.0
                 th = theta_be(out['th0'], dt, p.k_plus * p.s_bulk * out['s_t'], ph.Mfac * out['ct'] * out['gu'],
                               ph.Mfac * out['ct'] * out['gs'], p.k_minus * ctrl['duty_f'], b_ex)
                 st['theta'][act] = th
