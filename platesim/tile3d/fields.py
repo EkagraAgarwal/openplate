@@ -29,17 +29,41 @@ from .backend import ls_numpy
 DIRECT_MAX = 40000      # unknowns up to which a sparse LU is used; above it AMG-preconditioned CG
 
 
-class _Linear:
-    """One SPD matrix, several right-hand sides."""
+class _Precond:
+    """AMG preconditioner shared by a family of systems A0 + diag(q) (q >= 0, changing between calls).
 
-    def __init__(self, A, tol=1e-10):
+    The hierarchy is built for the first matrix of the family and reused; it is rebuilt when a solve
+    needs more than `grow` times the iterations of the first solve after the last rebuild (the
+    diagonal has drifted far, e.g. the Cu sink near the limiting current)."""
+
+    def __init__(self, grow=2.5, floor=25):
+        self.M, self.base, self.grow, self.floor, self.builds = None, None, grow, floor, 0
+
+    def get(self, A):
+        if self.M is None:
+            import pyamg
+            self.M = pyamg.smoothed_aggregation_solver(A.tocsr(), max_coarse=500).aspreconditioner()
+            self.base, self.builds = None, self.builds + 1
+        return self.M
+
+    def report(self, iterations):
+        if self.base is None:
+            self.base = max(iterations, 1)
+        elif iterations > max(self.floor, self.grow * self.base):
+            self.M = None                              # rebuild on the next system
+
+
+class _Linear:
+    """One SPD matrix, several right-hand sides.  Sparse LU up to DIRECT_MAX unknowns, else CG
+    preconditioned by `precond` (a _Precond reused across the systems of one field solve)."""
+
+    def __init__(self, A, tol=1e-8, precond=None):
         self.A, self.tol, self.iterations = A, tol, 0
+        self._pc = precond if precond is not None else _Precond()
         if A.shape[0] <= DIRECT_MAX:
             self._lu, self._M = splu(A.tocsc()), None
         else:
-            import pyamg
-            self._lu = None
-            self._M = pyamg.smoothed_aggregation_solver(A.tocsr(), max_coarse=500).aspreconditioner()
+            self._lu, self._M = None, self._pc.get(A)
 
     def solve(self, b, x0=None):
         if self._lu is not None:
@@ -48,6 +72,7 @@ class _Linear:
         x, info = cg(self.A, b, x0=x0, rtol=self.tol, atol=0.0, M=self._M, maxiter=400,
                      callback=lambda _: count.__setitem__(0, count[0] + 1))
         self.iterations += count[0]
+        self._pc.report(count[0])
         if info != 0:
             raise RuntimeError(f"CG did not converge (info={info})")
         return x
@@ -139,6 +164,7 @@ class FieldSolver:
         ct = np.where(act, np.clip(ct, 1e-6, None), 0.0)
         V = V_fixed_phi(ct, phi)
         info = dict(outer=0, newton=0, cg=0)
+        pc_p, pc_c = _Precond(), _Precond()            # one AMG hierarchy per family, reused
         relax = 1.0
         last_change = np.inf
         for outer in range(maxit):
@@ -150,7 +176,7 @@ class FieldSolver:
                 q = wf * af * I                          # d(w I)/d(phi) > 0
                 R = A_p @ phi + wf * I
                 g = np.dot(wf, I) - It
-                lin = _Linear(A_p + sparse.diags(q))
+                lin = _Linear(A_p + sparse.diags(q), precond=pc_p)
                 x1, x2 = lin.solve(-R), lin.solve(q)
                 info["cg"] += lin.iterations
                 dV = (g + np.dot(q, x1)) / (q.sum() - np.dot(q, x2) + 1e-300)
@@ -169,7 +195,7 @@ class FieldSolver:
             guess = [ct]
 
             def total(u):
-                lin_c = _Linear(A_c + sparse.diags(sink * np.exp(u) * shape_k))
+                lin_c = _Linear(A_c + sparse.diags(sink * np.exp(u) * shape_k), precond=pc_c)
                 c = np.where(act, np.clip(lin_c.solve(b_c, x0=guess[0]), 1e-12, None), 0.0)
                 info["cg"] += lin_c.iterations
                 guess[0] = c
@@ -197,6 +223,7 @@ class FieldSolver:
             info["outer"] = outer + 1
             if change < tol:
                 break
+        info["amg_builds"] = pc_p.builds + pc_c.builds
         info["converged"] = bool(change < tol)
         info["ct_change"] = change
         I = ct * ci_of(V - phi)
