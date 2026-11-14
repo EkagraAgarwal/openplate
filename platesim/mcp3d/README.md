@@ -22,7 +22,7 @@ to the environment with the dependencies installed, and restart the client:
     "platesim-3d": {
       "command": "C:/path/to/python.exe",
       "args": ["-m", "platesim.mcp3d", "--root", "D:/platesim-runs"],
-      "env": {"PYTHONPATH": "D:/Workspace/Semiconductors/openplate_3d"}
+      "env": {"PYTHONPATH": "<repo>"}
     }
   }
 }

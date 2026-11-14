@@ -8,7 +8,7 @@ The repository-intelligence tools are bound to a different open project,
 returned no matching symbols. Explicit graph build for this worktree failed:
 
 ```text
-codegraph build: root 'D:/Workspace/Semiconductors/openplate_3d' is outside the open project ('D:\Workspace\Semiconductors\openplate'); the code graph only indexes the open project
+codegraph build: root '<repo>' is outside the open project ('<repo>'); the code graph only indexes the open project
 ```
 
 The required generic JavaScript verification command `bun typecheck` is not
