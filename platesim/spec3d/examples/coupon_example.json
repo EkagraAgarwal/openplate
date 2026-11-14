@@ -1,0 +1,31 @@
+{
+  "layout": {
+    "die_um": [10000, 10000],
+    "features": [
+      {"kind": "rounded_rect", "x_um": 2000, "y_um": 3000,
+       "w_um": 100, "h_um": 2000, "r_um": 20},
+      {"kind": "rounded_rect", "x_um": 4000, "y_um": 3000,
+       "w_um": 200, "h_um": 2000, "r_um": 20},
+      {"kind": "rounded_rect", "x_um": 6000, "y_um": 3000,
+       "w_um": 400, "h_um": 2000, "r_um": 20},
+      {"kind": "rounded_rect", "x_um": 8000, "y_um": 3000,
+       "w_um": 800, "h_um": 2000, "r_um": 20},
+      {"kind": "circle", "x_um": 2000, "y_um": 7000,
+       "w_um": 100, "h_um": 100, "r_um": 50},
+      {"kind": "circle", "x_um": 4000, "y_um": 7000,
+       "w_um": 200, "h_um": 200, "r_um": 100},
+      {"kind": "circle", "x_um": 6000, "y_um": 7000,
+       "w_um": 400, "h_um": 400, "r_um": 200},
+      {"kind": "circle", "x_um": 8000, "y_um": 7000,
+       "w_um": 800, "h_um": 800, "r_um": 400}
+    ]
+  },
+  "etch": {"default": {"depth_um": 80}},
+  "recipe": {"steps": [
+    {"t_forward_ms": 10, "t_reverse_ms": 1, "t_off_ms": 0,
+     "j_forward_mA_cm2": 20, "j_reverse_mA_cm2": 20, "duration_h": 2}
+  ]},
+  "bath": {"cu_g_L": 40, "h2so4_g_L": 100, "cl_ppm": 50, "temperature_C": 25},
+  "setup": {"orientation": "vertical", "taped": true, "area_cm2": 1.0},
+  "numerics": {}
+}

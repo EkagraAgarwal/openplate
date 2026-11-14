@@ -10,10 +10,15 @@ dependencies = ["numpy", "scipy", "fastapi", "uvicorn", "scikit-fmm", "contourpy
 [project.optional-dependencies]
 # Optional JIT kernels (plan v2 B4/B8). Every numba path has a pure-numpy fallback.
 fast = ["numba"]
+# 3-D sample simulator (CONTRACTS_3D.md).  All optional; the core install is unchanged.
+ref = ["pyamg"]
+layout = ["gdstk", "ezdxf", "shapely"]
+viz = ["pyvista", "matplotlib", "imageio"]
+spec = ["pydantic>=2", "typer"]
 
 [tool.setuptools.packages.find]
 include = ["platesim*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-markers = ["slow: long-running validation tests"]
+markers = ["slow: long-running validation tests", "gpu: needs a GPU compute device (skipped when none is found)"]
