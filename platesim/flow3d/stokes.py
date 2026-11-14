@@ -223,7 +223,8 @@ def _solve(a, g, b, solver, pressure_labels):
 
 
 def solve_stokes3d(psi, dx, z0, z_lid, periodic=(True, True, False), shear_rate_s=0.0,
-                   shear_dir=(1.0, 0.0), body_force=None, nu_cm2_s=0.0114, solver='auto') -> dict:
+                   shear_dir=(1.0, 0.0), body_force=None, nu_cm2_s=0.0114, solver='auto',
+                   axial_net_flux_zero: bool | None = None) -> dict:
     """Steady incompressible MAC Stokes, section 10e of CONTRACTS_3D.md.
 
     Arrays are [x,y,z]; psi > 0 is fluid. The bottom and solid walls are
@@ -242,6 +243,11 @@ def solve_stokes3d(psi, dx, z0, z_lid, periodic=(True, True, False), shear_rate_
     (nx,ny,nz+1), pressure (cm²/s²), and solver diagnostics. Periodic seam
     faces are duplicated exactly. Pressure is zero at one cell per region.
     'auto' uses SuperLU up to 12000 unknowns, block-AMG GMRES above that.
+    axial_net_flux_zero=None constrains each periodic axis with nonzero mean
+    fluid body force; True constrains all periodic axes, False preserves the
+    unconstrained solve. A uniform kinematic pressure gradient enforces zero
+    cross-sectional volume flux. info.mean_pressure_gradient_cm_s2 reports it
+    in physical units, with momentum forcing f - grad(p); p itself is periodic.
     """
     start = perf_counter()
     psi = np.asarray(psi, dtype=float)
@@ -258,6 +264,8 @@ def solve_stokes3d(psi, dx, z0, z_lid, periodic=(True, True, False), shear_rate_
     direction = direction / np.linalg.norm(direction)
     if solver not in ('auto', 'direct', 'iterative'):
         raise ValueError('solver must be auto, direct, or iterative')
+    if axial_net_flux_zero is not None and not isinstance(axial_net_flux_zero, bool):
+        raise ValueError('axial_net_flux_zero must be bool or None')
     extent = (z_lid - z0) / dx
     if extent <= .5 or extent > psi.shape[2] + 1e-10:
         raise ValueError('z_lid must lie above the lowest cell centre and within the grid')
@@ -285,8 +293,39 @@ def solve_stokes3d(psi, dx, z0, z_lid, periodic=(True, True, False), shear_rate_
     a, g, b, maps, pid, labels, pins, nregions = _assemble(fluid, periodic, lid / scale, force, top_distance)
     method = ('direct' if a.shape[0] + g.shape[1] <= 12000 else 'iterative') if solver == 'auto' else solver
     pressure = np.zeros(psi.shape)
+    gradient = np.zeros(3)
     if a.shape[0] and np.any(b):
         x, iterations, residual = _solve(a, g, b, method, labels[pid >= 0])
+        axes = [c for c in range(3) if periodic[c] and
+                (axial_net_flux_zero is True or
+                 (axial_net_flux_zero is None and np.sum(body[c][fluid]) != 0.))]
+        if axes:
+            # Q.T u is the sum of unique open-face velocities, proportional to
+            # volume flux averaged over sections. Continuity makes the flux
+            # identical at every section. Coupled axes require the full small
+            # mobility matrix, not independent component corrections.
+            q = np.zeros((a.shape[0], len(axes)))
+            for j, c in enumerate(axes):
+                q[maps[c][maps[c] >= 0], j] = 1.
+            responses = []
+            for column in q.T:
+                response, steps, _ = _solve(a, g, column, method, labels[pid >= 0])
+                responses.append(response)
+                iterations += steps
+            response = np.column_stack(responses)
+            mobility = q.T @ response[:a.shape[0]]
+            # Non-winding fluid pockets cannot carry periodic net flux and have
+            # zero mobility. Omit their numerical null modes, not their masks.
+            cutoff = 1e-10 * max(float(np.linalg.norm(q)**2), 1.)
+            coeff = np.linalg.pinv(mobility, rcond=cutoff / max(float(np.linalg.norm(mobility, 2)), cutoff)) @ (q.T @ x[:a.shape[0]])
+            x -= response @ coeff
+            gradient[axes] = coeff * (nu_cm2_s * scale / dx**2)
+            effective_b = b - q @ coeff
+            momentum = a @ x[:a.shape[0]] + g @ x[a.shape[0]:] - effective_b
+            continuity = g.T @ x[:a.shape[0]]
+            residual = float(np.linalg.norm(np.r_[momentum, continuity]) / max(np.linalg.norm(b), 1e-30))
+            if not np.isfinite(residual) or residual > 1e-10:
+                raise RuntimeError(f'Flux-zero Stokes solve failed: residual={residual:.3e}')
         pressure[:, :, :nz][pid >= 0] = x[a.shape[0]:] * (nu_cm2_s * scale / dx)
     else:
         x = np.zeros(a.shape[0] + g.shape[1])
@@ -314,5 +353,6 @@ def solve_stokes3d(psi, dx, z0, z_lid, periodic=(True, True, False), shear_rate_
                 solver=method, converged=True, rel_residual=residual, n_fluid_regions=nregions,
                 pin_cells=[tuple(int(i) for i in np.unravel_index(p, cut.shape)) for p in pins],
                 div_max_rel=divmax * dx / max(vmax, 1e-30), z_field_cm=field_height,
-                u_lid_cm_s=lid_speed, u_scale_cm_s=scale, unknowns=a.shape[0] + g.shape[1])
+                u_lid_cm_s=lid_speed, u_scale_cm_s=scale, unknowns=a.shape[0] + g.shape[1],
+                mean_pressure_gradient_cm_s2=tuple(float(v) for v in gradient))
     return dict(zip(('ux', 'uy', 'uz'), cells), faces=tuple(faces), p=pressure, info=info)

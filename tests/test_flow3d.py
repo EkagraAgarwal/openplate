@@ -110,7 +110,7 @@ def test_extruded_buoyant_circulation():
     fx, _, fz = buoyancy_force(ct, .8, .2, (1, 0, 0))
     ref = solve_stokes(g, 0., body_force=(fx, fz))
     f3 = tuple(np.repeat(f.T[:, None, :], 2, axis=1) for f in (fx, np.zeros_like(fx), fz))
-    r = solve_extruded(g, 2, body_force=f3)
+    r = solve_extruded(g, 2, body_force=f3, axial_net_flux_zero=False)
     scale = np.max(np.abs(ref.ux))
     assert scale > 1e-8
     for name in ('ux', 'uz'):
@@ -119,6 +119,102 @@ def test_extruded_buoyant_circulation():
         assert error < 1e-6
     assert np.max(np.abs(r['uy'])) < 1e-12
     mass_error(r, g.dx_um * 1e-4)
+
+
+def axial_case(ny=4):
+    g = trench_grid(24, 16, pitch_um=48, height_um=24, dx_um=4)
+    psi = extrude(g, ny)
+    z = g.z_um[None, None, :]
+    ct = np.broadcast_to(1. - .25 * np.clip(-z / 16., 0., 1.), psi.shape)
+    return g, psi, buoyancy_force(ct, .63, .07, (0, -1, 0))
+
+
+@pytest.mark.parametrize('solver', ['direct', 'iterative'])
+def test_axial_buoyancy_flux_zero(solver):
+    g, psi, force = axial_case()
+    r = solve_extruded(g, 4, body_force=force, solver=solver)
+    face = r['faces'][1][:, :-1, :]
+    speed = np.max(np.abs(face))
+    assert speed > 1e-8
+    assert np.max(np.abs(face.sum(axis=(0, 2)))) / np.max(np.abs(face).sum(axis=(0, 2))) < 1e-10
+    assert r['uy'][:, :, g.z_um < -8].max() > 0
+    assert r['uy'][:, :, g.z_um > 0].min() < 0
+    assert r['info']['mean_pressure_gradient_cm_s2'][1] > 0
+    mass_error(r, g.dx_um * 1e-4)
+
+
+def test_axial_flag_off_legacy_poisson():
+    g, psi, force = axial_case()
+    r = solve_extruded(g, 4, body_force=force, axial_net_flux_zero=False)
+    # Independent scalar y-momentum Poisson, the pre-T4.2 extruded behaviour.
+    fluid = ~g.solid
+    ids = np.full(g.shape, -1)
+    ids[fluid] = np.arange(fluid.sum())
+    a = lil_matrix((fluid.sum(), fluid.sum()))
+    for k, i in zip(*np.where(fluid)):
+        row = ids[k, i]
+        for dk, di in ((0, -1), (0, 1), (-1, 0), (1, 0)):
+            kk, ii = k + dk, (i + di) % g.shape[1]
+            if 0 <= kk < g.shape[0] and fluid[kk, ii]:
+                a[row, row] += 1
+                a[row, ids[kk, ii]] -= 1
+            else:
+                a[row, row] += 2
+    expected = np.zeros(g.shape)
+    expected[fluid] = spsolve(a.tocsr(), force[1][:, 0, :].T[fluid] * (g.dx_um * 1e-4)**2 / .0114)
+    np.testing.assert_allclose(r['uy'], np.broadcast_to(expected.T[:, None, :], psi.shape), rtol=1e-12, atol=1e-15)
+    assert max(np.max(np.abs(r[n])) for n in ('ux', 'uz')) < 1e-12
+    assert r['uy'].sum() > 0
+    assert r['info']['mean_pressure_gradient_cm_s2'] == (0., 0., 0.)
+
+
+def test_axial_closed_ends_converge():
+    g, _, _ = axial_case()
+    ref_g, _, ref_force = axial_case(2)
+    ref = solve_extruded(ref_g, 2, body_force=ref_force)['uy'][:, 0, :]
+    errors = []
+    for ny in (16, 48):
+        _, psi, force = axial_case(ny)
+        psi[:, [0, -1], :] = -1  # actual solid no-slip end caps, including above the mouth
+        r = solve_stokes3d(psi, 4e-4, (g.z_um[0] - 2) * 1e-4, g.height_um * 1e-4,
+                           periodic=(True, False, False), body_force=force)
+        face = r['faces'][1]
+        assert np.max(np.abs(face.sum(axis=(0, 2)))) / np.max(np.abs(face).sum(axis=(0, 2))) < 1e-10
+        errors.append(np.linalg.norm(r['uy'][:, ny // 2, :] - ref) / np.linalg.norm(ref))
+        assert r['info']['mean_pressure_gradient_cm_s2'] == (0., 0., 0.)
+        mass_error(r, 4e-4)
+    print('closed-end midpoint relative errors (64, 192 um):', errors)
+    assert errors[1] < errors[0] * .5
+    assert errors[1] < .05
+
+
+def test_flux_zero_multiple_axes_and_explicit_true():
+    shape, dx = (5, 4, 8), 4e-4
+    psi = np.ones(shape)
+    ct = np.broadcast_to(np.linspace(.75, 1., shape[2]), shape)
+    force = buoyancy_force(ct, .63, .07, (-1, -1, 0))
+    r = solve_stokes3d(psi, dx, 0., shape[2] * dx, body_force=force)
+    for c in (0, 1):
+        face = np.take(r['faces'][c], np.arange(shape[c]), axis=c)
+        axes = tuple(a for a in range(3) if a != c)
+        assert np.max(np.abs(face.sum(axis=axes))) / np.max(np.abs(face).sum(axis=axes)) < 1e-10
+        assert r['info']['mean_pressure_gradient_cm_s2'][c] > 0
+    mass_error(r, dx)
+    # Auto does not constrain a shear-only axis; explicit True does.
+    auto = solve_stokes3d(psi, dx, 0., shape[2] * dx, shear_rate_s=10.)
+    off = solve_stokes3d(psi, dx, 0., shape[2] * dx, shear_rate_s=10., axial_net_flux_zero=False)
+    np.testing.assert_array_equal(auto['ux'], off['ux'])
+    constrained = solve_stokes3d(psi, dx, 0., shape[2] * dx, shear_rate_s=10., axial_net_flux_zero=True)
+    assert abs(constrained['ux'].sum()) / np.abs(constrained['ux']).sum() < 1e-10
+
+
+def test_flux_zero_nonwinding_pocket():
+    psi = -np.ones((6, 6, 8))
+    psi[1:5, 1:5, 1:7] = 1
+    force = (np.ones(psi.shape),) * 3
+    r = solve_stokes3d(psi, 4e-4, 0., 8 * 4e-4, body_force=force)
+    assert max(np.max(np.abs(r[n])) for n in ('ux', 'uy', 'uz')) < 1e-12
+    np.testing.assert_allclose(r['info']['mean_pressure_gradient_cm_s2'], 0., atol=1e-12)
 
 
 def test_sealed_void_and_periodic_regions():
@@ -166,6 +262,7 @@ def test_nearly_coincident_lid_rejected():
 
 
 @pytest.mark.parametrize('kw', [{'dx': 0}, {'nu_cm2_s': -1}, {'periodic': (True, True, True)},
+                               {'axial_net_flux_zero': 'yes'},
                                {'shear_dir': (0, 0)}, {'solver': 'unknown'},
                                {'body_force': (np.zeros((2, 2)),) * 3}])
 def test_invalid_inputs(kw):

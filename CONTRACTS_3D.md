@@ -307,7 +307,11 @@ coarse cell = all 8 children inactive. Numba `parallel=True` kernels, no other c
 
 ```python
 def solve_stokes3d(psi, dx, z0, z_lid, periodic=(True, True, False), shear_rate_s=0.0,
-                   shear_dir=(1.0, 0.0), body_force=None, nu_cm2_s=0.0114, solver="auto") -> dict
+                   shear_dir=(1.0, 0.0), body_force=None, nu_cm2_s=0.0114, solver="auto",
+                   axial_net_flux_zero=None) -> dict
+    # axial_net_flux_zero: None -> zero net volume flux along each periodic axis where the body force has
+    # a nonzero mean (a finite trench has closed ends); True -> all periodic axes; False -> unconstrained.
+    # The applied uniform pressure gradient is info["mean_pressure_gradient_cm_s2"].
     # z0: z of the low domain face (cm), as in FieldSolver.solve
     # steady Stokes on a 3-D MAC grid over the electrolyte region psi > 0 (sharp mask, no-slip on the
     # solid, staggered faces); lid at height z_lid (cm, above the top front) moves with

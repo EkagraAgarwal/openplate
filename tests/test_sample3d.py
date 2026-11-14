@@ -1,158 +1,163 @@
-"""Small CPU-only sample integration tests; no repository-local run directories."""
+"""Small preview tiles; run directories use pytest's external basetemp."""
+import copy
 import json
-import os
 from pathlib import Path
 import subprocess
 import sys
-import time
 
 import numpy as np
 import pytest
 
-from platesim.core.constants import F, M_CU, RHO_CU
-from platesim.spec3d import Manifest, SampleSpec
 from platesim.sample3d import build_geometry, plan_tile, run_sample
-from platesim.tile3d.result import TileResult
+from platesim.spec3d import Manifest
+
+EXAMPLES = Path('platesim/spec3d/examples')
 
 
-def trench_spec():
-    return SampleSpec.model_validate(dict(
-        layout=dict(die_um=[96, 16], features=[dict(kind='rect', x_um=48,
-                    y_um=8, w_um=48, h_um=16)]),
-        etch=dict(default=dict(depth_um=32)),
-        recipe=dict(steps=[dict(t_forward_ms=10, j_forward_mA_cm2=10, duration_h=.5)]),
-        bath=dict(cu_g_L=40, h2so4_g_L=100, cl_ppm=50, temperature_C=25),
-        setup=dict(taped=True, area_cm2=1, delta_um=32),
-        numerics=dict(quality='preview')))
+def example(name):
+    data = json.loads((EXAMPLES / f'{name}.json').read_text())
+    data['numerics'] = dict(quality='preview')
+    data['recipe']['steps'][0]['duration_h'] = .1
+    return data
 
 
-def test_plan_array_numbers():
-    data = trench_spec().model_dump()
-    data['layout'] = dict(die_um=[768, 128], features=[dict(kind='rect', x_um=192,
-        y_um=32, w_um=48, h_um=16,
-        array=dict(nx=3, ny=2, pitch_x_um=192, pitch_y_um=64))])
-    plan = plan_tile(SampleSpec.model_validate(data))
-    assert plan['window_um'] == [96, 0, 288, 64]
-    assert plan['dx_um'] == 8
-    assert plan['z_extent_um'] == [-48, 72]
-    assert plan['periodic'] == [True, True, False]
-    assert plan['shape'] == [24, 8, 15]
-    assert plan['n_cells'] == 2880
-    assert plan['est_seconds'] > 0
+def small(array=False, long=False):
+    data = example('single_trench')
+    data['layout'] = dict(die_um=[1000, 1000], features=[dict(
+        kind='rect' if long else 'circle', x_um=400, y_um=400,
+        w_um=32, h_um=320 if long else 32)])
+    if array:
+        data['layout']['features'][0]['array'] = dict(nx=3, ny=3, pitch_x_um=64, pitch_y_um=64)
+    data['etch']['default'] = dict(depth_um=24)
+    data['setup']['delta_um'] = 24
+    return data
 
 
-def test_geometry_volume_and_grid():
-    spec = trench_spec()
-    plan = plan_tile(spec)
-    psi, grid = build_geometry(spec, plan)
-    z = grid.centers()[2]
-    etched = np.count_nonzero((psi > 0) & (z[None, None, :] < 0)) * grid.cell_volume * 1e12
-    assert etched == pytest.approx(48 * 16 * 32, rel=.02)
-    assert psi.dtype == np.float32
-    assert grid.periodic == (False, False, False)
-    # A point well above the field checks cm-valued distance, not um.
-    assert psi[0, 0, -1] == pytest.approx(z[-1], rel=.01)
-    data = spec.model_dump()
-    data['layout'] = dict(die_um=[768, 128], features=[dict(kind='rect', x_um=192,
-        y_um=32, w_um=48, h_um=16,
-        array=dict(nx=3, ny=2, pitch_x_um=192, pitch_y_um=64))])
-    array_spec = SampleSpec.model_validate(data)
-    array_plan = plan_tile(array_spec)
-    _, array_grid = build_geometry(array_spec, array_plan)
-    assert array_grid.origin == pytest.approx((.0096, 0, -.0048))
-    assert array_grid.periodic == (True, True, False)
+@pytest.mark.parametrize('name,kinds,weights', [
+    ('single_trench', ['trench_mid', 'trench_end'], [1, 2]),
+    ('tsv_array', ['array_quarter'], [25]),
+    ('coupon_example', ['trench_mid', 'trench_end'] * 3 + ['compact_quarter'] * 5,
+     [1, 2] * 3 + [1] * 5),
+])
+def test_shipped_plans(name, kinds, weights):
+    data = example(name)
+    data['recipe'] = json.loads((EXAMPLES / f'{name}.json').read_text())['recipe']
+    plans = plan_tile(data)
+    assert isinstance(plans, list)
+    assert [p['kind'] for p in plans] == kinds
+    assert [p['weight'] for p in plans] == weights
+    assert all(p['n_cells'] <= 200_000 for p in plans)
+    assert all(p['feature_ids'] and p['assumptions'] for p in plans)
+    assert all(set(p['side_bc'].values()) <= {'symmetry', 'periodic'} for p in plans)
 
 
-def test_cell_limit_names_fix():
-    data = trench_spec().model_dump()
-    data['layout']['die_um'] = [8000, 8000]
-    with pytest.raises(ValueError, match=r'(?i)(increase.*dx_um|preview|smaller.*tile)'):
-        plan_tile(SampleSpec.model_validate(data))
+def test_regular_explicit_array_and_neighbours():
+    data = small()
+    f = data['layout']['features'][0]
+    data['layout']['features'] = [dict(f, x_um=x, y_um=y) for x in (200, 264) for y in (200, 264)]
+    tile, = plan_tile(data)
+    assert tile['kind'] == 'array_quarter'
+    assert tile['weight'] == 4 and len(tile['feature_ids']) == 4
+    data['layout']['features'].pop()
+    plans = plan_tile(data)
+    assert len(plans) == 3
+    assert all(any('neighbour interaction neglected' in flag for flag in p['flags']) for p in plans)
 
 
-@pytest.mark.parametrize('quality,dx', [('preview', 8), ('standard', 4), ('fine', 2)])
-def test_quality_and_override(quality, dx):
-    data = trench_spec().model_dump()
-    data['numerics']['quality'] = quality
-    assert plan_tile(data)['dx_um'] == dx
-    data['numerics']['dx_um'] = 8
-    data['etch']['default']['depth_vs_width'] = [[16, 32], [64, 96]]
-    plan = plan_tile(data)
-    assert plan['dx_um'] == 8
-    assert plan['z_extent_um'][0] == -112
+def test_cap_quality_and_exact_pitch():
+    data = example('tsv_array')
+    tile, = plan_tile(data)
+    assert tile['window_um'][2] == pytest.approx(59.5)
+    assert tile['shape'][0] * tile['dx_um'] == pytest.approx(59.5)
+    data['numerics'] = dict(quality='preview', dx_um=1)
+    tile, = plan_tile(data)
+    assert tile['n_cells'] <= 200_000 and 'preview' in tile['flags']
+    data['numerics']['quality'] = 'fine'
+    with pytest.raises(ValueError, match='fix:'):
+        plan_tile(data)
+    with pytest.raises(ValueError, match='field_margin_um'):
+        plan_tile(data, field_margin_um=-1)
 
 
-def test_circle_diameter_adapter_and_outward_rounding():
-    data = trench_spec().model_dump()
-    data['layout'] = dict(die_um=[99, 65], features=[dict(kind='circle', x_um=48,
-                         y_um=32, w_um=48, h_um=48)])
-    plan = plan_tile(data)
-    assert plan['window_um'] == [0, 0, 104, 72]
-    psi, grid = build_geometry(data, plan)
-    assert psi[6, 4, 3] > 0  # a real etched cavity, despite omitted r_um
-    assert grid.shape == tuple(plan['shape'])
+def solve(psi, grid, data):
+    from platesim.tile3d.sim import run_tile
+    return run_tile(psi, grid, 10, 360, delta_um=data['setup']['delta_um'],
+                    n_frames=2, backend='numpy')['psi']
 
 
-def test_mixed_array_falls_back_to_die():
-    data = trench_spec().model_dump()
-    data['layout'] = dict(die_um=[192, 64], features=[
-        dict(kind='rect', x_um=48, y_um=32, w_um=24, h_um=16,
-             array=dict(nx=2, ny=1, pitch_x_um=96, pitch_y_um=64)),
-        dict(kind='rect', x_um=96, y_um=32, w_um=16, h_um=16)])
-    plan = plan_tile(data)
-    assert plan['window_um'] == [0, 0, 192, 64]
-    assert plan['periodic'] == [False, False, False]
+@pytest.mark.parametrize('long', [False, True])
+def test_symmetry_matches_full_tile(long):
+    data = small(array=not long, long=long)
+    plan = plan_tile(data, field_margin_um=32)[0]
+    bare, grid = build_geometry(data, plan)
+    from platesim.sample3d.pipeline import _ReflectedResult
+    class BareResult:
+        psi_si = bare
+        times_s = np.array([0.])
+        def psi(self, index=-1):
+            return bare
+    source = BareResult()
+    source.grid = grid
+    reflected = _ReflectedResult(source, plan['mirror_axes'])
+    assert reflected.grid.shape[0] == 2 * grid.shape[0]
+    assert reflected.grid.shape[1] == grid.shape[1] * (1 if long else 2)
+    assert reflected.psi().shape == reflected.grid.shape
+    full = copy.deepcopy(plan)
+    full['mirror_axes'] = []
+    full['window_um'][0] = -plan['window_um'][2]
+    full['shape'][0] *= 2
+    if not long:
+        full['window_um'][1] = -plan['window_um'][3]
+        full['shape'][1] *= 2
+        full['periodic'] = [True, True, False]
+        full['side_bc'] = {f'{a}_{s}': 'periodic' for a in 'xy' for s in ('lo', 'hi')}
+    full_bare, full_grid = build_geometry(data, full)
+    psi = solve(bare, grid, data)
+    full_psi = solve(full_bare, full_grid, data)
+    crop = full_psi[grid.shape[0]:]
+    crop_bare = full_bare[grid.shape[0]:]
+    if not long:
+        crop, crop_bare = crop[:, grid.shape[1]:], crop_bare[:, grid.shape[1]:]
+    from platesim.tile3d.sim import top_height
+    growth = top_height(psi, grid) - top_height(bare, grid)
+    ref = top_height(crop, grid) - top_height(crop_bare, grid)
+    opening = (bare[:, :, np.argmin(abs(grid.centers()[2] + .0012))] > 0)
+    for mask in (opening, ~opening):
+        assert np.median(growth[mask]) == pytest.approx(np.median(ref[mask]), rel=.02, abs=1e-8)
+    if long:
+        assert np.max(abs(growth - ref)) < .02 * np.max(abs(ref))
 
 
-@pytest.fixture(scope='module')
-def completed(tmp_path_factory):
-    out = tmp_path_factory.mktemp('sample3d') / 'run'
-    started = time.perf_counter()
-    manifest = run_sample(trench_spec(), out)
-    return out, manifest, time.perf_counter() - started
+def test_end_to_end_single_trench(tmp_path):
+    data = example('single_trench')
+    data['numerics']['dx_um'] = 24  # <40k cells per tile
+    data['recipe']['steps'].append(dict(data['recipe']['steps'][0]))
+    out = tmp_path / 'run'
+    manifest = run_sample(data, out)
+    assert Manifest.model_validate_json((out / 'manifest.json').read_text()).model_dump(mode='json') == manifest
+    assert all(q['feature_id'] == 'feature_0000' for q in manifest['quantities'])
+    assert all(q['flag'] == 'preview' for q in manifest['quantities'])
+    plans = json.loads((out / 'tiles.json').read_text())
+    assert [p['kind'] for p in plans] == ['trench_mid', 'trench_end']
+    for p in plans:
+        directory = out / 'tiles' / p['tile_id']
+        assert all((directory / f'{name}.png').stat().st_size > 100
+                   for name in ('surface', 'height_map', 'cross_section'))
+        assert (directory / 'grid.json').exists()
+        from platesim.tile3d.result import TileResult
+        result = TileResult(directory)
+        assert result.times_s.tolist() == pytest.approx([0, 360, 720])
+        assert result.series['charge_C_cm2'][-1] == pytest.approx(
+            720 * (20 * 10 - 20) / 11 * 1e-3)
+    assert all(not Path(a['path']).is_absolute() for a in manifest['artifacts'])
+    assert 'profile' in manifest['summary_text']
+    with pytest.raises(FileExistsError):
+        run_sample(data, out)
 
 
-def test_end_to_end(completed):
-    out, manifest, wall = completed
-    validated = Manifest.model_validate_json((out / 'manifest.json').read_text())
-    assert validated.model_dump(mode='json') == manifest
-    pngs = [out / a.path for a in validated.artifacts if a.kind == 'png']
-    assert len(pngs) == 3
-    assert all(p.is_file() and p.stat().st_size > 100 for p in pngs)
-    assert all(q.flag == 'uncalibrated' for q in validated.quantities)
-    checks = {c.name: c for c in validated.checks}
-    assert checks['faraday_error_rel'].passed
-    assert checks['cu_balance_rel'].passed
-    q = {v.name: v.value for v in validated.quantities}
-    print(f"E2E cells={plan_tile(trench_spec())['n_cells']} wall_s={wall:.3f} "
-          f"field_um={q.get('field_um')} floor_um={q.get('floor_um')} "
-          f"faraday_error_rel={checks['faraday_error_rel'].value}")
-
-
-def test_two_steps_summed_faraday(tmp_path):
-    data = trench_spec().model_dump()
-    data['recipe']['steps'][0]['duration_h'] = .2
-    data['recipe']['steps'].append(dict(t_forward_ms=10, t_reverse_ms=5,
-        j_forward_mA_cm2=20, j_reverse_mA_cm2=10, charge_C_cm2=7.2))
-    spec = SampleSpec.model_validate(data)
-    out = tmp_path / 'two_steps'
-    run_sample(spec, out)
-    result = TileResult(out)
-    total_charge = 10e-3 * .2 * 3600 + 7.2
-    expected_um = total_charge * M_CU / (2 * F * RHO_CU) * 1e4
-    area = result.grid.shape[0] * result.grid.shape[1] * result.grid.dx**2
-    deposited_um = result.series['solid_volume_cm3'][-1] / area * 1e4
-    assert deposited_um == pytest.approx(expected_um, rel=.05)
-    assert result.times_s[-1] == pytest.approx(1440)
-    assert result.times_s.tolist() == pytest.approx([0, 720, 1440])
-    assert result.series['charge_C_cm2'][-1] == pytest.approx(total_charge)
-    assert np.any(result.psi() != result.psi(1))
-
-
-def test_cli_plan(tmp_path):
-    path = tmp_path / 'spec.json'
-    path.write_text(trench_spec().model_dump_json())
-    run = subprocess.run([sys.executable, '-m', 'platesim.sample3d', 'plan', str(path)],
-                         capture_output=True, text=True, check=True,
-                         env={**os.environ, 'PYTHONPATH': str(Path.cwd())})
-    assert json.loads(run.stdout)['n_cells'] == plan_tile(trench_spec())['n_cells']
+def test_cli_preview_plan():
+    run = subprocess.run([sys.executable, '-m', 'platesim.sample3d', 'plan',
+                          str(EXAMPLES / 'single_trench.json'), '--quality', 'preview'],
+                         check=True, capture_output=True, text=True)
+    plans = json.loads(run.stdout)
+    assert [p['kind'] for p in plans] == ['trench_mid', 'trench_end']

@@ -1,50 +1,93 @@
-# L1 sample pipeline
+# L1 representative-feature pipeline
 
-`python -m platesim.sample3d plan spec.json` plans without running the solver.
-`python -m platesim.sample3d run spec.json --out NEW_DIRECTORY` writes a single
-TileResult plus three PNGs and a validated Manifest. Existing results are never
-overwritten. Artifact paths are relative to the result directory.
+`python -m platesim.sample3d plan spec.json --quality preview` prints a **list**
+of tiles without running a solver. `run spec.json --out NEW_DIRECTORY` runs
+every tile sequentially. `--quality` overrides the spec; `--field-margin-um`
+overrides the isolated-feature field margin. The Python equivalents are
+`plan_tile(spec, field_margin_um=None)` and
+`run_sample(spec, out_dir, progress=None, field_margin_um=None)` (keyword options).
+Existing output directories are refused.
 
-One original bare-silicon frame and each recipe-step terminal frame are saved;
-times, charge, deposited volume and Faraday volume are cumulative. All solver
-calls use `run_dir=None`, and the final front is passed unchanged to the next
-call. Fields and intermediate solver frames are not retained. Cu balance is the
-maximum absolute saved solver balance across all steps. Faraday error is the
-absolute cumulative volume error, without volume correction. Geometric analysis
-uses occupancy for fill/voids; the deposit quantity and check use the engine's
-smoothed solid-volume quadrature. Missing face measurements are omitted, not zero.
+## Tiling rules and assumptions
 
-Preview/standard/fine spacing is 8/4/2 um, overridden by `numerics.dx_um`.
-One single-feature array with integral, sufficiently resolved pitches uses a
-full-pitch periodic window centred on the first instance whose window fits in
-the die. Mixed layouts, nonintegral pitches and dies smaller than a pitch use
-the whole die with symmetry sides. Whole-die dimensions and vertical extents
-round outward to whole cells (at least two XY cells); this may add a sub-cell
-strip outside the die. Maximum etch depth includes depth-vs-width tables.
-`est_seconds` is only a heuristic; sparse linear setup dominates real runtimes.
+- A `FeatureArray`, or a complete Cartesian lattice of identical explicit
+  features, uses one pitch cell. Mirror-symmetric features use a quarter cell,
+  with no-flux symmetry on all four sides (centre planes and half-pitch planes).
+  Other rotations use a full cell with periodic XY boundaries. Explicit lattice
+  inference requires at least two coordinates on each axis; one row cannot
+  establish a transverse pitch. Missing members are never filled in implicitly.
+  Edge-of-array effects are **not modelled**. Weight is the number of physical
+  array members, not four times that number.
+- Isolated trenches with length/width > 4 use two tiles: `trench_mid`, the
+  **profile** result, has half width plus field margin, four cells in y and
+  periodic y boundaries. It models a translationally invariant middle section.
+  `trench_end` extends from one width inside the end to one margin beyond it,
+  with a no-flux symmetry approximation at the interior cut. Its weight is 2
+  (the two identical ends); the mid tile has weight 1. These are overlapping
+  local diagnostics, **not a decomposition whose volumes can be summed**.
+- Compact circles, squares and short rectangles use a quarter feature plus
+  field margin on both positive sides. Centre planes and far field sides are
+  symmetry/no-flux. Features are solved independently in an infinite field;
+  die-edge and inter-feature interactions are not solved. A neighbour whose
+  polygon gap is less than twice the margin triggers the explicit
+  `isolated feature in an infinite field: neighbour interaction neglected` flag.
+- Default margin is `max(3 * depth, 2 * delta_um, 100)` um, with the maximum
+  depth in a depth-vs-width table used conservatively. Each feature uses its own
+  layer's etch. Isolated domains are in feature-local coordinates, with the
+  narrow axis x and the long axis y; the source centre and rotation assumption
+  are recorded. Rotating local axes is valid for isotropic L1, not resolved flow.
+  Imported file layouts currently require conversion to parametric features;
+  they are rejected explicitly rather than silently treated as isolated shapes.
 
-Interface workarounds/limitations:
+Preview/standard/fine request 8/4/2 um, overridden by `numerics.dx_um`.
+Isolated extents round outward to whole cells. Array spacing is adjusted down
+to exactly divide both half-pitches (or full pitches); pitches are never stretched.
+Preview alone may coarsen a tile in 1.25x requested-spacing steps until it fits
+the 200,000-cell cap. Such quantities are flagged `preview`; all preview-quality
+quantities carry that flag, otherwise `uncalibrated`. Underresolved pitches or
+standard/fine tiles over the cap raise an actionable error. Thus the shipped
+standard-quality single-trench/coupon specs need `--quality preview` or an
+explicit coarser spacing: silent standard-quality coarsening is not permitted.
+`est_seconds` remains an uncalibrated CPU budgeting heuristic.
 
-- Layout functions consume dicts, not Pydantic models: dump models explicitly.
-- spec3d circles use diameter and permit an omitted radius; layout requires a
-  positive radius: derive it from diameter.
-- Etcher distances already are cm (no second conversion). Its XY origin is
-  zero, sides symmetry and marching nonperiodic: construct Grid3D from the plan
-  and re-distance the union with the planned periodic flags.
-- Per-step run_tile treats its input as bare silicon and restarts time/charge:
-  use a separate writer preserving the true original silicon and cumulative
-  scalar series. Fix the original field mask across all steps.
-- render_height_map takes three arrays, not the contract's height dict:
-  unpack `height_um`, `x_um`, `y_um`. Rendering returns optional metadata not
-  accepted by Artifact: retain only kind/path/title.
-- Only CPU L1, no surrogate. Unsupported physics/GPU requests are errors, not
-  silent downgrades. Temperature, bulk Cu and fully dissociated acid migration
-  enhancement are mapped to Params. Bath conductivity/kinetics remain engine
-  placeholders; chloride/additives, seed thinning, orientation and stirring are
-  not resolved by L1. All quantities are uncalibrated.
+## Outputs and interpretation
 
-Contract ambiguities: no rule for choosing among multiple array pitches,
-nonintegral pitches or die sizes, no time-estimate calibration and no prescribed
-frame count. Conservative whole-die fallback, outward rounding, a heuristic
-estimate and step-end frames are used above. Setup area is sample-scale metadata;
-tile Faraday volume uses the actual XY tile area, not setup.area_cm2.
+The root contains one validated `spec3d.Manifest` and a `tiles.json` artifact
+containing the complete plans: tile IDs, feature IDs, side boundaries, weights,
+flags, assumptions, local windows and actual spacings. The strict Manifest has
+no tile-metadata field, so these are also included in `summary_text`, with
+`tile_weight` quantities. Its `dx_um` is the largest tile spacing; exact
+per-tile values are in `tiles.json` and each grid. Feature IDs are stable input
+indices (`feature_0000`); an explicit array's ID represents that feature family.
+Recognised explicit lattices retain every input feature ID in their plan and
+emit the representative quantities for each input ID. Do not weight those
+duplicated quantities again. End diagnostic quantity names have a `trench_end.`
+prefix; the unqualified quantities are the profile result.
+
+Each `tiles/<tile_id>/` is a readable TileResult with original bare silicon,
+step-end frames, cumulative times/charge/volumes and three PNGs (`surface`,
+`height_map`, `cross_section`). The writer's empty metadata `manifest.json`
+exists solely for TileResult compatibility; the validated sample Manifest is
+at the root. Artifact paths are relative to that root. Centre-cut symmetry is
+reflected **before analysis and rendering**, producing the full feature/full
+pitch view, not a misleading quarter image. The end's interior approximation
+cut is not reflected. Stored simulation frames remain the reduced domain.
+`deposited_cu_volume_um3` and Faraday checks use the simulated sector volume;
+void volume refers to the reflected diagnostic view. Mid-trench sections show
+only the thin periodic strip, not a fabricated reconstruction of the full length.
+
+Each recipe step receives the carried front and original field mask; times,
+charge and volume accumulate in a separate writer. Solver calls use no run
+directory. Cu balance is the maximum absolute saved balance across steps;
+Faraday error reports actual drift without volume correction. Check names
+are tile-qualified. Missing thickness measurements are omitted, not zero.
+
+The etcher consumes dicts and returns cm; the pipeline preserves local origins,
+re-distances the union and extends symmetry/periodic masks before etching so
+width-dependent depths see the full feature. Circle radius is derived from
+diameter. Rendering metadata is filtered to the strict Artifact schema.
+Only CPU L1 without a surrogate is supported. Net current, temperature, bulk
+Cu and fully dissociated acid migration enhancement are mapped to the engine;
+pulse timing beyond its cycle average, chloride/additives, seed thinning,
+orientation, stirring and resolved flow are not modelled. Conductivity and
+kinetics remain uncalibrated engine defaults.
