@@ -87,7 +87,7 @@ def curvature(psi, dx, periodic=...) -> np.ndarray          # div(grad psi/|grad
 def electrolyte_fraction(psi, dx) -> np.ndarray             # 0..1 per cell, smooth near the front
 def solid_volume(psi, dx) -> float                          # cm^3, float64
 def volume_correct(psi, target_solid_volume, dx, band_cells=8.0) -> np.ndarray
-def label_voids(psi, bulk_mask) -> tuple[np.ndarray, int]   # electrolyte regions not connected to bulk_mask
+def label_voids(psi, bulk_mask, periodic=(False, False, False)) -> tuple[np.ndarray, int]   # electrolyte regions not connected to bulk_mask
 ```
 
 The 2-D reference to port from is `platesim/feature/engine/levelset.py` and `ls_kernels.py`

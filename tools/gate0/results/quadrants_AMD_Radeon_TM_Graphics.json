@@ -1,0 +1,58 @@
+[
+  {
+    "framework": "quadrants",
+    "version": "1.4.0",
+    "device": "AMD Radeon(TM) Graphics",
+    "dtype": "float32",
+    "N": 160,
+    "test": "sweep",
+    "peak_bytes": null,
+    "status": "passed",
+    "mcups": 239.99355486322773,
+    "seconds": 0.06826849999924889,
+    "iterations": 4,
+    "relative_residual": 1.4121705276166638,
+    "relative_error": 0.9985552205389114,
+    "compile_seconds": 0.23340180000377586,
+    "warmup_seconds": 0.07108980000339216,
+    "timing_scope": "host orchestration + transfers + device"
+  },
+  {
+    "framework": "quadrants",
+    "version": "1.4.0",
+    "device": "AMD Radeon(TM) Graphics",
+    "dtype": "float32",
+    "N": 256,
+    "test": "sweep",
+    "peak_bytes": null,
+    "status": "passed",
+    "mcups": 244.71271204014351,
+    "seconds": 0.2742352999994182,
+    "iterations": 4,
+    "relative_residual": 1.413414460469882,
+    "relative_error": 0.9994354037695703,
+    "compile_seconds": 0.23340180000377586,
+    "warmup_seconds": 0.4525964999993448,
+    "timing_scope": "host orchestration + transfers + device"
+  },
+  {
+    "framework": "quadrants",
+    "version": "1.4.0",
+    "device": "AMD Radeon(TM) Graphics",
+    "test": "capability",
+    "dtype": "float64",
+    "status": "unsupported",
+    "error": "float64 unavailable in this backend/device; float32 used"
+  },
+  {
+    "framework": "quadrants",
+    "version": "1.4.0",
+    "device": "AMD Radeon(TM) Graphics",
+    "dtype": "float32",
+    "N": 160,
+    "test": "mgpcg",
+    "peak_bytes": null,
+    "status": "failed",
+    "error": "ArithmeticError: CG failed: residual=2.59202e+27, error=4.82507e+25"
+  }
+]

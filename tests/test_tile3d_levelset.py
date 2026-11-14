@@ -174,6 +174,37 @@ def test_void_labels():
     assert count == 0 and not labels.any()
 
 
+@pytest.mark.parametrize("axis", [0, 1, 2])
+def test_void_labels_periodic_pocket(axis):
+    p = -np.ones((6, 6, 6))
+    view = np.moveaxis(p, axis, 0)
+    view[0, 2, 2] = view[-1, 2, 2] = 1
+    bulk = np.zeros(p.shape, dtype=bool)
+    labels, count = ls.label_voids(p, bulk)
+    assert count == 2
+    assert np.count_nonzero(labels) == 2
+    periodic = tuple(a == axis for a in range(3))
+    labels, count = ls.label_voids(p, bulk, periodic)
+    assert count == 1
+    np.testing.assert_array_equal(labels > 0, p > 0)
+    assert np.all(labels[p > 0] == 1)
+
+
+def test_void_labels_bulk_reached_only_through_periodic_wrap():
+    p = -np.ones((6, 6, 6))
+    p[0, 2, 2] = 1
+    p[-1, 2, 2:] = 1
+    bulk = np.zeros(p.shape, dtype=bool)
+    bulk[..., -1] = True
+    labels, count = ls.label_voids(p, bulk)
+    assert count == 1
+    assert labels[0, 2, 2] == 1
+    assert np.count_nonzero(labels) == 1
+    labels, count = ls.label_voids(p, bulk, periodic=(True, False, False))
+    assert count == 0
+    assert not labels.any()
+
+
 @pytest.mark.parametrize("scheme", ["godunov1", "weno5"])
 def test_backends_periodic_and_band(scheme):
     p, dx = sphere(18)

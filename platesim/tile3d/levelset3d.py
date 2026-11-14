@@ -196,23 +196,39 @@ def volume_correct(psi, target_solid_volume, dx, band_cells=8.0):
     return np.where(mask, a+shift*dx, a)
 
 
-def label_voids(psi, bulk_mask):
+def label_voids(psi, bulk_mask, periodic=(False, False, False)):
     """Label sealed electrolyte components using six-face connectivity.
 
     Labels 1..count identify sealed pockets; solid and bulk-connected
-    electrolyte are 0. No periodic seams can be inferred from this API:
-    callers needing periodic topology must tile/merge seam labels.
+    electrolyte are 0. Opposite faces connect along each periodic axis.
     """
     a = _array(psi)
+    per = _periodic(periodic)
     bulk = np.asarray(bulk_mask, dtype=bool)
     if bulk.shape != a.shape:
         raise ValueError("bulk_mask must have the same shape as psi")
     labels, count = ndi.label(a > 0, structure=ndi.generate_binary_structure(3, 1))
+    parent = np.arange(count+1)
+
+    def root(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    for axis, wraps in enumerate(per):
+        if not wraps:
+            continue
+        lo, hi = np.take(labels, 0, axis), np.take(labels, -1, axis)
+        pairs = np.unique(np.column_stack((lo.ravel(), hi.ravel())), axis=0)
+        for left, right in pairs:
+            if left and right:
+                parent[root(right)] = root(left)
+    lookup = np.array([root(i) for i in range(count+1)])
+    labels = lookup[labels]
     connected = np.unique(labels[bulk])
-    sealed = np.ones(count+1, dtype=bool)
-    sealed[0] = False
-    sealed[connected] = False
+    sealed = np.setdiff1d(np.unique(labels), np.r_[0, connected])
     remap = np.zeros(count+1, dtype=np.int32)
-    n = int(np.count_nonzero(sealed))
+    n = len(sealed)
     remap[sealed] = np.arange(1, n+1)
     return remap[labels], n

@@ -92,6 +92,30 @@ def test_periodic_voids(axis):
     assert void_report(psi, grid)['count'] == 0
 
 
+@pytest.mark.parametrize('periodic_x', [False, True])
+def test_void_report_x_boundary_and_bulk_wrap(periodic_x):
+    from platesim.tile3d.grid import Grid3D
+    side = 'periodic' if periodic_x else 'symmetry'
+    grid = Grid3D.from_um((24, 24, 24), 4,
+                          bc={'x_lo': side, 'x_hi': side,
+                              'y_lo': 'symmetry', 'y_hi': 'symmetry',
+                              'z_lo': 'bottom', 'z_hi': 'bulk'})
+    psi = -np.ones(grid.shape)
+    psi[0, 2, 2] = psi[-1, 2, 2] = 1
+    report = void_report(psi, grid)
+    assert report['count'] == (1 if periodic_x else 2)
+    np.testing.assert_allclose(report['volumes_um3'], [128] if periodic_x else [64, 64])
+    assert report['centroids_um'].shape == (report['count'], 3)
+    assert report['seam_flags'] == [True] * report['count']
+
+    psi[-1, 2, 2:] = 1
+    report = void_report(psi, grid)
+    assert report['count'] == (0 if periodic_x else 1)
+    np.testing.assert_allclose(report['volumes_um3'], [] if periodic_x else [64])
+    assert report['centroids_um'].shape == (report['count'], 3)
+    assert report['seam'] is (not periodic_x)
+
+
 def test_missing_crossing_and_interpolation():
     from platesim.tile3d.grid import Grid3D
     grid = Grid3D.from_um((16, 16, 24), 4, origin_um=(0, 0, -12))

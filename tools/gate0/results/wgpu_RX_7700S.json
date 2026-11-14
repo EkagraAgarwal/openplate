@@ -1,0 +1,9 @@
+[
+  {
+    "framework": "wgpu",
+    "version": "0.33.0",
+    "device": "RX 7700S",
+    "status": "failed",
+    "error": "ValueError: device selector 'RX 7700S': 0 matches"
+  }
+]
