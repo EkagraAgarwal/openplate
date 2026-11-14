@@ -53,14 +53,44 @@ class _Precond:
             self.M = None                              # rebuild on the next system
 
 
+class _MGFamily:
+    """Matrix-free geometric multigrid CG (backend/mgcg_numba.MGCG) for a family A0 + diag(q): the
+    hierarchy is built once from the face coefficients and only the diagonal changes per system."""
+
+    def __init__(self, faces, dx, active, dirichlet, periodic, tol=1e-8):
+        from .backend.mgcg_numba import MGCG
+        self.shape, self.tol, self.iterations = active.shape, tol, 0
+        self.mg = MGCG(*faces, dx, reaction=None, active=active, dirichlet=dirichlet, periodic=periodic)
+
+    def system(self, q):
+        self.iterations = 0                            # callers add .iterations after each system
+        self.mg.set_reaction(np.asarray(q, dtype=np.float64).reshape(self.shape))
+        return self
+
+    def solve(self, b, x0=None):
+        x, info = self.mg.solve(b, x0=x0, tol=self.tol, maxiter=300)
+        self.iterations += info["iterations"]
+        if not info["converged"]:
+            raise RuntimeError(f"MGCG did not converge (rel. residual {info['rel_residual']:.2e})")
+        return np.asarray(x, dtype=np.float64).ravel()
+
+
+def _mg_available():
+    try:
+        import numba  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
 class _Linear:
     """One SPD matrix, several right-hand sides.  Sparse LU up to DIRECT_MAX unknowns, else CG
     preconditioned by `precond` (a _Precond reused across the systems of one field solve)."""
 
-    def __init__(self, A, tol=1e-8, precond=None):
+    def __init__(self, A, tol=1e-8, precond=None, mode="auto"):
         self.A, self.tol, self.iterations = A, tol, 0
         self._pc = precond if precond is not None else _Precond()
-        if A.shape[0] <= DIRECT_MAX:
+        if mode == "direct" or (mode != "amg" and A.shape[0] <= DIRECT_MAX):
             self._lu, self._M = splu(A.tocsc()), None
         else:
             self._lu, self._M = None, self._pc.get(A)
@@ -97,10 +127,15 @@ def _faces(H, periodic, top_scale=None):
 class FieldSolver:
     """L1 field solve.  Construct once per run, call solve() once per front position."""
 
-    def __init__(self, params: Params | None = None, T_C: float = 22.0):
+    def __init__(self, params: Params | None = None, T_C: float = 22.0, linear: str = "auto"):
+        """linear: "auto" (sparse LU up to DIRECT_MAX unknowns, else matrix-free multigrid CG when numba
+        is available, else AMG-preconditioned CG), "direct", "amg" or "mg"."""
+        if linear not in ("auto", "direct", "amg", "mg"):
+            raise ValueError("linear must be auto, direct, amg or mg")
         self.p = Params(suppressor=False) if params is None else params
         self.ph = derive(self.p, T_C)
         self.T_C = T_C
+        self.linear = linear
 
     def solve(self, psi, dx, z0, z_plane, j_net_A_cm2, periodic=(True, True, False), state=None,
               tol=2e-4, maxit=30):
@@ -165,6 +200,20 @@ class FieldSolver:
         V = V_fixed_phi(ct, phi)
         info = dict(outer=0, newton=0, cg=0)
         pc_p, pc_c = _Precond(), _Precond()            # one AMG hierarchy per family, reused
+        use_mg = self.linear == "mg" or (self.linear == "auto" and n > DIRECT_MAX and _mg_available())
+        mode = self.linear if self.linear in ("direct", "amg") else "auto"
+        info["linear"] = "mgcg" if use_mg else (
+            "direct" if mode == "direct" or (mode == "auto" and n <= DIRECT_MAX) else "amg")
+        if use_mg:
+            fam_p = _MGFamily((ph.kappa * hx, ph.kappa * hy, ph.kappa * hz), dx, active, {"z_hi": 0.0}, per)
+            fam_c = _MGFamily((ph.D_c * hx, ph.D_c * hy, ph.D_c * hz), dx, active, {"z_hi": 1.0}, per)
+            lin_p, lin_c_of = fam_p.system, fam_c.system
+        else:
+            def lin_p(q):
+                return _Linear(A_p + sparse.diags(q), precond=pc_p, mode=mode)
+
+            def lin_c_of(q):
+                return _Linear(A_c + sparse.diags(q), precond=pc_c, mode=mode)
         relax = 1.0
         last_change = np.inf
         for outer in range(maxit):
@@ -176,7 +225,7 @@ class FieldSolver:
                 q = wf * af * I                          # d(w I)/d(phi) > 0
                 R = A_p @ phi + wf * I
                 g = np.dot(wf, I) - It
-                lin = _Linear(A_p + sparse.diags(q), precond=pc_p)
+                lin = lin_p(q)
                 x1, x2 = lin.solve(-R), lin.solve(q)
                 info["cg"] += lin.iterations
                 dV = (g + np.dot(q, x1)) / (q.sum() - np.dot(q, x2) + 1e-300)
@@ -195,7 +244,7 @@ class FieldSolver:
             guess = [ct]
 
             def total(u):
-                lin_c = _Linear(A_c + sparse.diags(sink * np.exp(u) * shape_k), precond=pc_c)
+                lin_c = lin_c_of(sink * np.exp(u) * shape_k)
                 c = np.where(act, np.clip(lin_c.solve(b_c, x0=guess[0]), 1e-12, None), 0.0)
                 info["cg"] += lin_c.iterations
                 guess[0] = c

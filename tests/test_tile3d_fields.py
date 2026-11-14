@@ -47,6 +47,25 @@ def test_limiting_current_is_approached_not_exceeded():
     assert 0.02 < out["info"]["ct_min_front"] < 0.25
 
 
+@pytest.mark.parametrize("frac", [0.3, 0.9])
+def test_multigrid_matches_direct_on_trench(frac):
+    # matrix-free MGCG (forced) and sparse LU must give the same fields on a trench tile
+    dx = 8.0
+    grid = Grid3D.from_um((128, 32, 256), dx, origin_um=(-64, -16, -96))
+    x, _, z = grid.meshgrid()
+    from platesim.tile3d import levelset3d as ls
+    psi = ls.reinit(np.where(np.abs(x) < 32 * UM, z + 64 * UM, z), grid.dx, periodic=grid.periodic)
+    p = Params(suppressor=False)
+    j = frac * 2 * F * FieldSolver(p).ph.D_c * p.c_bulk / (64 * UM)
+    outs = [FieldSolver(p, linear=m).solve(psi, grid.dx, grid.origin[2], 64 * UM, j, periodic=grid.periodic)
+            for m in ("direct", "mg")]
+    assert outs[1]["info"]["linear"] == "mgcg" and outs[0]["info"]["linear"] == "direct"
+    assert all(o["info"]["converged"] for o in outs)
+    assert np.max(np.abs(outs[0]["ct"] - outs[1]["ct"])) < 1e-6
+    assert outs[1]["V"] == pytest.approx(outs[0]["V"], abs=1e-6)          # 1 uV
+    assert abs(outs[1]["info"]["cu_balance_rel"]) < 1e-5
+
+
 def test_flat_growth_equals_faraday():
     grid, psi = flat()
     res = run_tile(psi, grid, j_net_mA_cm2=15.0, duration_s=3600.0, delta_um=64.0,

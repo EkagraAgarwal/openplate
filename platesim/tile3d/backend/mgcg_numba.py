@@ -23,7 +23,7 @@ from numba import njit, prange
 from ..operators import _prepare
 
 
-@njit(parallel=True, cache=False)
+@njit(parallel=True, cache=True)
 def _dot(a, b):
     total = 0.0
     av, bv = a.ravel(), b.ravel()
@@ -32,7 +32,7 @@ def _dot(a, b):
     return total
 
 
-@njit(parallel=True, cache=False)
+@njit(parallel=True, cache=True)
 def _kernel(u, b, fx, fy, fz, base, diag, periodic, out, color, omega):
     """Apply, or one simultaneous Jacobi / independent RBGS colour update."""
     nx, ny, nz = u.shape
@@ -73,12 +73,12 @@ def _kernel(u, b, fx, fy, fz, base, diag, periodic, out, color, omega):
                 out[i, j, k] = v + omega * (b[i, j, k] - a) / diag[i, j, k]
 
 
-@njit
+@njit(cache=True)
 def _index(i, n, periodic):
     return i % n if periodic else min(max(i, 0), n-1)
 
 
-@njit(parallel=True, cache=False)
+@njit(parallel=True, cache=True)
 def _prolong(c, out, mask, factors, periodic):
     nx, ny, nz = out.shape
     for ij in prange(nx * ny):
@@ -101,7 +101,7 @@ def _prolong(c, out, mask, factors, periodic):
             out[i, j, k] = value if mask[i, j, k] else 0
 
 
-@njit
+@njit(cache=True)
 def _restriction_entry(c, offset, n, factor, periodic):
     if factor == 1:
         return c, 1.0
@@ -117,7 +117,7 @@ def _restriction_entry(c, offset, n, factor, periodic):
     return raw, w
 
 
-@njit(parallel=True, cache=False)
+@njit(parallel=True, cache=True)
 def _restrict(f, out, fine_mask, coarse_mask, factors, periodic):
     nx, ny, nz = out.shape
     scale = 1.0 / (factors[0] * factors[1] * factors[2])
