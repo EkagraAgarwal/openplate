@@ -1044,7 +1044,12 @@
       "current_error": 3.952393967665557e-14,
       "cu_balance_rel": 1.0547118733938987e-13,
       "ct_min_front": 0.6773055945328019
-    }
+    },
+    "diagnosis": [
+      "Synthetic data; DC 15 mA/cm2, 22 C, delta 64 um, efficiency 1; no flow/additives.",
+      "Surface samples include floor, field and vertical walls; differences are pointwise relative maxima.",
+      "Default 2-D edge and 3-D field-mean bulk planes differ slightly after initial corner rounding."
+    ]
   },
   {
     "case": "trench_227x88_dx8_0.5h",
@@ -1111,7 +1116,13 @@
       55
     ],
     "faraday_error_2d": 0.0026651054845634363,
-    "faraday_error_3d": 0.006783266477801586
+    "faraday_error_3d": 0.006783266477801586,
+    "diagnosis": [
+      "Synthetic data; DC 15 mA/cm2, 22 C, delta 64 um, efficiency 1; no flow/additives.",
+      "Field/floor thicknesses subtract the actual initial psi=0 heights, not nominal silicon heights.",
+      "Native volume quadratures differ: 2-D normal-aware linear ramp; 3-D cosine Heaviside.",
+      "Front profile uses the highest psi=0 crossing in each column; max/RMS have no specified target."
+    ]
   },
   {
     "case": "trench_227x88_dx8_1h",
@@ -1178,7 +1189,13 @@
       55
     ],
     "faraday_error_2d": 0.0014114671319720193,
-    "faraday_error_3d": 0.006361700212124788
+    "faraday_error_3d": 0.006361700212124788,
+    "diagnosis": [
+      "Synthetic data; DC 15 mA/cm2, 22 C, delta 64 um, efficiency 1; no flow/additives.",
+      "Field/floor thicknesses subtract the actual initial psi=0 heights, not nominal silicon heights.",
+      "Native volume quadratures differ: 2-D normal-aware linear ramp; 3-D cosine Heaviside.",
+      "Front profile uses the highest psi=0 crossing in each column; max/RMS have no specified target."
+    ]
   },
   {
     "case": "trench_227x88_dx4_1h",
@@ -1245,7 +1262,13 @@
       99
     ],
     "faraday_error_2d": 0.0021131065742132984,
-    "faraday_error_3d": 0.0034113203054917385
+    "faraday_error_3d": 0.0034113203054917385,
+    "diagnosis": [
+      "Synthetic data; DC 15 mA/cm2, 22 C, delta 64 um, efficiency 1; no flow/additives.",
+      "Field/floor thicknesses subtract the actual initial psi=0 heights, not nominal silicon heights.",
+      "Native volume quadratures differ: 2-D normal-aware linear ramp; 3-D cosine Heaviside.",
+      "Front profile uses the highest psi=0 crossing in each column; max/RMS have no specified target."
+    ]
   },
   {
     "case": "trench_227x88_dx8_4.5h",
@@ -1312,7 +1335,14 @@
       55
     ],
     "faraday_error_2d": 0.003217206284707056,
-    "faraday_error_3d": 0.005523071537847812
+    "faraday_error_3d": 0.005523071537847812,
+    "diagnosis": [
+      "Synthetic data; DC 15 mA/cm2, 22 C, delta 64 um, efficiency 1; no flow/additives.",
+      "Field/floor thicknesses subtract the actual initial psi=0 heights, not nominal silicon heights.",
+      "Native volume quadratures differ: 2-D normal-aware linear ramp; 3-D cosine Heaviside.",
+      "Front profile uses the highest psi=0 crossing in each column; max/RMS have no specified target.",
+      "Target gaps: floor/field. Step-zero trench fields meet 1%; growth discrepancies are consistent with different velocity extension/rescaling, Godunov1 versus WENO5, bulk-plane rules, and redistancing. These mechanisms have not been individually isolated by ablations."
+    ]
   },
   {
     "case": "trench_944x97_dx8_0.5h",
@@ -1379,7 +1409,13 @@
       56
     ],
     "faraday_error_2d": 0.0013701616472110224,
-    "faraday_error_3d": 0.00259138343335108
+    "faraday_error_3d": 0.00259138343335108,
+    "diagnosis": [
+      "Synthetic data; DC 15 mA/cm2, 22 C, delta 64 um, efficiency 1; no flow/additives.",
+      "Field/floor thicknesses subtract the actual initial psi=0 heights, not nominal silicon heights.",
+      "Native volume quadratures differ: 2-D normal-aware linear ramp; 3-D cosine Heaviside.",
+      "Front profile uses the highest psi=0 crossing in each column; max/RMS have no specified target."
+    ]
   },
   {
     "case": "trench_944x97_dx8_1h",
@@ -1446,7 +1482,13 @@
       56
     ],
     "faraday_error_2d": 0.0012257884271080024,
-    "faraday_error_3d": 0.00218250163439504
+    "faraday_error_3d": 0.00218250163439504,
+    "diagnosis": [
+      "Synthetic data; DC 15 mA/cm2, 22 C, delta 64 um, efficiency 1; no flow/additives.",
+      "Field/floor thicknesses subtract the actual initial psi=0 heights, not nominal silicon heights.",
+      "Native volume quadratures differ: 2-D normal-aware linear ramp; 3-D cosine Heaviside.",
+      "Front profile uses the highest psi=0 crossing in each column; max/RMS have no specified target."
+    ]
   },
   {
     "case": "trench_944x97_dx4_1h",
@@ -1513,6 +1555,144 @@
       101
     ],
     "faraday_error_2d": 0.0013319969168723161,
-    "faraday_error_3d": 0.0016548141837013919
+    "faraday_error_3d": 0.0016548141837013919,
+    "diagnosis": [
+      "Synthetic data; DC 15 mA/cm2, 22 C, delta 64 um, efficiency 1; no flow/additives.",
+      "Field/floor thicknesses subtract the actual initial psi=0 heights, not nominal silicon heights.",
+      "Native volume quadratures differ: 2-D normal-aware linear ramp; 3-D cosine Heaviside.",
+      "Front profile uses the highest psi=0 crossing in each column; max/RMS have no specified target."
+    ]
+  },
+  {
+    "case": "trench_944x97_dx8_4.5h",
+    "rows": [
+      {
+        "quantity": "field_um",
+        "two_d": 90.86342914715205,
+        "three_d": 90.79625960093033,
+        "difference": -0.0007392363115961142,
+        "target": 0.005,
+        "difference_kind": "relative",
+        "passed": true
+      },
+      {
+        "quantity": "floor_centre_um",
+        "two_d": 73.71894965170436,
+        "three_d": 73.6724981514813,
+        "difference": -0.046451500223056996,
+        "target": null,
+        "difference_kind": "absolute",
+        "passed": null
+      },
+      {
+        "quantity": "floor/field",
+        "two_d": 0.811315953443905,
+        "three_d": 0.8114045498711979,
+        "difference": 8.859642729297512e-05,
+        "target": 0.003,
+        "difference_kind": "absolute",
+        "passed": true
+      },
+      {
+        "quantity": "volume_um2_per_unit_length",
+        "two_d": 422191.13881936925,
+        "three_d": 422470.76358933747,
+        "difference": 279.6247699682135,
+        "target": null,
+        "difference_kind": "absolute",
+        "passed": null
+      },
+      {
+        "quantity": "profile_max_um",
+        "two_d": 0.0,
+        "three_d": 7.056641638417109,
+        "difference": 7.056641638417109,
+        "target": null,
+        "difference_kind": "absolute",
+        "passed": null
+      },
+      {
+        "quantity": "profile_rms_um",
+        "two_d": 0.0,
+        "three_d": 0.7435892779680404,
+        "difference": 0.7435892779680404,
+        "target": null,
+        "difference_kind": "absolute",
+        "passed": null
+      }
+    ],
+    "actual_dx_um": 8.0,
+    "shape": [
+      590,
+      4,
+      56
+    ],
+    "faraday_error_2d": 0.0015483598727105733,
+    "faraday_error_3d": 0.0022117033301849442,
+    "diagnosis": [
+      "Synthetic data; DC 15 mA/cm2, 22 C, delta 64 um, efficiency 1; no flow/additives.",
+      "Field/floor thicknesses subtract the actual initial psi=0 heights, not nominal silicon heights.",
+      "Native volume quadratures differ: 2-D normal-aware linear ramp; 3-D cosine Heaviside.",
+      "Front profile uses the highest psi=0 crossing in each column; max/RMS have no specified target."
+    ]
+  },
+  {
+    "case": "via_100x100_dx4_0.5h",
+    "rows": [
+      {
+        "quantity": "fill_fraction",
+        "two_d": 0.25597729686960746,
+        "three_d": 0.2583624021950856,
+        "difference": 0.009317644004550596,
+        "target": 0.01,
+        "difference_kind": "relative",
+        "passed": true
+      },
+      {
+        "quantity": "field_um",
+        "two_d": 9.164309620336569,
+        "three_d": 9.168085871718688,
+        "difference": 0.00041206065034504746,
+        "target": 0.005,
+        "difference_kind": "relative",
+        "passed": true
+      },
+      {
+        "quantity": "floor_centre_um",
+        "two_d": 4.928953353843912,
+        "three_d": 4.910546205945561,
+        "difference": -0.018407147898351184,
+        "target": null,
+        "difference_kind": "absolute",
+        "passed": null
+      },
+      {
+        "quantity": "floor/field",
+        "two_d": 0.5378422988793444,
+        "three_d": 0.5356130248619726,
+        "difference": -0.0022292740173718295,
+        "target": null,
+        "difference_kind": "absolute",
+        "passed": null
+      }
+    ],
+    "actual_dx_um": 3.992978531249624,
+    "shape": [
+      50,
+      50,
+      102
+    ],
+    "square_area_rounding_relative": 0.015018769718720293,
+    "faraday_error_2d": 0.0007423023541766035,
+    "faraday_error_3d": 0.004681562650026949,
+    "diagnosis": [
+      "Synthetic data; DC 15 mA/cm2, 22 C, delta 64 um, efficiency 1; no flow/additives.",
+      "Field/floor thicknesses subtract the actual initial psi=0 heights, not nominal silicon heights.",
+      "Native volume quadratures differ: 2-D normal-aware linear ramp; 3-D cosine Heaviside.",
+      "Front profile uses the highest psi=0 crossing in each column; max/RMS have no specified target.",
+      "Via is a quarter of a square periodic cell, not the axisymmetric circular cell; lateral supply geometry differs.",
+      "Equal-area square side is rounded to an integer number of the SAME effective dx used by 2-D; square_area_rounding_relative records the unavoidable area mismatch.",
+      "Via fill uses each engine's native volume fraction and approximate boundary-cell feature weights; the 1% result includes this quadrature uncertainty."
+    ]
   }
 ]
