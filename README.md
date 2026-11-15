@@ -53,6 +53,19 @@ cd app && npm install && npm run build && npm start
 ```
 
 The desktop app starts its own backend. `npm run dev:mock` runs the UI without Python.
+If `python` is not on PATH (or Settings → Python is set to `uv`), it runs the backend with
+`uv run --project . --extra fast --extra ref --extra layout --extra viz --extra spec`.
+
+3-D sample simulator in the browser (sidebar **3-D sample**): build the app once, then
+
+```bash
+uv run --project . --extra fast --extra ref --extra layout --extra viz --extra spec python -m platesim.server --port 8765
+# open http://127.0.0.1:8765/ and pick the "Quick Trench" example (about a minute on a laptop CPU)
+```
+
+It imports GDS/DXF/image layouts, plans tiles, runs pulse-reverse recipes, and shows height maps,
+click-to-cut cross-sections, 3-D surfaces, run comparisons and CSV/STL downloads. Results are
+uncalibrated (L1 physics, no additives). Agents can use the same engine through `platesim.mcp3d`.
 
 ## Tests
 
