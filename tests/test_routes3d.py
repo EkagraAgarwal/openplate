@@ -1,5 +1,8 @@
 """Contract 10f against real spawned workers and on-disk results."""
 import json
+import base64
+import csv
+import io
 import math
 from pathlib import Path
 import subprocess
@@ -69,7 +72,7 @@ def test_real_run(tmp_path):
         assert response.status_code == 202, response.text
         rid = response.json()["run_id"]
         base = f"/api/3d/runs/{rid}"
-        for path in ("manifest", "tiles", "height", "series", "frames"):
+        for path in ("manifest", "tiles", "height", "series", "frames", "export?kind=height_csv"):
             assert client.get(f"{base}/{path}").status_code == 409
         assert client.post(f"{base}/section", json={}).status_code == 409
         assert client.get(f"{base}/artifact?path=anything").status_code == 409
@@ -98,6 +101,25 @@ def test_real_run(tmp_path):
             assert cut["cu_outline"] and cut["si_outline"] and cut["cu_outline_initial"]
             assert cut["cu_outline"] != cut["cu_outline_initial"]
             assert 2 <= len(cut["s_um"]) <= 600
+            for kind in ("height_csv", "section_csv", "stl"):
+                exported = client.get(f"{base}/export", params=dict(
+                    kind=kind, tile_id=tid, polyline=";".join(",".join(map(str, p)) for p in line)))
+                assert exported.status_code == 200, exported.text[:200]
+                assert "attachment; filename=" in exported.headers["content-disposition"]
+                if kind == "stl":
+                    assert exported.headers["content-type"] == "model/stl"
+                    assert exported.content.startswith(b"solid") or len(exported.content) >= 84
+                else:
+                    rows = list(csv.DictReader(io.StringIO(exported.text)))
+                    assert rows
+                    if kind == "height_csv":
+                        assert set(rows[0]) == {"x_um", "y_um", "height_um"}
+                        assert len(rows) == tile["shape"][0]*tile["shape"][1]
+                        assert float(rows[0]["x_um"]) == h["x_um"][0]
+                    else:
+                        assert set(rows[0]) == {"contour", "kind", "s_um", "z_um"}
+                        assert {r["kind"] for r in rows} == {"cu", "cu_initial", "si"}
+                        assert all(math.isfinite(float(r["z_um"])) for r in rows)
             series = client.get(f"{base}/series", params={"tile_id": tid}).json()
             frames = client.get(f"{base}/frames", params={"tile_id": tid}).json()["t_s"]
             assert frames == series["t_s"] and len(frames) >= 2
@@ -111,6 +133,9 @@ def test_real_run(tmp_path):
         assert client.get(f"{base}/height?max_n=401").status_code == 422
         assert client.get(f"{base}/height?frame=999").status_code == 422
         assert client.get(f"{base}/height?tile_id=unknown").status_code == 422
+        assert client.get(f"{base}/export?kind=invalid").status_code == 422
+        assert client.get(f"{base}/export?kind=section_csv&polyline=bad").status_code == 422
+        assert client.get(f"{base}/export?kind=stl&frame=999").status_code == 422
         assert client.post(f"{base}/section", json={"polyline_um": [[0, 0], [0, 0]]}).status_code == 422
         second = client.post("/api/3d/runs", json={"spec": SPEC}).json()["run_id"]
         assert client.post(f"/api/3d/runs/{second}/cancel").status_code == 200
@@ -123,3 +148,42 @@ def test_real_run(tmp_path):
         restored = client.get(base).json()
         assert restored["status"] == "done" and restored["label"] == "Synthetic trench"
         assert client.get(f"{base}/manifest").json() == manifest
+
+
+@pytest.mark.parametrize("kind", ["gds", "png"])
+def test_layout_import(tmp_path, kind):
+    path = tmp_path / ("synthetic." + kind)
+    if kind == "gds":
+        gdstk = pytest.importorskip("gdstk")
+        library = gdstk.Library(unit=1e-6)
+        cell = library.new_cell("SYNTHETIC")
+        cell.add(gdstk.rectangle((10, 10), (30, 20), layer=4))
+        library.write_gds(path)
+    else:
+        imageio = pytest.importorskip("imageio.v3")
+        pixels = np.zeros((80, 100), dtype=np.uint8)
+        pixels[20:60, 20:80] = 255
+        imageio.imwrite(path, pixels)
+    with TestClient(create_app(tmp_path / "server", max_workers=1)) as client:
+        response = client.post("/api/3d/layout/import", json=dict(
+            filename="../../" + path.name, content_b64=base64.b64encode(path.read_bytes()).decode(),
+            layer_map={"etch": 4}, pixel_um=.5))
+        assert response.status_code == 200, response.text
+        answer = response.json()
+        assert answer["source"] == dict(filename=path.name, kind=kind if kind == "gds" else "image", n_polygons=1)
+        # Image contours bevel pixel corners, so rounded_rect may fit better.
+        assert answer["features"][0]["kind"] in ("rect", "rounded_rect")
+        assert not answer["unfit"] and answer["preview"]
+        spec = dict(SPEC, layout={k: answer[k] for k in ("die_um", "features")})
+        assert client.post("/api/3d/validate", json={"spec": spec}).json()["ok"]
+
+
+def test_layout_import_errors(tmp_path):
+    with TestClient(create_app(tmp_path, max_workers=1)) as client:
+        for body in (dict(filename="bad.txt", content_b64=""),
+                     dict(filename="bad.gds", content_b64="!"),
+                     dict(filename="big.png", content_b64=base64.b64encode(b"x"*(20*1024*1024+1)).decode()),
+                     dict(filename="bad.png", content_b64="eA==")):
+            response = client.post("/api/3d/layout/import", json=body)
+            assert response.status_code == 422, response.text
+            assert {"error", "field", "fix"} <= response.json()["detail"].keys()

@@ -2,6 +2,10 @@
 from __future__ import annotations
 
 import json
+import base64
+import binascii
+import csv
+import io
 import math
 import mimetypes
 from pathlib import Path
@@ -9,9 +13,10 @@ import re
 from threading import RLock
 from typing import cast
 import uuid
+import tempfile
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 
 from platesim.mcp3d.service import RunService, _safe
 
@@ -127,6 +132,55 @@ def _result(request, run_id, tile_id):
 def schema():
     from platesim.spec3d import SampleSpec
     return {"spec_schema": SampleSpec.model_json_schema()}
+
+
+@router.post("/layout/import")
+def import_layout(body: dict):
+    filename = body.get("filename")
+    if not isinstance(filename, str) or not filename.strip():
+        raise _bad("filename must be nonempty text", "filename", "Supply the original filename.")
+    filename = re.sub(r"[^A-Za-z0-9_.-]", "_", filename.replace("\\", "/").split("/")[-1])
+    suffix = Path(filename).suffix.lower()
+    if suffix not in (".gds", ".dxf", ".png", ".tif", ".tiff", ".webp"):
+        raise _bad("Unsupported layout extension", "filename", "Use GDS, DXF, PNG, TIFF or WEBP.")
+    content = body.get("content_b64")
+    limit = 20 * 1024 * 1024
+    if not isinstance(content, str) or len(content) > 4*((limit+2)//3):
+        raise _bad("Layout must be base64 and decoded size <= 20 MB", "content_b64", "Supply a smaller base64 file.")
+    try:
+        decoded = base64.b64decode(content, validate=True)
+    except (ValueError, binascii.Error) as exc:
+        raise _bad(exc, "content_b64", "Supply valid base64 file contents.") from exc
+    if len(decoded) > limit:
+        raise _bad("Decoded layout exceeds 20 MB", "content_b64", "Supply a smaller file.")
+    layer = body.get("layer", "etch")
+    if not isinstance(layer, str) or not layer:
+        raise _bad("layer must be nonempty text", "layer", "Use a named layer such as etch.")
+    mapping = body.get("layer_map", {layer: 0 if suffix == ".gds" else "0"})
+    if not isinstance(mapping, dict):
+        raise _bad("layer_map must be an object", "layer_map", "Map named layers to source layer numbers/names.")
+    try:
+        from platesim.layout import import_gds, import_dxf, import_image
+        from platesim.layout.to_features import fit_features
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / filename
+            path.write_bytes(decoded)
+            if suffix == ".gds":
+                layout = import_gds(path, mapping)
+                kind = "gds"
+            elif suffix == ".dxf":
+                layout = import_dxf(path, mapping)
+                kind = "dxf"
+            else:
+                layout = import_image(path, body.get("pixel_um"), layer=layer)
+                kind = "image"
+            if not layout.features:
+                raise ValueError("No polygons found; check layer_map or image intensity")
+            answer = fit_features(layout, layer=layer)
+            answer["source"] = dict(filename=filename, kind=kind, n_polygons=len(layout.features))
+            return _safe(answer)
+    except (ValueError, TypeError, OSError, ImportError, RuntimeError) as exc:
+        raise _bad(exc, "layout", "Check file contents, layer_map, pixel_um and installed layout dependencies.") from exc
 
 
 @router.get("/examples")
@@ -302,3 +356,41 @@ def artifact(request: Request, run_id: str, path: str):
         raise HTTPException(404, "Artifact not found")
     media = mimetypes.guess_type(str(file))[0] or "application/octet-stream"
     return FileResponse(file, media_type=media)
+
+
+@router.get("/runs/{run_id}/export")
+def export_run(request: Request, run_id: str, kind: str, tile_id: str | None = None,
+               frame: int = -1, polyline: str | None = None):
+    result, _ = _result(request, run_id, tile_id)
+    index = _frame(result, frame)
+    if kind not in ("height_csv", "section_csv", "stl"):
+        raise _bad("Unknown export kind", "kind", "Use height_csv, section_csv or stl.")
+    filename = f"{run_id}_{kind}." + ("stl" if kind == "stl" else "csv")
+    headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
+    if kind == "stl":
+        from platesim.analysis3d.export import export_surface
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "surface.stl"
+            export_surface(result.psi(index), result.grid, path, fmt="stl")
+            return Response(path.read_bytes(), media_type="model/stl", headers=headers)
+    stream = io.StringIO(newline="")
+    writer = csv.writer(stream)
+    if kind == "height_csv":
+        from platesim.analysis3d.maps import height_map
+        mapped = _safe(height_map(result.psi(index), result.grid))
+        writer.writerow(["x_um", "y_um", "height_um"])
+        for i, x in enumerate(mapped["x_um"]):
+            for j, y in enumerate(mapped["y_um"]):
+                writer.writerow([x, y, mapped["height_um"][i][j]])
+    else:
+        try:
+            points = [[float(v) for v in pair.split(",")] for pair in (polyline or "").split(";")]
+        except ValueError as exc:
+            raise _bad(exc, "polyline", "Use x0,y0;x1,y1 inside the selected tile.") from exc
+        cut = section(request, run_id, dict(polyline_um=points, tile_id=tile_id, frame=frame))
+        writer.writerow(["contour", "kind", "s_um", "z_um"])
+        for name, key in (("cu", "cu_outline"), ("cu_initial", "cu_outline_initial"), ("si", "si_outline")):
+            for contour, points in enumerate(cut[key]):
+                for s, z in points:
+                    writer.writerow([contour, name, s, z])
+    return Response(stream.getvalue(), media_type="text/csv", headers=headers)
