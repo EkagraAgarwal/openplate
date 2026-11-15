@@ -2,6 +2,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Sample3DApi, Sample3DError, url3d } from '@/api/client3d'
 import {
   decimateHeight,
+  expandFeatures,
+  featurePath,
+  tileFootprints,
+  arrayBufferToBase64,
+  sectionCsv,
   defaultSpec3D,
   formToSpec,
   outlineTraces,
@@ -17,6 +22,44 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 describe('sample spec helpers', () => {
+  it('expands arrays without mutation and caps work at 2000 instances', () => {
+    const feature = { kind: 'rect' as const, x_um: 10, y_um: 20, w_um: 4, h_um: 2,
+      array: { nx: 1000000, ny: 1000000, pitch_x_um: 5, pitch_y_um: 6 } }
+    const result = expandFeatures([feature])
+    expect(result.instances).toHaveLength(2000)
+    expect(result.omitted).toBe(1e12 - 2000)
+    expect(result.instances[1].feature.x_um).toBe(15)
+    expect(feature.x_um).toBe(10)
+    const small = expandFeatures([{ ...feature, array: { ...feature.array, nx: 2, ny: 2 } }], 3)
+    expect(small.instances[2].feature).toMatchObject({ x_um: 10, y_um: 26, array: null })
+    expect(small.omitted).toBe(1)
+    expect(expandFeatures([feature], 0).instances).toEqual([])
+  })
+  it('generates rotated rectangle paths and rounded corners', () => {
+    expect(featurePath({ kind: 'rect', x_um: 10, y_um: 20, w_um: 4, h_um: 2, rotation_deg: 90 }))
+      .toBe('M 11 18 L 11 22 L 9 22 L 9 18 Z')
+    const rounded = featurePath({ kind: 'rounded_rect', x_um: 0, y_um: 0, w_um: 8, h_um: 4, r_um: 99, rotation_deg: 30 })
+    expect(rounded.match(/A 2 2 30 0 1/g)).toHaveLength(4)
+    expect(rounded).not.toContain('NaN')
+    expect(featurePath({ kind: 'circle', x_um: 0, y_um: 0, r_um: 2 })).toContain('A 2 2')
+    expect(featurePath(JSON.parse('{"kind":"rect","x_um":"unfinished","y_um":0,"w_um":2,"h_um":2}'))).toBe('')
+  })
+  it('positions approximate tile footprints around referenced features', () => {
+    const t = { tile_id: 't', kind: 'profile', feature_ids: ['feature_0000'], shape: [10, 8, 4], dx_um: 2, weight: 1, n_cells: 320, est_time_s: 1, assumptions: [], flags: [] }
+    expect(tileFootprints([t], [{ kind: 'rect', x_um: 30, y_um: 20, w_um: 4, h_um: 2 }]))
+      .toEqual([{ tile_id: 't', x: 20, y: 12, width: 20, height: 16, approximate: true }])
+    expect(tileFootprints([{ ...t, feature_ids: ['missing'] }], defaultSpec3D.layout.features!)).toEqual([])
+  })
+  it('exports section CSV with contract columns, contour IDs and finite values', () => {
+    expect(sectionCsv({ s_um: [], z_um: [], length_um: 1, cu_outline: [[[0, 1], [2, 3]], [[4, NaN]]], si_outline: [[[0, -1]]] }))
+      .toBe('contour,kind,s_um,z_um\n0,cu,0,1\n0,cu,2,3\n1,cu,4,\n0,si,0,-1\n')
+  })
+  it('base64 encodes across chunk boundaries without padding intermediate chunks', () => {
+    for (const length of [0, 1, 32767, 32768, 32769, 200001]) {
+      const bytes = Uint8Array.from({ length }, (_, i) => i % 256)
+      expect(arrayBufferToBase64(bytes.buffer)).toBe(Buffer.from(bytes).toString('base64'))
+    }
+  })
   it('round-trips spec/form without mutating the source or dropping extra fields', () => {
     const source = {
       ...defaultSpec3D,
@@ -128,6 +171,18 @@ describe('sample spec helpers', () => {
   })
 })
 describe('3-D client', () => {
+  it('posts imported bytes and encodes export parameters', async () => {
+    const fetcher = vi.fn().mockResolvedValue(new Response('{}'))
+    vi.stubGlobal('fetch', fetcher)
+    const api = new Sample3DApi('')
+    await api.importLayout('a.png', new Uint8Array([0, 255]).buffer, { pixel_um: 2, layer_map: { etch: [1, 0] } })
+    expect(fetcher.mock.calls[0][0]).toBe('/api/3d/layout/import')
+    expect(JSON.parse(fetcher.mock.calls[0][1].body)).toEqual({ filename: 'a.png', content_b64: 'AP8=', pixel_um: 2, layer_map: { etch: [1, 0] } })
+    const url = new URL(api.exportUrl('a/b', 'section_csv', { tile_id: 'tile 1', polyline: [[0, 1], [2, 3]] }), 'http://localhost')
+    expect(url.pathname).toBe('/api/3d/runs/a%2Fb/export')
+    expect(url.searchParams.get('polyline')).toBe('0,1;2,3')
+    expect(url.searchParams.get('frame')).toBe('-1')
+  })
   it('uses gateway, web origin, or same-origin root and encodes queries', () => {
     expect(url3d('http://127.0.0.1:1234///', '/runs')).toBe('http://127.0.0.1:1234/api/3d/runs')
     expect(url3d('/', '/examples')).toBe('/api/3d/examples')
@@ -189,6 +244,10 @@ describe('3-D mock server smoke', () => {
     try {
       expect((await api.examples()).examples.length).toBeGreaterThan(0)
       expect((await api.schema()).spec_schema).toBeTruthy()
+      const fitted = await api.importLayout('test.gds', new Uint8Array([1, 2, 3]).buffer)
+      expect(fitted.features).toHaveLength(1)
+      expect(fitted.die_um).toEqual([128, 64])
+      await expect(api.importLayout('test.png', new Uint8Array([1]).buffer)).rejects.toMatchObject({ issue: { field: 'pixel_um' } })
       expect((await api.validate(defaultSpec3D)).ok).toBe(true)
       expect((await api.plan(defaultSpec3D)).tiles.length).toBeGreaterThan(0)
       const { run_id } = await api.run(defaultSpec3D, 'Test')
@@ -197,6 +256,10 @@ describe('3-D mock server smoke', () => {
       const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 5100)
       expect((await api.status(run_id)).status).toBe('done')
       clock.mockRestore()
+      const csv = await fetch(api.exportUrl(run_id, 'section_csv', { polyline: [[0, 0], [10, 0]] }))
+      expect(csv.headers.get('content-type')).toBe('text/csv')
+      expect(await csv.text()).toContain('contour,kind,s_um,z_um')
+      expect(await (await fetch(api.exportUrl(run_id, 'height_csv'))).text()).toContain('x_um,y_um,height_um')
       const tile = (await api.tiles(run_id)).tiles[0].tile_id
       expect((await api.height(run_id, tile)).height_um.length).toBeGreaterThan(0)
       const initial = await api.height(run_id, tile, 0)

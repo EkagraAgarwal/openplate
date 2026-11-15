@@ -11,6 +11,7 @@ import { useApp } from '../lib/context'
 import { defaultSpec3D, formToSpec, specToForm } from '../lib/sample3d'
 import { SpecEditor } from '../components/sample3d/SpecEditor'
 import { Results3D } from '../components/sample3d/Results3D'
+import { LayoutImport } from '../components/sample3d/LayoutImport'
 
 const terminal = (status: string) =>
   ['done', 'succeeded', 'completed', 'failed', 'error', 'cancelled', 'canceled'].includes(status)
@@ -173,7 +174,13 @@ export function Sample3DPage() {
         onChange={change}
         errors={errors}
         onValid={setValidJson}
+        tiles={plan?.tiles}
       />
+      {api && <LayoutImport api={api} onUse={(layout) => {
+        change({ ...spec, layout: { ...spec.layout, ...layout } })
+        setValidJson(true)
+        setEditorKey((k) => k + 1)
+      }} />}
       {errors.length > 0 && (
         <div className="callout callout-warn" role="alert">
           <ul>
@@ -321,7 +328,7 @@ export function Sample3DPage() {
         </section>
       )}
       {api && run && done(run.status) && (
-        <Results3D key={run.run_id} api={api} id={run.run_id} onError={reportError} />
+        <Results3D key={run.run_id} api={api} id={run.run_id} runs={runs} onError={reportError} />
       )}
     </div>
   )

@@ -1,17 +1,20 @@
 import { useState } from 'react'
-import type { FieldIssue, SampleSpec3D } from '../../api/client3d'
+import type { FieldIssue, Plan3D, SampleSpec3D } from '../../api/client3d'
 import { defaultSpec3D, parseSpec, recipeMath, specToForm } from '../../lib/sample3d'
+import { LayoutPreview } from './LayoutPreview'
 
 export function SpecEditor({
   spec,
   onChange,
   errors,
-  onValid
+  onValid,
+  tiles = []
 }: {
   spec: SampleSpec3D
   onChange: (s: SampleSpec3D) => void
   errors: FieldIssue[]
   onValid: (valid: boolean) => void
+  tiles?: Plan3D['tiles']
 }) {
   const [tab, setTab] = useState('form')
   const [raw, setRaw] = useState('')
@@ -151,7 +154,8 @@ export function SpecEditor({
                     'y_um',
                     'w_um',
                     'h_um',
-                    'r_um'
+                    'r_um',
+                    'rotation_deg'
                   ])}
                 </div>
                 <label>
@@ -339,6 +343,7 @@ export function SpecEditor({
           </fieldset>
         </>
       )}
+      <LayoutPreview layout={spec.layout} tiles={tiles} />
     </section>
   )
 }

@@ -1148,3 +1148,18 @@ code {
   .sample3d-page select { max-width: 100%; }
 }
 @media (prefers-reduced-motion: reduce) { .sample3d-loading::before { animation: none; } }
+/* 3-D sample wave 2: layout preview/import and downloads */
+.sample3d-layout { min-width: 0; margin-top: 16px; }
+.sample3d-layout-svg { display: block; width: 100%; height: 360px; background: var(--bg-sunken); border: 1px solid var(--border); touch-action: none; cursor: grab; user-select: none; }
+.sample3d-layout-svg:active { cursor: grabbing; }
+.sample3d-die { fill: var(--bg-elev); stroke: var(--fg); vector-effect: non-scaling-stroke; }
+.sample3d-feature { fill: #b8733366; stroke: #b87333; stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+.sample3d-feature:hover { fill: #b87333bb; stroke: var(--fg); }
+.sample3d-tile { fill: none; stroke: #3276b1; stroke-width: 1.5; stroke-dasharray: 6 4; vector-effect: non-scaling-stroke; pointer-events: none; }
+.sample3d-svg-label { fill: var(--fg); pointer-events: none; }
+.sample3d-scale { fill: none; stroke: var(--fg); stroke-width: 2; vector-effect: non-scaling-stroke; }
+.sample3d-import summary { cursor: pointer; font-weight: 600; }
+.sample3d-import .sample3d-fields > label { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.sample3d-import input, .sample3d-import textarea { max-width: 100%; }
+.sample3d-import li { overflow-wrap: anywhere; }
+.sample3d-plot figcaption { padding: 8px 12px; }

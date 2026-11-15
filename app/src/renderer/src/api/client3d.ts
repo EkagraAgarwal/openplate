@@ -1,3 +1,5 @@
+import { arrayBufferToBase64 } from '../lib/sample3d'
+
 export type Point3D = [number, number]
 export interface Feature3D {
   kind: 'rect' | 'rounded_rect' | 'circle'
@@ -6,6 +8,7 @@ export interface Feature3D {
   w_um?: number
   h_um?: number
   r_um?: number
+  rotation_deg?: number
   array?: { nx: number; ny: number; pitch_x_um: number; pitch_y_um: number } | null
   [key: string]: unknown
 }
@@ -47,6 +50,19 @@ export interface FieldIssue {
   field: string
   message: string
   fix: string
+}
+export interface LayoutFit3D {
+  die_um: number[]
+  features: Feature3D[]
+  unfit: { index: number; area_um2: number; error_rel: number; bounds_um: number[] }[]
+  skipped: unknown[]
+  preview: { layer: string; rings_um: Point3D[][] }[]
+  source: { filename: string; kind: string; n_polygons: number }
+}
+export interface LayoutImportOptions {
+  pixel_um?: number
+  layer_map?: Record<string, [number, number]>
+  layer?: string
 }
 export interface Validation3D {
   ok: boolean
@@ -173,7 +189,7 @@ export class Sample3DApi {
         {
           field: typeof detail?.field === 'string' ? detail.field : '',
           message:
-            typeof detail?.error === 'string'
+            typeof detail?.message === 'string' ? detail.message : typeof detail?.error === 'string'
               ? detail.error
               : `Request unavailable (HTTP ${res.status}).`,
           fix:
@@ -188,6 +204,19 @@ export class Sample3DApi {
   }
   schema() {
     return this.json<{ spec_schema: Record<string, unknown> }>('/schema')
+  }
+  importLayout(filename: string, bytes: ArrayBuffer, opts: LayoutImportOptions = {}) {
+    return this.json<LayoutFit3D>('/layout/import', {
+      filename, content_b64: arrayBufferToBase64(bytes), ...opts
+    })
+  }
+  exportUrl(runId: string, kind: 'height_csv' | 'section_csv' | 'stl', params: {
+    tile_id?: string; frame?: number; polyline?: Point3D[]
+  } = {}) {
+    return url3d(this.baseUrl, `/runs/${encodeURIComponent(runId)}/export`, {
+      kind, tile_id: params.tile_id, frame: params.frame ?? -1,
+      polyline: params.polyline?.map((p) => p.join(',')).join(';')
+    })
   }
   examples() {
     return this.json<{ examples: { name: string; title: string; spec: SampleSpec3D }[] }>(

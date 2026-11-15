@@ -4,6 +4,7 @@ import {
   type Height3D,
   type Manifest3D,
   type Point3D,
+  type Run3D,
   type Section3D,
   type Series3D,
   type Tile3D
@@ -11,15 +12,19 @@ import {
 import { decimateHeight, outlineTraces, polylineFromClicks } from '../../lib/sample3d'
 import { Plot3D } from './Plot3D'
 import { ManifestTables } from './ManifestTables'
+import { CompareRuns } from './CompareRuns'
+import { Downloads } from './Downloads'
 
 export function Results3D({
   api,
   id,
-  onError
+  onError,
+  runs
 }: {
   api: Sample3DApi
   id: string
   onError: (e: unknown) => void
+  runs: Run3D[]
 }) {
   const [tiles, setTiles] = useState<Tile3D[]>([])
   const [tile, setTile] = useState('')
@@ -260,6 +265,8 @@ export function Results3D({
       {manifest && (
         <ManifestTables manifest={manifest} artifactUrl={(path) => api.artifact(id, path)} />
       )}
+      <CompareRuns api={api} id={id} runs={runs} points={points} section={section} frame={frame} />
+      <Downloads api={api} id={id} tile={tile} frame={frame} section={section} />
     </section>
   )
 }

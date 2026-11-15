@@ -156,6 +156,17 @@ export function startMockServer(log: (line: string) => void): Promise<MockServer
           const suffix = p.slice('/api/3d'.length)
           const body = method === 'POST' ? JSON.parse((await readBody(req)) || '{}') : {}
           const issue = (field: string, error: string, fix: string) => send(res, 422, { detail: { error, field, fix } })
+          if (method === 'POST' && suffix === '/layout/import') {
+            if (!/\.(gds|dxf|png|tiff?|webp)$/i.test(body.filename ?? '')) return issue('filename', 'Unsupported layout file', 'Use .gds, .dxf, .png, .tif, .tiff or .webp.')
+            if (!body.content_b64 || Buffer.from(body.content_b64, 'base64').length > 20 * 1024 * 1024) return issue('content_b64', 'Missing or oversized file', 'Choose a nonempty file up to 20 MB.')
+            const image = /\.(png|tiff?|webp)$/i.test(body.filename)
+            if (image && !(body.pixel_um > 0)) return issue('pixel_um', 'Image scale must be positive', 'Supply micrometres per pixel.')
+            return send(res, 200, {
+              die_um: [128, 64], features: [{ kind: 'rounded_rect', x_um: 64, y_um: 32, w_um: 32, h_um: 24, r_um: 4, rotation_deg: 15 }],
+              unfit: [], skipped: [], preview: [{ layer: 'etch', rings_um: [[[48, 20], [80, 20], [80, 44], [48, 44]]] }],
+              source: { filename: body.filename, kind: image ? 'image' : body.filename.split('.').pop(), n_polygons: 1 }
+            })
+          }
           if (['/validate', '/plan', '/runs'].includes(suffix) && method === 'POST') {
             let spec: SampleSpec3D
             try { spec = parseSpec(JSON.stringify(body.spec)) } catch { return issue('spec', 'Invalid sample specification', 'Supply layout, etch, recipe, bath, setup and numerics.') }
@@ -186,6 +197,14 @@ export function startMockServer(log: (line: string) => void): Promise<MockServer
               return send(res, 200, view())
             }
             if (r.status !== 'done') return send(res, 409, { detail: 'run not finished' })
+            if (match[2] === 'export' && method === 'GET') {
+              const kind = url.searchParams.get('kind')
+              if (!['height_csv', 'section_csv', 'stl'].includes(kind ?? '')) return issue('kind', 'Unknown export kind', 'Choose height_csv, section_csv or stl.')
+              const stl = kind === 'stl'
+              res.writeHead(200, { 'content-type': stl ? 'model/stl' : 'text/csv', 'content-disposition': `attachment; filename="sample.${stl ? 'stl' : 'csv'}"` })
+              res.end(stl ? 'solid sample\nendsolid sample\n' : kind === 'section_csv' ? 'contour,kind,s_um,z_um\n0,cu,0,0\n0,cu,1,1\n' : 'x_um,y_um,height_um\n0,0,0\n1,0,1\n')
+              return
+            }
             if (match[2] === 'artifact' && method === 'GET') {
               const artifact = fixture3d('GET', '/runs/{id}/artifact') as { path: string; media_type: string; base64: string } | undefined
               const path = url.searchParams.get('path')

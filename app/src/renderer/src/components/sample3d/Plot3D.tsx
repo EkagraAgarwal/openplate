@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import Plotly from 'plotly.js-dist-min'
 import { useApp } from '../../lib/context'
+import { PlotPngDownload } from './Downloads'
 
 interface PlotElement extends HTMLDivElement {
   on: (event: string, handler: (event: { points: { x: number; y: number }[] }) => void) => void
@@ -72,6 +73,7 @@ export function Plot3D({
   return (
     <figure className="sample3d-plot card">
       <div ref={ref} aria-label={title} style={{ height: 360 }} />
+      <PlotPngDownload element={() => ref.current} title={title} disabled={failed} />
       {failed && (
         <figcaption className="field-error">
           Plot unavailable. Try another tile or reload the result.
