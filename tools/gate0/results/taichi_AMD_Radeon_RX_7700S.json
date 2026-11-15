@@ -1,0 +1,58 @@
+[
+  {
+    "framework": "taichi",
+    "version": "1.7.4",
+    "device": "AMD Radeon RX 7700S",
+    "dtype": "float32",
+    "N": 160,
+    "test": "sweep",
+    "peak_bytes": null,
+    "status": "passed",
+    "mcups": 306.4033512889388,
+    "seconds": 0.053471999999601394,
+    "iterations": 4,
+    "relative_residual": 1.4121705276166638,
+    "relative_error": 0.9985552205389114,
+    "compile_seconds": 0.9759415000007721,
+    "warmup_seconds": 0.05880600000091363,
+    "timing_scope": "host orchestration + transfers + device"
+  },
+  {
+    "framework": "taichi",
+    "version": "1.7.4",
+    "device": "AMD Radeon RX 7700S",
+    "dtype": "float32",
+    "N": 256,
+    "test": "sweep",
+    "peak_bytes": null,
+    "status": "passed",
+    "mcups": 407.123563575398,
+    "seconds": 0.16483660000085365,
+    "iterations": 4,
+    "relative_residual": 1.413414460469882,
+    "relative_error": 0.9994354037695703,
+    "compile_seconds": 0.9759415000007721,
+    "warmup_seconds": 0.18458950000058394,
+    "timing_scope": "host orchestration + transfers + device"
+  },
+  {
+    "framework": "taichi",
+    "version": "1.7.4",
+    "device": "AMD Radeon RX 7700S",
+    "test": "capability",
+    "dtype": "float64",
+    "status": "unsupported",
+    "error": "float64 unavailable in this backend/device; float32 used"
+  },
+  {
+    "framework": "taichi",
+    "version": "1.7.4",
+    "device": "AMD Radeon RX 7700S",
+    "dtype": "float32",
+    "N": 160,
+    "test": "mgpcg",
+    "peak_bytes": null,
+    "status": "failed",
+    "error": "ArithmeticError: CG failed: residual=3.45432e+27, error=4.57993e+25"
+  }
+]

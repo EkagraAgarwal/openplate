@@ -1,0 +1,72 @@
+# Gate 0 results
+
+- taichi: NOT QUALIFIED (missing both-GPU N=160 solve evidence).
+- quadrants: NOT QUALIFIED (missing both-GPU N=160 solve evidence).
+- pyopencl: NOT QUALIFIED (missing both-GPU N=160 solve evidence).
+- tinygrad: NOT QUALIFIED (missing both-GPU N=160 solve evidence; sweep-only candidate).
+- wgpu: NOT QUALIFIED (missing both-GPU N=160 solve evidence; sweep-only candidate).
+
+| framework | version | device | test | dtype | N | mcups | seconds | iterations | relative_residual | relative_error | compile_seconds | peak_bytes | status | error |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| numpy | 2.5.4 | environment | historical: import |  |  |  |  |  |  |  |  |  | passed |  |
+| numba | unavailable | environment | historical: import |  |  |  |  |  |  |  |  |  | failed | ModuleNotFoundError: No module named 'numba' |
+| taichi | unavailable | environment | historical: import |  |  |  |  |  |  |  |  |  | failed | ModuleNotFoundError: No module named 'taichi' |
+| quadrants | unavailable | environment | historical: import |  |  |  |  |  |  |  |  |  | failed | ModuleNotFoundError: No module named 'quadrants' |
+| pyopencl | 2026.1.5 | environment | historical: import |  |  |  |  |  |  |  |  |  | passed |  |
+| tinygrad | unavailable | environment | historical: import |  |  |  |  |  |  |  |  |  | failed | ModuleNotFoundError: No module named 'tinygrad' |
+| wgpu | 0.33.0 | environment | historical: import |  |  |  |  |  |  |  |  |  | passed |  |
+| pyvista | 0.49.2 | environment | historical: offscreen sphere PNG |  |  |  |  |  |  |  |  |  | passed |  |
+| gdstk | 1.0.2 | environment | historical: import |  |  |  |  |  |  |  |  |  | passed |  |
+| ezdxf | 1.4.5 | environment | historical: import |  |  |  |  |  |  |  |  |  | passed |  |
+| mcp | 2.3.0 | environment | historical: import |  |  |  |  |  |  |  |  |  | passed |  |
+| onnxruntime | 1.32.0 | environment | historical: import |  |  |  |  |  |  |  |  |  | passed |  |
+| numpy | 2.5.4 | environment | import |  |  |  |  |  |  |  |  |  | passed |  |
+| numba | 0.68.1 | environment | import |  |  |  |  |  |  |  |  |  | passed |  |
+| taichi | 1.7.4 | environment | import + Vulkan loader enumeration |  |  |  |  |  |  |  |  |  | passed |  |
+| quadrants | 1.4.0 | environment | import + Vulkan loader enumeration |  |  |  |  |  |  |  |  |  | passed |  |
+| pyopencl | 2026.1.5 | environment | import |  |  |  |  |  |  |  |  |  | passed |  |
+| tinygrad | 0.14.0 | environment | import |  |  |  |  |  |  |  |  |  | passed |  |
+| wgpu | 0.33.0 | environment | import |  |  |  |  |  |  |  |  |  | passed |  |
+| pyvista | 0.49.2 | environment | offscreen sphere PNG |  |  |  |  |  |  |  |  |  | passed |  |
+| gdstk | 1.0.2 | environment | import |  |  |  |  |  |  |  |  |  | passed |  |
+| ezdxf | 1.4.5 | environment | import |  |  |  |  |  |  |  |  |  | passed |  |
+| mcp | 2.3.0 | environment | import |  |  |  |  |  |  |  |  |  | passed |  |
+| onnxruntime | 1.32.0 | environment | import |  |  |  |  |  |  |  |  |  | passed |  |
+| numba | 0.68.1 | AMD Ryzen 7 7735HS with Radeon Graphics | sweep | float32 | 160 | 235.551 | 0.0695561 | 4 | 1.41217 | 0.998555 | 2.39435 |  | passed |  |
+| numba | 0.68.1 | AMD Ryzen 7 7735HS with Radeon Graphics | sweep | float32 | 256 | 237.009 | 0.283149 | 4 | 1.41342 | 0.999435 | 2.39435 |  | passed |  |
+| numba | 0.68.1 | AMD Ryzen 7 7735HS with Radeon Graphics | sweep | float64 | 160 | 249.164 | 0.0657559 | 4 | 1.41217 | 0.998555 | 1.88761 |  | passed |  |
+| numba | 0.68.1 | AMD Ryzen 7 7735HS with Radeon Graphics | sweep | float64 | 256 | 227.124 | 0.295472 | 4 | 1.41342 | 0.999435 | 1.88761 |  | passed |  |
+| numba | 0.68.1 | AMD Ryzen 7 7735HS with Radeon Graphics | mgpcg | float64 | 160 |  | 3.10892 | 7 | 1.09705e-09 | 4.48395e-11 | 1.88761 |  | passed |  |
+| numba | 0.68.1 | CPU | historical: initial failure |  |  |  |  |  |  |  |  |  | failed | TypingError: Failed in nopython mode pipeline (step: native parfor lowering) Failed in full_parfor_gufunc mode pipeline (step: nopython frontend) No implementation of function Function(<built-in function getitem>) found for signature:    >>> getitem(array(float32, 3d, C), Tuple(float64, int64, int64))   There are 22 candidate implementations:  - Of which 20 did not match due to:  Overload of function 'getitem': File: <numerous>: Line N/A.    With argument(s): '(array(float32, 3d, C), Tuple(float64, int64, int64))':   No match.  - Of which 2 did not match due to:  Overload in function 'GetItemBuffer.generic': File: numba\core\typing\arraydecl.py: Line 209.    With argument(s): '(array(float32, 3d, C), Tuple(float64, int64, int64))':   Rejected as the implementation raised a specific error:     NumbaTypeError: Unsupported array index type float64 in Tuple(float64, int64, int64)   raised from <redacted>\AppData\Local\uv\cache\archive-v0\zy0Bdf49n5VYUsg9\Lib\site-packages\numba\core\typing\arraydecl.py:103  During: typing of intrinsic-call at <repo>\tools\gate0\bench_numba.py (29) During: typing of intrinsic-call at <repo>\tools\gate0\bench_numba.py (31)  File "tools\gate0\bench_numba.py", line 29: def kernel(u, b, k, out, color, apply):     <source elided>                         else:                             w = 2*k[i,j,z]*k[a,c,d]/(k[i,j,z]+k[a,c,d])*n*n                             ^  During: Pass nopython_type_inference During: lowering "id=0[LoopNest(index_variable = parfor_index.38, range = (0, u_size0.1, 1))]{258: <ir.Block at <repo>\tools\gate0\bench_numba.py (26)>, 268: <ir.Block at <repo>\tools\gate0\bench_numba.py (26)>, 144: <ir.Block at <repo>\tools\gate0\bench_numba.py (14)>, 146: <ir.Block at <repo>\tools\gate0\bench_numba.py (15)>, 278: <ir.Block at <repo>\tools\gate0\bench_numba.py (26)>, 540: <ir.Block at <repo>\tools\gate0\bench_numba.py (33)>, 288: <ir.Block at <repo>\tools\gate0\bench_numba.py (26)>, 298: <ir.Block at <repo>\tools\gate0\bench_numba.py (26)>, 176: <ir.Block at <repo>\tools\gate0\bench_numba.py (17)>, 180: <ir.Block at <repo>\tools\gate0\bench_numba.py (17)>, 308: <ir.Block at <repo>\tools\gate0\bench_numba.py (26)>, 54: <ir.Block at <repo>\tools\gate0\bench_numba.py (10)>, 186: <ir.Block at <repo>\tools\gate0\bench_numba.py (18)>, 318: <ir.Block at <repo>\tools\gate0\bench_numba.py (27)>, 190: <ir.Block at <repo>\tools\gate0\bench_numba.py (18)>, 582: <ir.Block at <repo>\tools\gate0\bench_numba.py (35)>, 586: <ir.Block at <repo>\tools\gate0\bench_numba.py (12)>, 78: <ir.Block at <repo>\tools\gate0\bench_numba.py (11)>, 592: <ir.Block at <repo>\tools\gate0\bench_numba.py (12)>, 593: <ir.Block at <repo>\tools\gate0\bench_numba.py (11)>, 82: <ir.Block at <repo>\tools\gate0\bench_numba.py (11)>, 214: <ir.Block at <repo>\tools\gate0\bench_numba.py (21)>, 226: <ir.Block at <repo>\tools\gate0\bench_numba.py (22)>, 488: <ir.Block at <repo>\tools\gate0\bench_numba.py (18)>, 360: <ir.Block at <repo>\tools\gate0\bench_numba.py (29)>, 106: <ir.Block at <repo>\tools\gate0\bench_numba.py (12)>, 492: <ir.Block at <repo>\tools\gate0\bench_numba.py (18)>, 236: <ir.Block at <repo>\tools\gate0\bench_numba.py (23)>, 110: <ir.Block at <repo>\tools\gate0\bench_numba.py (12)>, 498: <ir.Block at <repo>\tools\gate0\bench_numba.py (32)>, 116: <ir.Block at <repo>\tools\gate0\bench_numba.py (13)>, 248: <ir.Block at <repo>\tools\gate0\bench_numba.py (25)>}Var(parfor_index.38, bench_numba.py:10)" at <repo>\tools\gate0\bench_numba.py (10) During: Pass native_parfor_lowering |
+| pyopencl | 2026.1.5 | gfx1035 | sweep | float32 | 160 | 466.718 | 0.0351047 | 4 | 1.41217 | 0.998555 | 0.0849879 |  | passed |  |
+| pyopencl | 2026.1.5 | gfx1035 | sweep | float32 | 256 | 427.409 | 0.157013 | 4 | 1.41341 | 0.999435 | 0.0849879 |  | passed |  |
+| pyopencl | 2026.1.5 | gfx1035 | sweep | float64 | 160 | 195.963 | 0.0836076 | 4 | 1.41217 | 0.998555 | 0.0168421 |  | passed |  |
+| pyopencl | 2026.1.5 | gfx1035 | sweep | float64 | 256 | 170.613 | 0.393339 | 4 | 1.41342 | 0.999435 | 0.0168421 |  | passed |  |
+| pyopencl | 2026.1.5 | gfx1035 | mgpcg | float64 | 160 |  | 4.20228 | 7 | 1.09705e-09 | 4.48395e-11 | 0.0168421 |  | passed |  |
+| pyopencl | 2026.1.5 | RX 7700S |  |  |  |  |  |  |  |  |  |  | failed | ValueError: device selector 'RX 7700S': 0 matches |
+| quadrants | 1.4.0 | AMD Radeon(TM) Graphics | sweep | float32 | 160 | 239.994 | 0.0682685 | 4 | 1.41217 | 0.998555 | 0.233402 |  | passed |  |
+| quadrants | 1.4.0 | AMD Radeon(TM) Graphics | sweep | float32 | 256 | 244.713 | 0.274235 | 4 | 1.41341 | 0.999435 | 0.233402 |  | passed |  |
+| quadrants | 1.4.0 | AMD Radeon(TM) Graphics | capability | float64 |  |  |  |  |  |  |  |  | unsupported | float64 unavailable in this backend/device; float32 used |
+| quadrants | 1.4.0 | AMD Radeon(TM) Graphics | mgpcg | float32 | 160 |  |  |  |  |  |  |  | failed | ArithmeticError: CG failed: residual=2.59202e+27, error=4.82507e+25 |
+| quadrants | 1.4.0 | 0 | historical: initial failure |  |  |  |  |  |  |  |  |  | failed | QuadrantsCompilationError:  File "<repo>\tools\gate0\taichi_backend.py", line 29, in stencil:                 diagonal = ti.cast(0, u.dtype)                                       ^^^^^^^ Traceback (most recent call last):   File "<redacted>\AppData\Local\uv\cache\archive-v0\p47fx5TSL2m9ZSCb\Lib\site-packages\quadrants\lang\ast\ast_transformer_utils.py", line 40, in __call__     res = method(ctx, node)           ^^^^^^^^^^^^^^^^^   File "<redacted>\AppData\Local\uv\cache\archive-v0\p47fx5TSL2m9ZSCb\Lib\site-packages\quadrants\lang\ast\ast_transformer.py", line 817, in build_Attribute     node.ptr = getattr(node.value.ptr, node.attr)                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ AttributeError: 'AnyArray' object has no attribute 'dtype'  |
+| quadrants | 1.4.0 | AMD Radeon(TM) Graphics | historical: sweep | float32 | 160 | 254.292 | 0.0644299 | 4 | 1.41217 | 0.998555 | 0.363748 |  | passed |  |
+| quadrants | 1.4.0 | AMD Radeon(TM) Graphics | historical: capability | float64 |  |  |  |  |  |  |  |  | unsupported | float64 unavailable in this backend/device; float32 used |
+| quadrants | 1.4.0 | AMD Radeon(TM) Graphics | historical: mgpcg | float32 | 160 |  |  |  |  |  |  |  | failed | ArithmeticError: CG lost positive definiteness |
+| quadrants | 1.4.0 | RX 7700S |  |  |  |  |  |  |  |  |  |  | failed | ValueError: device selector 'RX 7700S': 0 matches |
+| taichi | 1.7.4 | AMD Radeon(TM) Graphics | sweep | float32 | 160 | 260.355 | 0.0629295 | 4 | 1.41217 | 0.998555 | 0.633937 |  | passed |  |
+| taichi | 1.7.4 | AMD Radeon(TM) Graphics | sweep | float32 | 256 | 160.424 | 0.418321 | 4 | 1.41341 | 0.999435 | 0.633937 |  | passed |  |
+| taichi | 1.7.4 | AMD Radeon(TM) Graphics | capability | float64 |  |  |  |  |  |  |  |  | unsupported | float64 unavailable in this backend/device; float32 used |
+| taichi | 1.7.4 | AMD Radeon(TM) Graphics | mgpcg | float32 | 160 |  |  |  |  |  |  |  | failed | ArithmeticError: CG failed: residual=2.59202e+27, error=4.82507e+25 |
+| taichi | 1.7.4 | 0 | historical: initial failure |  |  |  |  |  |  |  |  |  | failed | TaichiCompilationError:  File "<repo>\tools\gate0\taichi_backend.py", line 29, in stencil:                 diagonal = ti.cast(0, u.dtype)                                       ^^^^^^^ Traceback (most recent call last):   File "<redacted>\AppData\Local\uv\cache\archive-v0\bT1jvuFgza5AasE-\Lib\site-packages\taichi\lang\ast\ast_transformer_utils.py", line 27, in __call__     return method(ctx, node)            ^^^^^^^^^^^^^^^^^   File "<redacted>\AppData\Local\uv\cache\archive-v0\bT1jvuFgza5AasE-\Lib\site-packages\taichi\lang\ast\ast_transformer.py", line 1040, in build_Attribute     node.ptr = getattr(node.value.ptr, node.attr)                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ AttributeError: 'AnyArray' object has no attribute 'dtype'  |
+| taichi | 1.7.4 | AMD Radeon(TM) Graphics | historical: sweep | float32 | 160 | 234.053 | 0.0700013 | 4 | 1.41217 | 0.998555 | 0.708713 |  | passed |  |
+| taichi | 1.7.4 | AMD Radeon(TM) Graphics | historical: capability | float64 |  |  |  |  |  |  |  |  | unsupported | float64 unavailable in this backend/device; float32 used |
+| taichi | 1.7.4 | AMD Radeon(TM) Graphics | historical: mgpcg | float32 | 160 |  |  |  |  |  |  |  | failed | ArithmeticError: CG lost positive definiteness |
+| taichi | 1.7.4 | RX 7700S |  |  |  |  |  |  |  |  |  |  | failed | ValueError: device selector 'RX 7700S': 0 matches |
+| tinygrad | 0.14.0 | gfx1035 | sweep | float32 | 160 | 31.3333 | 0.522894 | 4 | 1.41217 | 0.998555 | 1.28133 |  | passed |  |
+| tinygrad | 0.14.0 | gfx1035 | sweep | float32 | 256 | 37.9832 | 1.7668 | 4 | 1.41341 | 0.999435 | 1.28133 |  | passed |  |
+| tinygrad | 0.14.0 | gfx1035 | capability | float64 |  |  |  |  |  |  |  |  | unsupported | float64 unavailable in this backend/device; float32 used |
+| tinygrad | 0.14.0 | RX 7700S |  |  |  |  |  |  |  |  |  |  | failed | ValueError: device selector 'RX 7700S': 0 matches |
+| wgpu | 0.33.0 | AMD Radeon(TM) Graphics | sweep | float32 | 160 | 439.122 | 0.0373108 | 4 | 1.41217 | 0.998555 | 0.514167 |  | passed |  |
+| wgpu | 0.33.0 | AMD Radeon(TM) Graphics | sweep | float32 | 256 | 259.008 | 0.2591 | 4 | 1.41341 | 0.999435 | 0.514167 |  | passed |  |
+| wgpu | 0.33.0 | AMD Radeon(TM) Graphics | capability | float64 |  |  |  |  |  |  |  |  | unsupported | float64 unavailable in this backend/device; float32 used |
+| wgpu | 0.33.0 | RX 7700S |  |  |  |  |  |  |  |  |  |  | failed | ValueError: device selector 'RX 7700S': 0 matches |

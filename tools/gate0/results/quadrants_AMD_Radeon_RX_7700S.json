@@ -1,0 +1,58 @@
+[
+  {
+    "framework": "quadrants",
+    "version": "1.4.0",
+    "device": "AMD Radeon RX 7700S",
+    "dtype": "float32",
+    "N": 160,
+    "test": "sweep",
+    "peak_bytes": null,
+    "status": "passed",
+    "mcups": 394.5232923233867,
+    "seconds": 0.041528600006131455,
+    "iterations": 4,
+    "relative_residual": 1.4121705276166638,
+    "relative_error": 0.9985552205389114,
+    "compile_seconds": 0.5720766999875195,
+    "warmup_seconds": 0.047896400006720796,
+    "timing_scope": "host orchestration + transfers + device"
+  },
+  {
+    "framework": "quadrants",
+    "version": "1.4.0",
+    "device": "AMD Radeon RX 7700S",
+    "dtype": "float32",
+    "N": 256,
+    "test": "sweep",
+    "peak_bytes": null,
+    "status": "passed",
+    "mcups": 338.7034066565527,
+    "seconds": 0.19813460001023486,
+    "iterations": 4,
+    "relative_residual": 1.413414460469882,
+    "relative_error": 0.9994354037695703,
+    "compile_seconds": 0.5720766999875195,
+    "warmup_seconds": 0.21913169999606907,
+    "timing_scope": "host orchestration + transfers + device"
+  },
+  {
+    "framework": "quadrants",
+    "version": "1.4.0",
+    "device": "AMD Radeon RX 7700S",
+    "test": "capability",
+    "dtype": "float64",
+    "status": "unsupported",
+    "error": "float64 unavailable in this backend/device; float32 used"
+  },
+  {
+    "framework": "quadrants",
+    "version": "1.4.0",
+    "device": "AMD Radeon RX 7700S",
+    "dtype": "float32",
+    "N": 160,
+    "test": "mgpcg",
+    "peak_bytes": null,
+    "status": "failed",
+    "error": "ArithmeticError: CG failed: residual=3.45432e+27, error=4.57993e+25"
+  }
+]

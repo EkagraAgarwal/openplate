@@ -1,0 +1,90 @@
+[
+  {
+    "framework": "numpy",
+    "version": "2.5.4",
+    "device": "environment",
+    "test": "import",
+    "status": "passed"
+  },
+  {
+    "framework": "numba",
+    "version": "unavailable",
+    "device": "environment",
+    "test": "import",
+    "status": "failed",
+    "error": "ModuleNotFoundError: No module named 'numba'"
+  },
+  {
+    "framework": "taichi",
+    "version": "unavailable",
+    "device": "environment",
+    "test": "import",
+    "status": "failed",
+    "error": "ModuleNotFoundError: No module named 'taichi'"
+  },
+  {
+    "framework": "quadrants",
+    "version": "unavailable",
+    "device": "environment",
+    "test": "import",
+    "status": "failed",
+    "error": "ModuleNotFoundError: No module named 'quadrants'"
+  },
+  {
+    "framework": "pyopencl",
+    "version": "2026.1.5",
+    "device": "environment",
+    "test": "import",
+    "status": "passed"
+  },
+  {
+    "framework": "tinygrad",
+    "version": "unavailable",
+    "device": "environment",
+    "test": "import",
+    "status": "failed",
+    "error": "ModuleNotFoundError: No module named 'tinygrad'"
+  },
+  {
+    "framework": "wgpu",
+    "version": "0.33.0",
+    "device": "environment",
+    "test": "import",
+    "status": "passed"
+  },
+  {
+    "framework": "pyvista",
+    "version": "0.49.2",
+    "device": "environment",
+    "test": "offscreen sphere PNG",
+    "status": "passed"
+  },
+  {
+    "framework": "gdstk",
+    "version": "1.0.2",
+    "device": "environment",
+    "test": "import",
+    "status": "passed"
+  },
+  {
+    "framework": "ezdxf",
+    "version": "1.4.5",
+    "device": "environment",
+    "test": "import",
+    "status": "passed"
+  },
+  {
+    "framework": "mcp",
+    "version": "2.3.0",
+    "device": "environment",
+    "test": "import",
+    "status": "passed"
+  },
+  {
+    "framework": "onnxruntime",
+    "version": "1.32.0",
+    "device": "environment",
+    "test": "import",
+    "status": "passed"
+  }
+]

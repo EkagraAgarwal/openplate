@@ -314,11 +314,26 @@ def create_app(data_dir: Optional[str | Path] = None, ready_port: Optional[int] 
             except Exception:
                 pass
 
+    try:
+        from .routes3d import router
+        app.include_router(router)
+    except ImportError:
+        pass
+
     # web mode: serve the built desktop UI (app/out/renderer) at "/" so a browser can use it
     ui_dir = Path(__file__).resolve().parents[2] / "app" / "out" / "renderer"
     if ui_dir.is_dir():
         from fastapi.staticfiles import StaticFiles
-        app.mount("/", StaticFiles(directory=str(ui_dir), html=True), name="ui")
+
+        class _UI(StaticFiles):
+            # index.html names the hashed bundles: never cache it, or a rebuilt UI stays hidden
+            async def get_response(self, path, scope):
+                response = await super().get_response(path, scope)
+                if path in ("", ".", "index.html") or response.media_type == "text/html":
+                    response.headers["Cache-Control"] = "no-cache"
+                return response
+
+        app.mount("/", _UI(directory=str(ui_dir), html=True), name="ui")
 
     return app
 

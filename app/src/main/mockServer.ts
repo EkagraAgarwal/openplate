@@ -5,7 +5,12 @@
  */
 import http from 'node:http'
 import { randomUUID } from 'node:crypto'
+import { existsSync, readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import fixtures from '../../mock/fixtures.json'
+import stub3d from '../../mock/fixtures3d.stub.json'
+import { parseSpec } from '../renderer/src/lib/sample3d'
+import type { Run3D, SampleSpec3D } from '../renderer/src/api/client3d'
 
 interface MockJob {
   id: string
@@ -62,6 +67,21 @@ export interface MockServer {
 export function startMockServer(log: (line: string) => void): Promise<MockServer> {
   const jobs = new Map<string, MockJob>()
   const sweeps = new Map<string, MockSweep>()
+  // Source and bundled main both live two levels below app/. Prefer real API captures.
+  const fixturePath = resolve(__dirname, '../../mock/fixtures3d.json')
+  const data3d = (existsSync(fixturePath) ? JSON.parse(readFileSync(fixturePath, 'utf8')) : stub3d) as Record<string, unknown>
+  const fixture3d = (method: string, suffix: string): unknown => data3d[`${method} /api/3d${suffix}`]
+  const runs3d = new Map<string, Run3D & { startedAt?: number }>()
+  const captured = fixture3d('GET', '/runs') as { runs: Run3D[] }
+  for (const r of captured.runs) runs3d.set(r.run_id, { ...r, spec: (fixture3d('GET', '/examples') as { examples: { spec: SampleSpec3D }[] }).examples[0]?.spec })
+  const update3d = (r: Run3D & { startedAt?: number }): Run3D => {
+    if (r.status === 'running' && r.startedAt) {
+      r.progress = Math.min(1, (Date.now() - r.startedAt) / 5000)
+      r.message = r.progress < 1 ? 'Simulating fixture run' : 'done'
+      if (r.progress === 1) { r.status = 'done'; r.finished = Date.now() / 1000 }
+    }
+    return r
+  }
 
   const send = (res: http.ServerResponse, code: number, body: unknown): void => {
     const payload = JSON.stringify(body)
@@ -132,6 +152,79 @@ export function startMockServer(log: (line: string) => void): Promise<MockServer
       const p = url.pathname
       const method = req.method ?? 'GET'
       try {
+        if (p.startsWith('/api/3d/')) {
+          const suffix = p.slice('/api/3d'.length)
+          const body = method === 'POST' ? JSON.parse((await readBody(req)) || '{}') : {}
+          const issue = (field: string, error: string, fix: string) => send(res, 422, { detail: { error, field, fix } })
+          if (method === 'POST' && suffix === '/layout/import') {
+            if (!/\.(gds|dxf|png|tiff?|webp)$/i.test(body.filename ?? '')) return issue('filename', 'Unsupported layout file', 'Use .gds, .dxf, .png, .tif, .tiff or .webp.')
+            if (!body.content_b64 || Buffer.from(body.content_b64, 'base64').length > 20 * 1024 * 1024) return issue('content_b64', 'Missing or oversized file', 'Choose a nonempty file up to 20 MB.')
+            const image = /\.(png|tiff?|webp)$/i.test(body.filename)
+            if (image && !(body.pixel_um > 0)) return issue('pixel_um', 'Image scale must be positive', 'Supply micrometres per pixel.')
+            return send(res, 200, {
+              die_um: [128, 64], features: [{ kind: 'rounded_rect', x_um: 64, y_um: 32, w_um: 32, h_um: 24, r_um: 4, rotation_deg: 15 }],
+              unfit: [], skipped: [], preview: [{ layer: 'etch', rings_um: [[[48, 20], [80, 20], [80, 44], [48, 44]]] }],
+              source: { filename: body.filename, kind: image ? 'image' : body.filename.split('.').pop(), n_polygons: 1 }
+            })
+          }
+          if (['/validate', '/plan', '/runs'].includes(suffix) && method === 'POST') {
+            let spec: SampleSpec3D
+            try { spec = parseSpec(JSON.stringify(body.spec)) } catch { return issue('spec', 'Invalid sample specification', 'Supply layout, etch, recipe, bath, setup and numerics.') }
+            const errors = []
+            if (!['preview', 'standard', 'fine'].includes(spec.numerics.quality ?? 'standard')) errors.push({ field: 'numerics.quality', message: 'Unknown quality', fix: 'Choose preview, standard or fine.' })
+            if (!(spec.etch.default.depth_um > 0)) errors.push({ field: 'etch.default.depth_um', message: 'Depth must be positive', fix: 'Set depth_um > 0.' })
+            if (spec.numerics.dx_um != null && !(spec.numerics.dx_um > 0)) errors.push({ field: 'numerics.dx_um', message: 'Spacing must be positive', fix: 'Set dx_um > 0.' })
+            if (suffix === '/validate') return send(res, 200, { ok: !errors.length, errors })
+            if (errors.length) { const e = errors[0]; return issue(e.field, e.message, e.fix) }
+            if (suffix === '/plan') return send(res, 200, fixture3d('POST', '/plan'))
+            const run_id = `sample-${randomUUID().slice(0, 8)}`
+            runs3d.set(run_id, { run_id, label: body.label || null, status: 'running', progress: 0, message: 'starting', error: null, spec, created: Date.now() / 1000, finished: null, startedAt: Date.now() })
+            return send(res, 202, { run_id })
+          }
+          if (method === 'GET' && suffix === '/runs') return send(res, 200, { runs: [...runs3d.values()].reverse().map((r) => {
+            update3d(r)
+            return { run_id: r.run_id, label: r.label, status: r.status, progress: r.progress, message: r.message, created: r.created, finished: r.finished }
+          }) })
+          const match = suffix.match(/^\/runs\/([^/]+)(?:\/(\w+))?$/)
+          if (match) {
+            const r = runs3d.get(decodeURIComponent(match[1]))
+            if (!r) return send(res, 404, { detail: 'unknown run' })
+            update3d(r)
+            const view = () => ({ run_id: r.run_id, label: r.label, status: r.status, progress: r.progress, message: r.message, error: r.error, spec: r.spec })
+            if (method === 'GET' && !match[2]) return send(res, 200, view())
+            if (method === 'POST' && match[2] === 'cancel') {
+              if (r.status === 'running') { r.status = 'cancelled'; r.message = 'cancelled'; r.finished = Date.now() / 1000 }
+              return send(res, 200, view())
+            }
+            if (r.status !== 'done') return send(res, 409, { detail: 'run not finished' })
+            if (match[2] === 'export' && method === 'GET') {
+              const kind = url.searchParams.get('kind')
+              if (!['height_csv', 'section_csv', 'stl'].includes(kind ?? '')) return issue('kind', 'Unknown export kind', 'Choose height_csv, section_csv or stl.')
+              const stl = kind === 'stl'
+              res.writeHead(200, { 'content-type': stl ? 'model/stl' : 'text/csv', 'content-disposition': `attachment; filename="sample.${stl ? 'stl' : 'csv'}"` })
+              res.end(stl ? 'solid sample\nendsolid sample\n' : kind === 'section_csv' ? 'contour,kind,s_um,z_um\n0,cu,0,0\n0,cu,1,1\n' : 'x_um,y_um,height_um\n0,0,0\n1,0,1\n')
+              return
+            }
+            if (match[2] === 'artifact' && method === 'GET') {
+              const artifact = fixture3d('GET', '/runs/{id}/artifact') as { path: string; media_type: string; base64: string } | undefined
+              const path = url.searchParams.get('path')
+              const manifest = fixture3d('GET', '/runs/{id}/manifest') as { artifacts: { path: string }[] }
+              if (!artifact || path !== artifact.path || path.includes('..') || !manifest.artifacts.some((a) => a.path === path)) return send(res, 404, { detail: 'unknown artifact' })
+              res.writeHead(200, { 'content-type': artifact.media_type }); res.end(Buffer.from(artifact.base64, 'base64')); return
+            }
+            const result = fixture3d(method, `/runs/{id}/${match[2]}`)
+            if (result) {
+              const clone = JSON.parse(JSON.stringify(result))
+              // The stub/capture only stores final geometry; frame 0 is the bare surface.
+              if (match[2] === 'height' && Number(url.searchParams.get('frame') ?? -1) === 0) { clone.height_um = clone.bare_height_um; clone.frame = 0; clone.t_s = 0 }
+              if (match[2] === 'section' && body.frame === 0) clone.cu_outline = clone.si_outline
+              return send(res, 200, clone)
+            }
+          }
+          const result = fixture3d(method, suffix)
+          if (result && ['/schema', '/examples'].includes(suffix)) return send(res, 200, result)
+          return send(res, 404, { detail: 'unknown 3-D endpoint' })
+        }
         if (method === 'GET' && p === '/api/health') {
           return send(res, 200, { status: 'ok', mock: true, version: '0.0-mock' })
         }

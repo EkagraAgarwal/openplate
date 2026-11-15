@@ -53,6 +53,17 @@ tables — so the full UI can be used without Python. The mock does not implemen
 
 ## Renderer features
 
+- **3-D sample page** (sidebar "3-D sample", API in `platesim/server/routes3d.py`, contract
+  CONTRACTS_3D.md §10f): pick a synthetic example or edit the spec (form or raw JSON: layout
+  features, etch, pulse-reverse recipe table with net current and duty, bath, setup, numerics);
+  Validate (field / message / fix), Plan (tiles, cells, estimated time), Run with live progress
+  and Cancel, runs list. Results: height-map heatmap (click two points to cut a vertical
+  section: final Cu, initial Cu, Si outlines), frame slider, 3-D surface with z exaggeration,
+  time series, manifest quantities and checks, rendered PNGs. Runs execute in the job pool
+  (separate process) under `<data dir>/runs3d/`. All results are labelled uncalibrated (L1,
+  no additives). `quick_trench` finishes in about a minute on a laptop CPU.
+  Mock mode serves `/api/3d/*` from `mock/fixtures3d.json`, regenerated from a real run with
+  `PYTHONPATH=. python tools/make_ui_fixtures3d.py` (repo root).
 - **Left sidebar:** model list grouped Coupon/Cell · Flow · Efficiency · Feature fill ·
   Imaging · Other (grouping inferred from `MODEL_SPEC.package`/id).
 - **Model page:** auto-generated parameter form from `MODEL_SPEC.params`

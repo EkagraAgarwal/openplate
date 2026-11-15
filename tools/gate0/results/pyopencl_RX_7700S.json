@@ -1,0 +1,9 @@
+[
+  {
+    "framework": "pyopencl",
+    "version": "2026.1.5",
+    "device": "RX 7700S",
+    "status": "failed",
+    "error": "ValueError: device selector 'RX 7700S': 0 matches"
+  }
+]

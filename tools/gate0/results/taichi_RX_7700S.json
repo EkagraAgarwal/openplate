@@ -1,0 +1,9 @@
+[
+  {
+    "framework": "taichi",
+    "version": "1.7.4",
+    "device": "RX 7700S",
+    "status": "failed",
+    "error": "ValueError: device selector 'RX 7700S': 0 matches"
+  }
+]

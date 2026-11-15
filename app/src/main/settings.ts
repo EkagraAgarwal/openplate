@@ -14,7 +14,7 @@ export interface AppSettings {
   externalUrl: string
   /** platesim project root (cwd for the spawned server). Empty = auto (parent of app/). */
   platesimRoot: string
-  /** Python executable. */
+  /** Python executable, or 'uv' for project extras. Python startup failures retry uv once. */
   pythonBin: string
   llm: LlmSettings
 }

@@ -4,7 +4,8 @@
  * adds permissive CORS so the Vite dev origin can call it. The gateway also
  * forwards WebSocket upgrades so /api/ws works end-to-end.
  */
-import { spawn, type ChildProcess } from 'node:child_process'
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
+import { basename } from 'node:path'
 import http from 'node:http'
 import net from 'node:net'
 import type { AddressInfo } from 'node:net'
@@ -135,11 +136,27 @@ export class BackendManager {
   // ---------------------------------------------------------------- spawn ---
 
   private async spawnPython(settings: AppSettings): Promise<void> {
+    const bin = settings.pythonBin || 'python'
+    try {
+      await this.spawnPythonAttempt(settings, bin)
+    } catch (err) {
+      const retryable = err instanceof Error && 'retryable' in err && err.retryable
+      if (!retryable || !/^python(?:3(?:\.\d+)?)?(?:\.exe)?$/i.test(basename(bin)) ||
+          spawnSync('uv', ['--version'], { windowsHide: true }).status !== 0) throw err
+      this.log('[backend] python failed before READY; retrying once with uv')
+      await this.spawnPythonAttempt(settings, 'uv')
+    }
+  }
+
+  private async spawnPythonAttempt(settings: AppSettings, bin: string): Promise<void> {
     const port = await freePort()
     const root = settings.platesimRoot
-    const bin = settings.pythonBin || 'python'
-    const args = ['-m', 'platesim.server', '--port', String(port), '--host', '127.0.0.1']
-    this.log(`[backend] spawn: ${bin} ${args.join(' ')}  (cwd=${root})`)
+    const serverArgs = ['-m', 'platesim.server', '--port', String(port), '--host', '127.0.0.1']
+    const args = /^uv(?:\.exe)?$/i.test(basename(bin))
+      ? ['run', '--project', root, '--extra', 'fast', '--extra', 'ref', '--extra', 'layout',
+          '--extra', 'viz', '--extra', 'spec', 'python', ...serverArgs]
+      : serverArgs
+    this.log(`[backend] spawn: ${[bin, ...args].map((arg) => JSON.stringify(arg)).join(' ')}  (cwd=${root})`)
     const child = spawn(bin, args, {
       cwd: root,
       env: { ...process.env },
@@ -175,7 +192,8 @@ export class BackendManager {
         if (!settled) {
           settled = true
           clearTimeout(timeout)
-          reject(new Error(`failed to start '${bin}': ${err.message}`))
+          reject(Object.assign(new Error(`failed to start '${bin}': ${err.message}`),
+            { retryable: (err as NodeJS.ErrnoException).code === 'ENOENT' }))
         }
       })
       child.on('exit', (code, signal) => {
@@ -183,14 +201,21 @@ export class BackendManager {
         if (!settled) {
           settled = true
           clearTimeout(timeout)
-          reject(new Error(`server exited before ready (code=${code})`))
-        } else if (this.state.status === 'ready') {
+          reject(Object.assign(new Error(`server exited before ready (code=${code})`), { retryable: true }))
+        } else if (this.child === child && this.state.status === 'ready') {
           this.setState({ status: 'error', error: 'backend process exited' })
         }
       })
     })
 
-    await readyPromise
+    try {
+      await readyPromise
+    } catch (err) {
+      if (this.child === child) this.child = null
+      child.kill()
+      this.setState({ pid: null })
+      throw err
+    }
     this.setState({ upstreamUrl: `http://127.0.0.1:${this.upstreamPort}` })
     await this.waitHealthy(`http://127.0.0.1:${this.upstreamPort}`, 15_000)
     await this.startGateway()

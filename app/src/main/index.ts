@@ -39,7 +39,7 @@ function createWindow(): void {
     minWidth: 1100,
     minHeight: 700,
     show: false,
-    title: 'platesim',
+    title: 'OpenPlate',
     backgroundColor: '#f5f6f8',
     webPreferences: {
       preload: path.join(__dirname, '../preload/index.js'),

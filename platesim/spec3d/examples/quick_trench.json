@@ -1,0 +1,14 @@
+{
+  "layout": {
+    "die_um": [240, 240],
+    "features": [{"kind": "rounded_rect", "x_um": 120, "y_um": 120,
+                  "w_um": 60, "h_um": 120, "r_um": 8}]
+  },
+  "etch": {"default": {"depth_um": 40, "bottom_radius_um": 4}},
+  "recipe": {"steps": [{"t_forward_ms": 10, "t_reverse_ms": 0, "t_off_ms": 0,
+                         "j_forward_mA_cm2": 20, "j_reverse_mA_cm2": 0,
+                         "duration_h": 1.0}]},
+  "bath": {"cu_g_L": 40, "h2so4_g_L": 100, "cl_ppm": 50, "temperature_C": 25},
+  "setup": {"orientation": "vertical", "taped": true, "area_cm2": 0.000576, "delta_um": 32},
+  "numerics": {"quality": "preview", "device": "cpu"}
+}

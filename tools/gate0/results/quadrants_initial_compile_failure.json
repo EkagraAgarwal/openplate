@@ -1,0 +1,9 @@
+[
+  {
+    "framework": "quadrants",
+    "version": "1.4.0",
+    "device": "0",
+    "status": "failed",
+    "error": "QuadrantsCompilationError: \nFile \"<repo>\\tools\\gate0\\taichi_backend.py\", line 29, in stencil:\n                diagonal = ti.cast(0, u.dtype)\n                                      ^^^^^^^\nTraceback (most recent call last):\n  File \"<redacted>\\AppData\\Local\\uv\\cache\\archive-v0\\p47fx5TSL2m9ZSCb\\Lib\\site-packages\\quadrants\\lang\\ast\\ast_transformer_utils.py\", line 40, in __call__\n    res = method(ctx, node)\n          ^^^^^^^^^^^^^^^^^\n  File \"<redacted>\\AppData\\Local\\uv\\cache\\archive-v0\\p47fx5TSL2m9ZSCb\\Lib\\site-packages\\quadrants\\lang\\ast\\ast_transformer.py\", line 817, in build_Attribute\n    node.ptr = getattr(node.value.ptr, node.attr)\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAttributeError: 'AnyArray' object has no attribute 'dtype'\n"
+  }
+]

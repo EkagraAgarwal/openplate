@@ -1,0 +1,47 @@
+[
+  {
+    "framework": "wgpu",
+    "version": "0.33.0",
+    "device": "AMD Radeon RX 7700S",
+    "dtype": "float32",
+    "N": 160,
+    "test": "sweep",
+    "peak_bytes": null,
+    "status": "passed",
+    "mcups": 616.2387022033882,
+    "seconds": 0.026587100001052022,
+    "iterations": 4,
+    "relative_residual": 1.4121705276166638,
+    "relative_error": 0.9985552205389114,
+    "compile_seconds": 0.39336180000100285,
+    "warmup_seconds": 0.02988539999932982,
+    "timing_scope": "host orchestration + transfers + device"
+  },
+  {
+    "framework": "wgpu",
+    "version": "0.33.0",
+    "device": "AMD Radeon RX 7700S",
+    "dtype": "float32",
+    "N": 256,
+    "test": "sweep",
+    "peak_bytes": null,
+    "status": "passed",
+    "mcups": 478.2016861110948,
+    "seconds": 0.14033589999598917,
+    "iterations": 4,
+    "relative_residual": 1.413414460469882,
+    "relative_error": 0.9994354037695703,
+    "compile_seconds": 0.39336180000100285,
+    "warmup_seconds": 0.16489970000111498,
+    "timing_scope": "host orchestration + transfers + device"
+  },
+  {
+    "framework": "wgpu",
+    "version": "0.33.0",
+    "device": "AMD Radeon RX 7700S",
+    "test": "capability",
+    "dtype": "float64",
+    "status": "unsupported",
+    "error": "float64 unavailable in this backend/device; float32 used"
+  }
+]

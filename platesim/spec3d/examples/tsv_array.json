@@ -1,0 +1,17 @@
+{
+  "layout": {
+    "die_um": [1000, 1000],
+    "features": [
+      {"kind": "circle", "x_um": 262, "y_um": 262,
+       "w_um": 30, "h_um": 30, "r_um": 15,
+       "array": {"nx": 5, "ny": 5, "pitch_x_um": 119, "pitch_y_um": 119}}
+    ]
+  },
+  "etch": {"default": {"depth_um": 300}},
+  "recipe": {"steps": [
+    {"t_forward_ms": 1, "j_forward_mA_cm2": 15, "duration_h": 4.5}
+  ]},
+  "bath": {"cu_g_L": 40, "h2so4_g_L": 100, "cl_ppm": 50, "temperature_C": 25},
+  "setup": {"taped": true, "area_cm2": 0.01},
+  "numerics": {}
+}

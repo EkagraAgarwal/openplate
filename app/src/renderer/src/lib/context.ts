@@ -2,7 +2,7 @@ import { createContext, useContext } from 'react'
 import type { PlatesimApi } from '../api/client'
 import type { ModelSpec, ParamValues, RunResult } from '../types'
 
-export type Page = 'models' | 'data' | 'assistant' | 'settings'
+export type Page = 'models' | 'sample3d' | 'data' | 'assistant' | 'settings'
 
 export interface BackendDto {
   status: 'idle' | 'starting' | 'ready' | 'error' | 'stopped'

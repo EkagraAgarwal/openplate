@@ -1,0 +1,47 @@
+[
+  {
+    "framework": "tinygrad",
+    "version": "0.14.0",
+    "device": "gfx1102",
+    "dtype": "float32",
+    "N": 160,
+    "test": "sweep",
+    "peak_bytes": null,
+    "status": "passed",
+    "mcups": 39.49409757957019,
+    "seconds": 0.4148468000057619,
+    "iterations": 4,
+    "relative_residual": 1.4121705305256813,
+    "relative_error": 0.9985552205737528,
+    "compile_seconds": 2.215761500003282,
+    "warmup_seconds": 1.2592894000117667,
+    "timing_scope": "host orchestration + transfers + device"
+  },
+  {
+    "framework": "tinygrad",
+    "version": "0.14.0",
+    "device": "gfx1102",
+    "dtype": "float32",
+    "N": 256,
+    "test": "sweep",
+    "peak_bytes": null,
+    "status": "passed",
+    "mcups": 48.90838941369314,
+    "seconds": 1.3721340000047348,
+    "iterations": 4,
+    "relative_residual": 1.4134144632429781,
+    "relative_error": 0.9994354037645474,
+    "compile_seconds": 2.215761500003282,
+    "warmup_seconds": 2.2789639999973588,
+    "timing_scope": "host orchestration + transfers + device"
+  },
+  {
+    "framework": "tinygrad",
+    "version": "0.14.0",
+    "device": "gfx1102",
+    "test": "capability",
+    "dtype": "float64",
+    "status": "unsupported",
+    "error": "float64 unavailable in this backend/device; float32 used"
+  }
+]
