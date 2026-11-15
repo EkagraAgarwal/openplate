@@ -196,6 +196,28 @@ def site_conditions(run: dict | None = None, x_cm: float = 0.0, y_cm: float = 0.
     }
 
 
+def tile3d_conditions(j_net_mA_cm2, duration_s, x_cm, y_cm, *, T_C=22.0,
+                      stir_pct=None, theta=None, resolution="coarse") -> dict:
+    """Coupon conditions for a 3-D tile at centred (x across, y up) coordinates [cm].
+
+    Current is cathodic-positive in mA/cm2, duration in seconds, temperature in
+    degrees C, stirrer setting in percent, and Nernst thickness in um. Efficiency
+    and scale are dimensionless. None stir_pct uses DEFAULT_RUN's value.
+    The coupon model is DC and calibrated to the team planar DOE; recipe pulse
+    timing is not resolved. Normalising local current by the face mean conserves
+    the coupon total current for any recipe net current. ``site`` is the raw
+    site_conditions result.
+    """
+    run = {**DEFAULT_RUN, "j_mA_cm2": j_net_mA_cm2,
+           "t_min": duration_s / 60, "T_C": T_C}
+    if stir_pct is not None:
+        run["stir_pct"] = stir_pct
+    c = site_conditions(run, x_cm, y_cm, theta=theta, resolution=resolution)
+    scale = c["j_mA_cm2"] / c["j_mean_mA_cm2"]
+    return {"j_local_mA_cm2": j_net_mA_cm2 * scale, "delta_um": c["delta_um"],
+            "efficiency": c["efficiency"], "scale": scale, "site": c}
+
+
 # ---------------------------------------------------------------------------
 # 1b. two-way coupling: the trench array feeds its own area back to the coupon
 # ---------------------------------------------------------------------------
@@ -642,4 +664,4 @@ def predict_trench(site: dict, conditions: dict, model: str = "levelset",
 __all__ = ["DEFAULT_F_OPEN", "DEFAULT_RUN", "SIM_CACHE", "TWO_WAY_MAX_ITER",
            "TWO_WAY_TOL", "cache_stats", "clear_cache", "coupon_area_map",
            "coupon_centre_z_cm", "effective_area_factor", "face_extent_cm",
-           "predict_trench", "rescale_coupon_currents", "site_conditions"]
+           "predict_trench", "rescale_coupon_currents", "site_conditions", "tile3d_conditions"]
