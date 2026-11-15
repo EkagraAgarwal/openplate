@@ -14,9 +14,13 @@ polylines, never a nearest-point pick.
                electrode plane z = 0 instead, where the surface starts;
   shoulder_max_um  same thickness over a < |x - pitch/2| <= a + 150 um (the corner region);
   floor_*_um   LOWEST crossing over the central 40 % of the trench width, |x - pitch/2| < 0.4 a;
-  wall_up/down_um  horizontal deposit on the left / right wall at mid depth z = H/2;
-  ratio_mean   floor_mean / field_mean;  ripple_wavelength_um = largest non-DC peak of the FFT of the
-               detrended field profile (NaN when the field is flatter than 0.05 um).
+  wall_up/down_um  horizontal deposit on the left / right wall at mid depth: the psi = 0 crossing of
+               z = H/2 nearest the ORIGINAL wall (x_c - a / x_c + a) inside the trench opening, averaged
+               over z in [0.4 H, 0.6 H] sampled every dx; horizontal contour pieces are ignored, so an
+               unmoved wall is 0 and a missing wall (no crossing) is NaN;
+  ratio_mean   floor_mean / field_mean;  ripple_wavelength_um = wavelength of the largest non-DC peak of
+               the detrended contiguous field band (one pitch, between the two wall bands), NaN when the
+               field is flatter than 0.05 um.
 
 CLI:  python -m platesim.feature.ripple_study [--quick] [--groups base,shear,...] [--sites narrow,wide]
           [--workers 6] [--out platesim/feature/ripple_study.json] [--list] [--table] [--force]
@@ -157,8 +161,11 @@ def _surface(res: dict):
 
 
 def _x_at_z(contour: list, z_cut: float) -> list:
-    """x of every crossing of the horizontal line z = z_cut with the contour (vertical segments included,
-    so a wall that has not moved yet still reports its own x)."""
+    """x of every NON-HORIZONTAL crossing of the horizontal line z = z_cut with the contour.
+
+    Vertical segments (dx == 0, dz != 0) do cross the cut and keep their own x, so a wall that has not
+    moved yet still reports its own position.  A segment that lies on the cut line (dz == 0) has no
+    single crossing and is skipped: its midpoint is a point of the line, not a wall position."""
     out: list[float] = []
     for ln in contour:
         P = np.asarray(ln, float)
@@ -166,51 +173,94 @@ def _x_at_z(contour: list, z_cut: float) -> list:
             continue
         xa, za, xb, zb = P[:-1, 0], P[:-1, 1], P[1:, 0], P[1:, 1]
         dz = zb - za
-        span = ((za - z_cut) * (zb - z_cut)) <= 0.0
-        if not span.any():
+        hit = (dz != 0.0) & (((za - z_cut) * (zb - z_cut)) <= 0.0)
+        if not hit.any():
             continue
-        flat = dz == 0.0
-        t = np.where(flat, 0.5, (z_cut - za) / np.where(flat, 1.0, dz))
-        x = np.where(flat, 0.5 * (xa + xb), xa + t * (xb - xa))
-        out.extend(float(v) for v in x[span])
+        t = (z_cut - za[hit]) / dz[hit]
+        out.extend(float(v) for v in xa[hit] + t * (xb[hit] - xa[hit]))
     return out
 
 
 def _wall_um(contour: list, g: dict):
     """(left, right) horizontal deposit thickness at mid depth z = H/2; NaN where no crossing exists.
 
-    Only crossings inside the trench width count (a crossing of the far field surface would otherwise
-    be mistaken for a wall); a wall that has not moved reports 0."""
-    xc, a = 0.5 * g["R_um"], g["a_um"]
-    if not (a > 0.0 and g["H_um"] > 0.0):
+    Every row of z in [0.4 H, 0.6 H] (one sample per dx, centred on H/2) is cut by the horizontal line
+    z = z_row; the psi = 0 crossing nearest the ORIGINAL wall position (x_c - a for the left wall,
+    x_c + a for the right), restricted to the trench opening x in [x_c - a, x_c + a] and to its own half
+    of it, is the wall position of that row, and the thickness is its inward distance from the original
+    wall.  Averaging over the rows removes single-row noise; crossings of the far field surface or of
+    the opposite wall never enter (they are outside the opening or farther from the original wall).  A
+    wall that has not moved reports 0; NaN only when no row has a crossing at all (e.g. a trench that
+    is already filled at mid depth)."""
+    xc, a, H, dx = 0.5 * g["R_um"], g["a_um"], g["H_um"], g["dx_um"]
+    if not (a > 0.0 and H > 0.0 and dx > 0.0):
         return float("nan"), float("nan")
-    xs = _x_at_z(contour, 0.5 * g["H_um"])
-    left = [x for x in xs if xc - a <= x <= xc]
-    right = [x for x in xs if xc < x <= xc + a]
-    up = (max(left) - (xc - a)) if left else float("nan")
-    down = ((xc + a) - min(right)) if right else float("nan")
-    return float(up), float(down)
+    n = max(1, int(round(0.2 * H / dx)))
+    zs = 0.5 * H + (np.arange(n) - 0.5 * (n - 1)) * dx
+    zs = zs[(zs >= 0.4 * H) & (zs <= 0.6 * H)]
+    if zs.size == 0:
+        zs = np.array([0.5 * H])
+    left_wall, right_wall = xc - a, xc + a
+    left: list[float] = []
+    right: list[float] = []
+    for z_cut in zs:
+        xs = np.asarray(_x_at_z(contour, float(z_cut)), float)
+        inside = xs[(xs >= left_wall) & (xs <= right_wall)]
+        if inside.size == 0:
+            continue
+        lc = inside[inside <= xc]                       # left half of the opening: never the other wall
+        rc = inside[inside >= xc]
+        if lc.size:
+            left.append(float(lc[np.argmin(np.abs(lc - left_wall))]))
+        if rc.size:
+            right.append(float(rc[np.argmin(np.abs(rc - right_wall))]))
+    up = float(np.mean(left) - left_wall) if left else float("nan")
+    down = float(right_wall - np.mean(right)) if right else float("nan")
+    return up, down
 
 
-def _ripple_um(xs: np.ndarray, thick: np.ndarray, sel: np.ndarray, xc: float, pitch: float, dx: float):
-    """Dominant wavelength of the detrended field profile (NaN below 0.05 um of thickness spread)."""
+def _ripple_um(xs: np.ndarray, thick: np.ndarray, sel: np.ndarray, xc: float, pitch: float, dx: float,
+               a: float = 0.0, band: float = WALL_BAND_UM):
+    """Dominant wavelength of the detrended periodic field band (NaN below 0.05 um of spread).
+
+    Definition: the field is one periodic band per pitch, the contiguous surface between the right wall
+    band edge x = x_c + a + band and the left band edge of the NEXT trench, x = x_c - a - band + pitch
+    (R - 2 a - 2 band wide, no trench hole in it; the flat electrode f_open = 1 falls back to the whole
+    pitch).  The samples at x < x_c are unwrapped into that pitch by +pitch, so the segment has no
+    trench hole and the column spacing dx is the physical sample spacing; the profile is resampled on a
+    uniform grid of spacing dx, its mean slope is removed and the wavelength n d / k_peak of the
+    largest non-DC FFT peak is returned [J].  Sorting all field columns by mod(x - x_c, pitch) instead
+    stitches the two field sides together around the excluded trench band, so it would report a
+    wavelength in the wrong units."""
     m = sel & np.isfinite(thick)
-    n = int(m.sum())
+    if int(m.sum()) < 8:
+        return float("nan")
+    x = np.asarray(xs, float)[m]
+    t = np.asarray(thick, float)[m]
+    x0, x1 = xc + a + band, xc - a - band + pitch
+    if x1 <= x0:                                        # flat electrode: no trench, the whole pitch is field
+        x0, x1 = xc - 0.5 * pitch, xc + 0.5 * pitch
+    xu = x0 + np.mod(x - x0, pitch)                     # unwrap the left field side into the same pitch
+    keep = xu <= x1 + 1e-6
+    xu, t = xu[keep], t[keep]
+    if xu.size < 8:
+        return float("nan")
+    n = int(round((x1 - x0) / dx)) + 1
     if n < 8:
         return float("nan")
-    order = np.argsort(np.mod(xs[m] - xc, pitch))
-    t = thick[m][order]
-    if float(np.std(t)) < 0.05:
+    order = np.argsort(xu)
+    y = np.interp(np.linspace(x0, x1, n), xu[order], t[order])
+    if float(np.std(y)) < 0.05:
         return float("nan")
     k = np.arange(n, dtype=float)
-    t = t - np.polyval(np.polyfit(k, t, 1), k)          # detrend: remove the mean slope
-    spec = np.abs(np.fft.rfft(t))
+    y = y - np.polyval(np.polyfit(k, y, 1), k)          # detrend: remove the mean slope
+    spec = np.abs(np.fft.rfft(y))
     if spec.size < 3:
         return float("nan")
     kpk = int(np.argmax(spec[1:])) + 1                  # largest non-DC peak
-    if kpk == 0 or spec[kpk] <= 0.0:
+    if spec[kpk] <= 0.0:
         return float("nan")
-    return float(n * dx / kpk)
+    return float(n * (x1 - x0) / max(n - 1, 1) / kpk)
 
 
 # ---------------------------------------------------------------------------------- statistics
@@ -223,15 +273,17 @@ def _stats(res: dict, contour: list, g: dict, xs: np.ndarray, upper: np.ndarray,
     # flat electrode (f_open = 1): the whole pitch is the cavity, so the surface starts at z = 0 and the
     # 'field level' H does not exist; thickness is measured from the electrode plane z = 0.
     thick = upper - (0.0 if flat else H)
+    band = WALL_BAND_UM
     if flat:                                            # flat electrode: no trench, all columns are field
         sel_field = np.ones(xs.size, bool)
         sel_shoulder = np.zeros(xs.size, bool)
         sel_floor = np.zeros(xs.size, bool)
     else:
-        sel_field = off > a + WALL_BAND_UM
+        sel_field = off > a + band
         if not sel_field.any():                         # pitch too small for the 150 um band
-            sel_field = off > a + 0.25 * (0.5 * R - a)
-        sel_shoulder = (off > a) & (off <= a + WALL_BAND_UM)
+            band = 0.25 * (0.5 * R - a)
+            sel_field = off > a + band
+        sel_shoulder = (off > a) & (off <= a + band)
         sel_floor = off < 0.4 * a
     t_field = thick[sel_field & np.isfinite(thick)]
     t_sh = thick[sel_shoulder & np.isfinite(thick)]
@@ -258,7 +310,7 @@ def _stats(res: dict, contour: list, g: dict, xs: np.ndarray, upper: np.ndarray,
         wall_up_um=wall_up,
         wall_down_um=wall_down,
         ratio_mean=ratio,
-        ripple_wavelength_um=_ripple_um(xs, thick, sel_field, xc, R, dx),
+        ripple_wavelength_um=_ripple_um(xs, thick, sel_field, xc, R, dx, a=a, band=band),
         face_thickness_um=face,
         floor_height_um=floor_legacy,
         ratio_legacy=(float(floor_legacy / face) if (face not in (None, 0.0) and face > 0.0

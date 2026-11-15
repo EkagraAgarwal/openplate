@@ -10,6 +10,7 @@ from ..core.bath import Bath
 from ..core.cell import CellGeometry
 from .correlation import (
     MassTransferParams, TOUABI_RPM, TOUABI_KM, delta_mean_um, delta_map,
+    natural_convection,
 )
 
 MODEL_SPEC = {
@@ -76,6 +77,7 @@ def run(params: dict, progress=lambda frac, msg="": None) -> dict:
         delta_nat_um=float(p.get("delta_nat_um", 80.0)),
         delta0_um=float(p.get("delta0_um", 40.0)),
         n=float(p.get("n_exp", 0.5)),
+        use_natural=bool(p.get("use_natural", False)),
     )
     warnings: list[str] = []
 
@@ -107,7 +109,8 @@ def run(params: dict, progress=lambda frac, msg="": None) -> dict:
 
     progress(0.5, "rpm curves")
     rpm_grid = [i * 50.0 for i in range(31)]              # 0..1500 rpm
-    mean_curve = [delta_mean_um(r, mtp, baffles=baffles) for r in rpm_grid]
+    mean_curve = [delta_mean_um(r, mtp, baffles=baffles, bath=bath,
+                                height_cm=geom.coupon_h) for r in rpm_grid]
     km_curve = [bath.D_cu_eff / (d * 1e-4) for d in mean_curve]
 
     x_c = m["x"]                                          # across width (cm, centred 0)
@@ -141,6 +144,10 @@ def run(params: dict, progress=lambda frac, msg="": None) -> dict:
 
     mean_um = m["mean_um"]
     delta_cm = mean_um * 1e-4
+    # Natural convection on the vertical coupon at its limiting current: plain
+    # bath.D_cu is used (migration enhancement E_mig is NOT included here, so
+    # these numbers are a pure diffusive/convective natural-convection estimate).
+    nat = natural_convection(geom.coupon_h, bath.c_cu * 1e3, bath.D_cu)
     summary = {
         "delta_mean_um": round(mean_um, 3),
         "k_m_cm_s": float(f"{m['k_m_cm_s']:.4g}"),
@@ -148,6 +155,21 @@ def run(params: dict, progress=lambda frac, msg="": None) -> dict:
         "j_lim_o2_mA_cm2": round(bath.j_lim_o2(delta_cm) * 1e3, 6),
         "model": "correlation",
         "rpm": rpm,
+        "natural_convection": {
+            "Gr": float(f"{nat['Gr']:.4g}"),
+            "Sc": float(f"{nat['Sc']:.4g}"),
+            "Ra": float(f"{nat['Ra']:.4g}"),
+            "regime": nat["regime"],
+            "delta_mean_um": round(nat["delta_mean_um"], 3),
+            "i_lim_mA_cm2": round(nat["i_lim_mA_cm2"], 4),
+            "k_mean_cm_s": float(f"{nat['k_mean_cm_s']:.4g}"),
+            "height_cm": nat["height_cm"],
+            "beta_L_mol": nat["beta_L_mol"],
+            "nu_cm2_s": nat["nu_cm2_s"],
+            "note": "vertical-plate laminar natural convection, Sh=0.67 Ra^0.25 "
+                    "[not verified]; beta is [J] literature order, not measured; "
+                    "plain D_cu (no migration factor)",
+        },
     }
     progress(1.0, "done")
     return {"summary": summary, "plots": plots, "warnings": warnings,

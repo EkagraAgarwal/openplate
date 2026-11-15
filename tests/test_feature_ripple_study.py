@@ -68,6 +68,75 @@ def test_surface_profile_is_resampled_on_the_column_centres():
     assert max(v for v in profile["upper_um"] if v is not None) >= H_UM + FIELD_UM
 
 
+# ------------------------------------------------------- synthetic contour metrics (no engine run)
+def _contour_result(contour: list) -> dict:
+    """A run_case-shaped dict carrying only what the contour metrics read (no engine, no data file)."""
+    return dict(meta=dict(grid=dict(R_um=R_UM, a_um=A_UM, H_um=H_UM, dx_um=DX_UM)),
+                series={}, frames=[dict(contour=contour, t_s=16200.0)], result={})
+
+
+def _trench_contour(wall_um: float = 0.0, field=None) -> list:
+    """Synthetic trench_full contour: floor at FLOOR_UM, vertical walls at x_c -+ (A_UM - wall_um).
+
+    `field(x)` is the field thickness above H (default 80 um flat), so the field surface is at
+    z = H_UM + field(x).  The walls are vertical polylines, exactly as the engine's psi = 0 lines
+    resolve a wall that has grown inward."""
+    xc = 0.5 * R_UM
+    xl, xr = xc - A_UM + wall_um, xc + A_UM - wall_um
+
+    def thick(v):
+        v = np.asarray(v, float)
+        return np.full_like(v, FIELD_UM) if field is None else np.asarray(field(v), float)
+
+    fx = np.arange(0.0, xl + 1e-9, 1.0)
+    rx = np.arange(xr, R_UM + 1e-9, 1.0)
+    return [
+        [[xl, FLOOR_UM], [xr, FLOOR_UM]],                        # trench floor
+        [[xl, FLOOR_UM], [xl, H_UM]],                            # left wall (vertical: never flat)
+        [[xr, FLOOR_UM], [xr, H_UM]],                            # right wall
+        np.column_stack([fx, H_UM + thick(fx)]).tolist(),        # left field, wraps onto the next pitch
+        np.column_stack([rx, H_UM + thick(rx)]).tolist(),        # right field
+    ]
+
+
+def test_wall_thickness_reads_walls_moved_inward_by_7_um():
+    s = rs.surface_stats(_contour_result(_trench_contour(wall_um=7.0)))
+    assert s["wall_up_um"] == pytest.approx(7.0, abs=0.5 * DX_UM)
+    assert s["wall_down_um"] == pytest.approx(7.0, abs=0.5 * DX_UM)
+
+
+def test_wall_thickness_of_an_unmoved_wall_is_zero_not_nan():
+    s = rs.surface_stats(_contour_result(_trench_contour()))
+    assert s["wall_up_um"] == pytest.approx(0.0, abs=1e-9)
+    assert s["wall_down_um"] == pytest.approx(0.0, abs=1e-9)
+
+
+def test_wall_thickness_ignores_a_contour_piece_lying_on_the_cut_line():
+    """A horizontal psi = 0 piece at z = H/2 must not report its midpoint as a wall position."""
+    xc = 0.5 * R_UM
+    contour = _trench_contour()
+    contour.append([[xc - A_UM, 0.5 * H_UM], [xc + A_UM, 0.5 * H_UM]])
+    s = rs.surface_stats(_contour_result(contour))
+    assert s["wall_up_um"] == pytest.approx(0.0, abs=1e-9)
+    assert s["wall_down_um"] == pytest.approx(0.0, abs=1e-9)
+
+
+def test_ripple_wavelength_of_a_sine_field_profile():
+    lam = 50.0
+
+    def field(x):
+        return FIELD_UM + 3.0 * np.sin(2.0 * np.pi * x / lam)     # z = H + 80 + 3 sin(2 pi x / 50)
+
+    s = rs.surface_stats(_contour_result(_trench_contour(field=field)))
+    assert math.isfinite(s["ripple_wavelength_um"])
+    assert s["ripple_wavelength_um"] == pytest.approx(lam, rel=0.10)
+
+
+def test_ripple_of_a_flat_field_is_nan():
+    s = rs.surface_stats(_contour_result(_trench_contour()))
+    assert math.isnan(s["ripple_wavelength_um"])
+
+
 # ------------------------------------------------------------------ case list and CLI
 def test_build_cases_names_are_unique_and_cover_every_group():
     cases = rs.build_cases(False)

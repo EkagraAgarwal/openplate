@@ -24,6 +24,9 @@ import numpy as np
 import scipy.ndimage as ndi
 import skfmm
 import contourpy
+from scipy.optimize import brentq
+
+from . import ls_kernels
 
 UM = 1e-4
 
@@ -215,10 +218,27 @@ def grad_mag(psi, dx, periodic=None):
     return np.hypot(gr, gz)
 
 
-def advect(psi, v, dt, dx, periodic=None):
-    """First-order Godunov upwind step of  psi_t + v |grad psi| = 0  (v > 0: metal grows into the electrolyte,
-    psi decreases).  v is an extension velocity field (nr, nz).  x wraps when the grid is periodic in x."""
+def advect(psi, v, dt, dx, periodic=None, scheme="godunov1", band_cells=None):
+    """Advance  psi_t + v |grad psi| = 0  by one step  (v > 0: metal grows into the electrolyte, psi decreases).
+
+    v is an extension velocity field (nr, nz).  x wraps when the grid is periodic in x.
+
+    scheme : 'godunov1' (default, unchanged legacy operator: first-order Godunov derivatives + forward Euler)
+             | 'weno5' (Jiang-Peng WENO5 upwind derivatives + TVD-RK3, platesim.feature.engine.ls_kernels)
+    band_cells : None (default) -> the whole grid is updated; a number -> narrow band (plan v2 B4): only
+             cells with |psi| < band_cells*dx are advanced and all other cells keep their value.  For
+             'godunov1' the band values are bit-identical to the full-grid values; for 'weno5' they are
+             identical inside the band (the update set is dilated by the 3*3 stencil cells the RK3 stages
+             need, so the band cells see purely updated neighbours).
+    """
     dx, per = _dx_periodic(dx, periodic)
+    if scheme not in ("godunov1", "weno5"):
+        raise ValueError(f"scheme must be 'godunov1' or 'weno5', got {scheme!r}")
+    if scheme == "weno5":
+        return ls_kernels.advect_weno5(psi, v, dt, dx, per, band_cells)
+    if band_cells is not None:
+        return ls_kernels.advect_godunov1_band(psi, v, dt, dx, per, band_cells)
+    # ---- legacy first-order path: bit-identical to the pre-B4 operator, do not reorder the expressions
     p = _pad(psi, dx, per)
     c = p[1:-1, 1:-1]
     dxm, dxp = (c - p[:-2, 1:-1]) / dx, (p[2:, 1:-1] - c) / dx
@@ -237,6 +257,44 @@ def electrolyte_fraction(psi, g: Grid):
     n = np.hypot(gr, gz) + 1e-30
     l1 = np.maximum((np.abs(gr) + np.abs(gz)) / n, 1.0)   # |nr| + |nz| >= 1 for a unit normal (guards flat regions)
     return np.clip(0.5 + psi / (g.dx * l1), 0.0, 1.0)
+
+
+def solid_volume(psi, g: Grid):
+    """Solid volume as electrolyte_fraction defines it: sum(vol * (1 - ef)) -- the quantity volume_correct
+    targets (the Faraday / mass check of the level set)."""
+    return float((g.vol * (1.0 - electrolyte_fraction(psi, g))).sum())
+
+
+def volume_correct(psi, target_solid_volume, g: Grid, band_cells=NARROW_CELLS):
+    """Shift psi by one constant delta inside the narrow band so the solid volume hits target_solid_volume.
+
+    solid_volume() is sum(vol * (1 - ef)) with ef = clip(0.5 + psi/(dx*l1)); ef therefore grows with psi and
+    the solid volume shrinks, so the correction is the single scalar delta that makes the total match.  A
+    constant shift of the level set is the cheapest volume-preserving correction after an advection step:
+    the Godunov/WENO5 advance conserves neither the enclosed volume (0.2-0.8 % Faraday error per fill) nor
+    the corners, and reinit can drift it.  Only cells with |psi| < band_cells*dx are touched; there ef is
+    unsaturated and outside it is exactly 0 or 1 (l1 <= sqrt(2), so |psi| >= band_cells*dx >= 0.5*dx*l1 for
+    band_cells >= 1), so the shift neither moves nor sign-flips a cell outside the band.
+
+    Returns a new field (psi is not modified).  If the target is not reachable inside the band the shift is
+    capped at +-band_cells*dx (documented, no exception: this runs inside the time loop)."""
+    band = float(band_cells) * g.dx
+    m = np.abs(psi) < band
+    if not m.any():
+        return psi.copy()
+    target = float(target_solid_volume)
+
+    def err(d):
+        return float((g.vol * (1.0 - electrolyte_fraction(psi + d * m, g))).sum()) - target
+
+    e0 = err(0.0)
+    if e0 == 0.0:
+        return psi.copy()
+    hi = band if e0 > 0 else -band              # too much solid -> raise psi (ef grows with psi)
+    if err(hi) * e0 > 0.0:                      # target unreachable inside the band: cap at the band edge
+        return psi + hi * m
+    d = brentq(err, 0.0, hi, xtol=1e-12, rtol=1e-14, maxiter=60)
+    return psi + d * m
 
 
 def curvature_div_n(psi, g: Grid):

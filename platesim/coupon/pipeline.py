@@ -36,7 +36,7 @@ from pathlib import Path
 import numpy as np
 
 from ..cell.mesh import COUPON_T_CM
-from ..cell.solver import GRID_N, solve_cell
+from ..cell.solver import GRID_N, march_cell, solve_cell
 from ..core.bath import Bath
 from ..core.cell import CellGeometry
 from ..core.constants import thickness_um
@@ -377,11 +377,17 @@ def quantised_theta(theta: dict) -> dict:
 
 
 def simulate_run(run: dict, theta: dict | None = None, resolution: str = "coarse",
-                 bath: Bath | None = None, progress=None) -> dict:
+                 bath: Bath | None = None, progress=None, pr: dict | None = None,
+                 march: bool | dict = False) -> dict:
     """One coupled simulation: flow -> cell -> efficiency.
 
     run: {j_mA_cm2, t_min, stir_pct, setup, T_C?} (+ optional id for SEM points).
     theta: see DEFAULT_THETA; missing keys fall back to the defaults.
+    pr: optional pulse-reverse waveform {'t_f_ms', 't_r_ms', 't_off_ms', 'rr'} for the
+        NET current (F3, see cell.solver.solve_cell); None keeps the DC solve.
+    march: False (default) = one steady cell solve; True = F4 time march with the
+        default 6 stages; a dict is forwarded to cell.solver.march_cell
+        (e.g. {"n_stages": 8, "seed_R_sq0": 0.1}).
     Returns a JSON-serialisable dict with maps (j, thickness, delta, eta),
     current split, loss breakdown and predicted SEM-point thicknesses.
     """
@@ -422,14 +428,72 @@ def simulate_run(run: dict, theta: dict | None = None, resolution: str = "coarse
     j_grid = solved["j_grid"]
     x_cm, z_cm = solved["x_cm"], solved["z_cm"]
 
+    # ---- optional F3 pulse reverse / F4 time march --------------------------
+    # Both bypass the steady-solve memo: the cache key carries (setup, stir, j)
+    # only, and neither the waveform nor the deposit history belongs in it.
+    march_info: dict | None = None
+    march_final_um: np.ndarray | None = None
+    if pr is not None or march:
+        if progress:
+            progress(0.4, "cell: " + ("F4 time march" if march else "F3 pulse reverse"))
+        if march:
+            m_kw = dict(march) if isinstance(march, dict) else {}
+            mr = march_cell(geom, bath_used, I_A, t_s / 3600.0, pr=pr,
+                            delta_um=float(dmap["mean_um"]), delta_map=dmap,
+                            suppressed=True, resolution=resolution, **m_kw)
+            last = mr.stages[-1]
+            solved = {
+                "front_fraction": last.front_fraction, "loss_fraction": last.loss_fraction,
+                "j_grid": np.asarray(last.j_mA_cm2, float),
+                "x_cm": np.asarray(mr.x_cm, float), "z_cm": np.asarray(mr.z_cm, float),
+                "solve_time_s": float(mr.solve_time_s), "n_newton": int(mr.n_newton_total),
+                "V_cell_V": float(mr.V_cell_last_V), "warnings": list(mr.warnings),
+            }
+            march_final_um = np.asarray(mr.thickness_um, float)   # pure Faraday, um
+            march_info = {
+                "n_stages": mr.n_stages, "hours": mr.hours,
+                "seed_R_sq0": mr.seed_R_sq0, "seed_t_um": mr.seed_t_um,
+                "R_s_mean_ohm_sq": float(np.mean(mr.R_s_ohm_sq))
+                if mr.R_s_ohm_sq is not None else None,
+                "mass_g": mr.mass_g, "mass_faraday_g": mr.mass_faraday_g,
+                "mass_balance": mr.mass_balance,
+                "V_cell_first_V": mr.V_cell_first_V, "V_cell_last_V": mr.V_cell_last_V,
+                "stages": [{"index": s.index, "t_end_h": s.t_end_h,
+                            "near_far_thickness_ratio": s.near_far_thickness_ratio,
+                            "edge_center_thickness_ratio": s.edge_center_thickness_ratio,
+                            "near_far_j_ratio": s.near_far_j_ratio,
+                            "R_s_mean_ohm_sq": s.R_s_mean_ohm_sq,
+                            "mass_balance": (s.mass_g / s.mass_faraday_g)
+                            if s.mass_faraday_g else None}
+                           for s in mr.stages],
+            }
+        else:
+            res = solve_cell(geom, bath_used, I_A, t_s=3600.0, delta_um=float(dmap["mean_um"]),
+                             delta_map=dmap, suppressed=True, resolution=resolution, pr=pr)
+            solved = {
+                "front_fraction": float(res.front_fraction),
+                "loss_fraction": float(res.loss_fraction),
+                "j_grid": np.asarray(res.j_mA_cm2, float),
+                "x_cm": np.asarray(res.x_cm, float), "z_cm": np.asarray(res.z_cm, float),
+                "solve_time_s": float(res.solve_time_s), "n_newton": int(res.n_newton),
+                "V_cell_V": float(res.V_cell_V), "warnings": list(res.warnings),
+            }
+        j_grid = solved["j_grid"]
+        x_cm, z_cm = solved["x_cm"], solved["z_cm"]
+
     # ---- stage 3: efficiency + thickness ------------------------------------
     if progress:
         progress(0.7, "efficiency: local O2 parasitic + startup loss")
     delta_grid = _delta_on_grid(dmap, x_cm, z_cm, geom.coupon_center_z)
     eta = local_efficiency(j_grid, delta_grid, bath_used)
     L0 = max(float(th["L0_um"]), 0.0)
-    # vectorised on purpose: Faraday law is elementwise (see efficiency.model)
-    faraday_grid = np.asarray(thickness_um(j_grid, t_s, eta), float)  # type: ignore[arg-type]
+    if march_final_um is None:
+        # vectorised on purpose: Faraday law is elementwise (see efficiency.model)
+        faraday_grid = np.asarray(thickness_um(j_grid, t_s, eta), float)  # type: ignore[arg-type]
+    else:
+        # the march already integrated Faraday over the run at 100 % efficiency;
+        # the local efficiency enter the map exactly as in the DC path
+        faraday_grid = march_final_um * np.asarray(eta, float)
     th_grid = np.maximum(faraday_grid - L0, 0.0)
 
     # ---- metrics ------------------------------------------------------------
@@ -501,7 +565,7 @@ def simulate_run(run: dict, theta: dict | None = None, resolution: str = "coarse
     if progress:
         progress(1.0, "done")
 
-    return {
+    out = {
         "run": {"j_mA_cm2": j_set, "t_min": t_s / 60.0, "stir_pct": stir,
                 "setup": setup, "T_C": T_C, "id": run.get("id")},
         "rpm": round(rpm, 2),
@@ -546,6 +610,13 @@ def simulate_run(run: dict, theta: dict | None = None, resolution: str = "coarse
         "warnings": warnings,
         "assumptions": list(ASSUMPTIONS),
     }
+    if pr is not None:
+        out["pr"] = dict(pr)
+    if march_info is not None:
+        out["march"] = march_info
+        out["run"]["march"] = {"n_stages": march_info["n_stages"],
+                               "seed_R_sq0": march_info["seed_R_sq0"]}
+    return out
 
 
 __all__ = [
