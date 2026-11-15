@@ -38,14 +38,18 @@ def run_tile(psi_si, grid: Grid3D, j_net_mA_cm2, duration_s, delta_um=64.0, para
     field_mask: bool (nx, ny) columns that count as "field" for the bulk-plane height; default: columns
     whose bare surface lies within one cell of the highest bare surface.
     flow: None (no convection) or dict with any of shear_rate_s (0), shear_dir ((1, 0), in-plane),
-    gravity_dir (None = no buoyancy; e.g. (0, -1, 0) for gravity along -y), beta_L_mol (0.07, solutal
-    expansion per mol/L Cu2+), nu_cm2_s (0.0114), update_every (5 steps).  Steady Stokes
-    (platesim.flow3d) with the lid at the bulk plane, recomputed every update_every steps from the
+    gravity_dir (None = no buoyancy; e.g. (0, -1, 0) for gravity along -y), beta_L_mol (0.15, solutal
+    expansion per mol/L Cu2+, the 2-D engine's default [J]: ~1 M CuSO4 is ~15 % denser than water),
+    nu_cm2_s (0.0114), update_every (5 steps), lid_um (None: the moving lid sits at the bulk plane;
+    a number: fixed lid height above the initial mean field height, e.g. the 2-D engine's domain top -
+    the grid must reach it, and flow then crosses the bulk plane), axial_net_flux_zero (None, passed to
+    solve_stokes3d).  Steady Stokes (platesim.flow3d), recomputed every update_every steps from the
     latest Cu2+ field (lagged one solve) and used to advect Cu2+ in the field solve.
     Returns a TileResult when run_dir is given, else a dict with the final psi and the series."""
     solver = FieldSolver(params, T_C, linear=linear)
     fl = None if flow is None else dict(dict(shear_rate_s=0.0, shear_dir=(1.0, 0.0), gravity_dir=None,
-                                             beta_L_mol=0.07, nu_cm2_s=0.0114, update_every=5), **flow)
+                                             beta_L_mol=0.15, nu_cm2_s=0.0114, update_every=5, lid_um=None,
+                                             axial_net_flux_zero=None), **flow)
     flow_faces, flow_info = None, {}
     p, ph = solver.p, solver.ph
     dx, per = grid.dx, grid.periodic
@@ -98,8 +102,10 @@ def run_tile(psi_si, grid: Grid3D, j_net_mA_cm2, duration_s, delta_um=64.0, para
             body = None
             if fl["gravity_dir"] is not None:
                 body = buoyancy_force(ct_prev, p.c_bulk * 1e3, fl["beta_L_mol"], tuple(fl["gravity_dir"]))
-            fsol = solve_stokes3d(psi, dx, z0, z_plane, periodic=per, shear_rate_s=fl["shear_rate_s"],
-                                  shear_dir=tuple(fl["shear_dir"]), body_force=body, nu_cm2_s=fl["nu_cm2_s"])
+            z_lid = z_plane if fl["lid_um"] is None else float(np.mean(h0[field_mask])) + fl["lid_um"] * 1e-4
+            fsol = solve_stokes3d(psi, dx, z0, z_lid, periodic=per, shear_rate_s=fl["shear_rate_s"],
+                                  shear_dir=tuple(fl["shear_dir"]), body_force=body, nu_cm2_s=fl["nu_cm2_s"],
+                                  axial_net_flux_zero=fl["axial_net_flux_zero"])
             flow_faces = fsol["faces"]
             flow_info = dict(umax_cm_s=max(float(np.max(np.abs(fsol[k]))) for k in ("ux", "uy", "uz")))
         out = solver.solve(psi, dx, z0, z_plane, j, periodic=per, state=state, flow_faces=flow_faces)

@@ -25,11 +25,17 @@ def flow(grid, psi, z_lid, **kw):
     return solve_stokes3d(psi, grid.dx, grid.origin[2], z_lid, periodic=grid.periodic, **kw)
 
 
-def test_uniform_field_is_preserved():
+@pytest.mark.parametrize("lid_above_plane_um", [0.0, 96.0])
+def test_uniform_field_is_preserved(lid_above_plane_um):
+    # lid above the bulk plane: flow crosses the Dirichlet plane (upwinded F_top path)
     grid, psi = trench()
-    z_lid = 64 * UM
-    u = flow(grid, psi, z_lid, shear_rate_s=20.0)["faces"]
-    kt = int(np.floor((z_lid - 0.5 * grid.dx - grid.origin[2]) / grid.dx - 0.5))
+    z_plane = 64 * UM
+    fl = flow(grid, psi, z_plane + lid_above_plane_um * UM, shear_rate_s=20.0,
+              body_force=(np.zeros(grid.shape), np.zeros(grid.shape), np.zeros(grid.shape)))
+    u = fl["faces"]
+    kt = int(np.floor((z_plane - 0.5 * grid.dx - grid.origin[2]) / grid.dx - 0.5))
+    if lid_above_plane_um:
+        assert np.max(np.abs(u[2][:, :, kt + 1])) > 0 or np.max(np.abs(u[0][:, :, kt])) > 0
     Hs = np.maximum(0.5 * (1 + np.tanh(np.clip(psi[:, :, :kt + 1] / (1.5 * grid.dx), -30, 30))), 1e-6)
     hx, hy, hz = _faces(Hs, grid.periodic, top_scale=Hs[:, :, -1])
     active = psi[:, :, :kt + 1] > -3 * grid.dx
