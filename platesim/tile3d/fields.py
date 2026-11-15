@@ -28,6 +28,7 @@ from .backend import ls_numpy
 
 DIRECT_MAX = 40000      # unknowns up to which a sparse LU is used; above it AMG-preconditioned CG
 LU_FALLBACK_MAX = 600000  # advection systems up to this size may fall back to sparse LU at high Peclet
+PE_ILU = 10.0             # cell Peclet above which the Cu advection solve starts with ILU-GMRES
 
 
 class _Precond:
@@ -82,18 +83,25 @@ class _AdvLinear:
     the symmetric part (same faces and sink, no advection): one MGCG V-cycle (fam: _MGFamily) or the
     reused AMG hierarchy of A_sym + diag(q).  Fine while the cell Peclet number is O(1)."""
 
-    def __init__(self, A, q, direct, fam=None, A_sym=None, pc=None, tol=1e-8, start=None):
+    # The symmetric-part preconditioner degrades as the cell Peclet number grows (slow, not failing:
+    # ~1000 GMRES iterations per system on the wide validation trench).  The SG operator is an
+    # M-matrix, so an incomplete LU of the full matrix is the robust preconditioner there; one factor
+    # is reused across the systems of a field solve (only the sink diagonal changes) and rebuilt when
+    # its iteration count grows.  Exact LU is the last resort.
+    MG_RESTARTS = 4        # budget of the symmetric-preconditioned first attempt (x 60 iterations)
+    SLOW_ITS = 150         # converged but slower than this -> later systems start with ILU
+
+    def __init__(self, A, q, direct, fam=None, A_sym=None, pc=None, tol=1e-8, start=None, ilu_cache=None):
         # start: None, "ilu" or "lu" - begin with a fallback that an earlier system already needed
-        from scipy.sparse.linalg import LinearOperator, spilu
+        from scipy.sparse.linalg import LinearOperator
         self.A, self.tol, self.iterations, self.fallback = A, tol, 0, None
+        self._cache = ilu_cache if ilu_cache is not None else {}
         if start == "lu" and not direct:
             direct, self.fallback = True, "lu"
         self._lu = splu(A.tocsc()) if direct else None
         self._M = None
         if not direct and start == "ilu":
-            n = A.shape[0]
-            ilu = spilu(A.tocsc(), drop_tol=1e-5, fill_factor=15)
-            self._M, self.fallback = LinearOperator((n, n), matvec=ilu.solve, dtype=np.float64), "ilu"
+            self.fallback = "ilu"
         elif not direct:
             n = A.shape[0]
             if fam is not None:
@@ -103,42 +111,58 @@ class _AdvLinear:
                 S = A_sym + sparse.diags(q)
                 self._M = pc.get(S)
 
+    def _ilu(self, rebuild=False):
+        from scipy.sparse.linalg import LinearOperator, spilu
+        if rebuild or "M" not in self._cache:
+            n = self.A.shape[0]
+            ilu = spilu(self.A.tocsc(), drop_tol=1e-5, fill_factor=15)
+            self._cache.update(M=LinearOperator((n, n), matvec=ilu.solve, dtype=np.float64), base=None)
+            self._cache["builds"] = self._cache.get("builds", 0) + 1
+        return self._cache["M"]
+
+    def _gmres(self, b, x0, M, restarts):
+        from scipy.sparse.linalg import gmres
+        count = [0]
+        x, info = gmres(self.A, b, x0=x0, rtol=self.tol, atol=0.0, M=M, restart=60, maxiter=restarts,
+                        callback=lambda _: count.__setitem__(0, count[0] + 1), callback_type="pr_norm")
+        self.iterations += count[0]
+        return x, info, count[0]
+
+    def _lu_or_raise(self, b, why):
+        if self.A.shape[0] > LU_FALLBACK_MAX:
+            raise RuntimeError(f"Cu advection solve: {why} (n={self.A.shape[0]}); cell Peclet number too "
+                               "high for this grid?")
+        self._lu, self.fallback = splu(self.A.tocsc()), "lu"
+        return self._lu.solve(b)
+
+    def _solve_ilu(self, b, x0):
+        try:
+            x, info, its = self._gmres(b, x0, self._ilu(), 20)
+            if info != 0:                         # a stale reused factor: rebuild once and retry
+                x, info, its = self._gmres(b, x, self._ilu(rebuild=True), 20)
+        except RuntimeError:                      # singular incomplete factor
+            return self._lu_or_raise(b, "ILU factorization failed")
+        if info != 0:
+            return self._lu_or_raise(b, f"GMRES+ILU did not converge (info={info})")
+        base = self._cache.get("base")
+        if base is None:
+            self._cache["base"] = its
+        elif its > max(30, 3 * base):             # factor drifted from the current sink: refresh
+            self._cache.pop("M", None)
+        return x
+
     def solve(self, b, x0=None):
         if self._lu is not None:
             return self._lu.solve(b)
-        from scipy.sparse.linalg import gmres
-        count = [0]
-        x, info = gmres(self.A, b, x0=x0, rtol=self.tol, atol=0.0, M=self._M, restart=60, maxiter=20,
-                        callback=lambda _: count.__setitem__(0, count[0] + 1), callback_type="pr_norm")
-        self.iterations += count[0]
+        if self.fallback == "ilu":
+            return self._solve_ilu(b, x0)
+        x, info, its = self._gmres(b, x0, self._M, self.MG_RESTARTS)
         if info == 0:
+            if its > self.SLOW_ITS:
+                self.fallback = "ilu"             # sticky: later systems skip the slow path
             return x
-        if self.fallback == "ilu":                # ILU already failed: exact LU (or give up)
-            if self.A.shape[0] > LU_FALLBACK_MAX:
-                raise RuntimeError(f"GMRES+ILU did not converge (info={info}, n={self.A.shape[0]})")
-            self._lu, self.fallback = splu(self.A.tocsc()), "lu"
-            return self._lu.solve(b)
-        # High cell Peclet: the symmetric-part preconditioner no longer captures the operator.  The SG
-        # operator is an M-matrix, so ILU of the full matrix is a robust preconditioner; exact LU last.
-        from scipy.sparse.linalg import LinearOperator, spilu
-        n = self.A.shape[0]
-        try:
-            ilu = spilu(self.A.tocsc(), drop_tol=1e-5, fill_factor=15)
-            M = LinearOperator((n, n), matvec=ilu.solve, dtype=np.float64)
-            count[0] = 0
-            x, info = gmres(self.A, b, x0=x, rtol=self.tol, atol=0.0, M=M, restart=60, maxiter=20,
-                            callback=lambda _: count.__setitem__(0, count[0] + 1), callback_type="pr_norm")
-            self.iterations += count[0]
-        except RuntimeError:                      # singular ILU factor
-            info = -1
-        if info == 0:
-            self._M, self.fallback = M, "ilu"
-            return x
-        if n > LU_FALLBACK_MAX:
-            raise RuntimeError(f"GMRES did not converge with MG or ILU preconditioning (info={info}, "
-                               f"n={n}); cell Peclet number too high for this grid?")
-        self._lu, self.fallback = splu(self.A.tocsc()), "lu"
-        return self._lu.solve(b)
+        self.fallback = "ilu"
+        return self._solve_ilu(b, x)
 
 
 class _Sticky:
@@ -318,10 +342,12 @@ class FieldSolver:
             info["linear_cu"] = "direct" if direct_c else ("gmres+mgcg" if use_mg else "gmres+amg")
 
             A_sym_c = system(ph.D_c, 1.0)[0] if not (use_mg or direct_c) else None
+            start_c = self._cu_fallback or ("ilu" if info["cell_peclet_max"] > PE_ILU else None)
+            ilu_cache = {}                       # one incomplete factor per field solve (A_c fixed)
 
             def lin_c_of(q):
                 lin = _AdvLinear(A_c + sparse.diags(q), q, direct_c, fam_c if use_mg else None,
-                                 A_sym=A_sym_c, pc=pc_c, start=self._cu_fallback)
+                                 A_sym=A_sym_c, pc=pc_c, start=start_c, ilu_cache=ilu_cache)
                 return _Sticky(lin, self, info)
         else:
             F_top = None
