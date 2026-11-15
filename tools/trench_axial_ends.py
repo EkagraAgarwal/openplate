@@ -219,11 +219,11 @@ def annotate_existing(results):
     return results
 
 
-def run_experiment(length_um=2000., hours=1., do_probe=True):
-    dest = Path(__file__).with_name('trench_axial_ends_results.json')
+def run_experiment(length_um=2000., hours=1., do_probe=True, beta=.07, dest=None):
+    dest = Path(dest) if dest else Path(__file__).with_name('trench_axial_ends_results.json')
     results: dict[str, Any] = dict(requested_length_um=length_um, width_um=200., depth_um=80., dx_um=8.,
                    hours=hours, bath_Cu_g_L=65., current_mA_cm2=15., delta_um=64.,
-                   gravity_dir=[0,-1,0], beta_L_mol=.07, benchmarks=[], runs={})
+                   gravity_dir=[0,-1,0], beta_L_mol=beta, benchmarks=[], runs={})
     if do_probe:
         probe = timed_probe(length_um)
         results['benchmarks'].append(probe)
@@ -241,7 +241,7 @@ def run_experiment(length_um=2000., hours=1., do_probe=True):
     psi0, grid, field, p = setup_trench(length_um)
     results['grid'] = dict(shape=list(grid.shape), periodic=list(grid.periodic),
                            half_span_um=248., end_margin_um=128., top_um=240.)
-    for label, flow in [('no_flow', None), ('axial_flow', dict(gravity_dir=(0., -1., 0.)))]:
+    for label, flow in [('no_flow', None), ('axial_flow', dict(gravity_dir=(0., -1., 0.), beta_L_mol=beta))]:
         print(f"{label} length={length_um:g}um duration={hours*3600:g}s", flush=True)
         t0 = perf_counter()
         out = run_tile(psi0, grid, 15., hours*3600, params=p, field_mask=field,
@@ -257,7 +257,7 @@ def run_experiment(length_um=2000., hours=1., do_probe=True):
                                                        results['runs']['no_flow'])
     results['diagnosis'] = [
         'Finite closed solid ends with 128um external field margins; all lateral external boundaries are impermeable/free-slip. x=0 is half-width mirror symmetry; x=248um is a second symmetry boundary (finite pitch). No periodic y.',
-        'Gravity -y: bottom end y=0, top end y=L; lighter depleted electrolyte rises toward +y. beta=0.07 is the unmodified run_tile default, unlike the explicitly matched beta=0.15 in Part A.',
+        f'Gravity -y: bottom end y=0, top end y=L; lighter depleted electrolyte rises toward +y. beta={beta:g} L/mol (explicit; 0.07 was the run_tile default when the first run was made, 0.15 is the unified value).',
         'Profiles subtract actual initial highest psi=0 crossings. Floor is x=4um; field is the mean of x>200um columns. Ten samples start at least 3dx from each end. Dense floor profiles include column envelopes under grown end walls; final height above -40um flags end-wall encroachment, excluded from regional floor means. Top/bottom are 10%-length averages, middle is the central 10%.',
         'End zone is distance from each end to first floor thickness within 1% of middle; centre distances have dx uncertainty and this is a threshold diagnostic, not an exponential fit. Convection-only zone subtracts no-flow and its middle contrast.',
         'No volume correction or solver patches. Native flow update_every=5, moving field-mean bulk-plane lid. Maximum sampled speed is max absolute cell component at saved frame times.'
@@ -274,6 +274,9 @@ def main():
     ap.add_argument('--hours', type=float, default=1.)
     ap.add_argument('--probe', type=Path)
     ap.add_argument('--annotate-existing', action='store_true')
+    ap.add_argument('--beta', type=float, default=.07, help='solutal expansion, L/mol (0.15 = unified value)')
+    ap.add_argument('--out', type=Path, help='results JSON (default trench_axial_ends_results.json)')
+    ap.add_argument('--no-probe', action='store_true')
     args = ap.parse_args()
     if args.annotate_existing:
         dest = Path(__file__).with_name('trench_axial_ends_results.json')
@@ -283,7 +286,7 @@ def main():
     elif args.probe:
         benchmark(args.length, args.probe)
     else:
-        run_experiment(args.length, args.hours)
+        run_experiment(args.length, args.hours, do_probe=not args.no_probe, beta=args.beta, dest=args.out)
 
 
 if __name__ == '__main__':
