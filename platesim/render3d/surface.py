@@ -13,8 +13,8 @@ from .plots import figure, save
 
 
 def render_surface(result, index=-1, out_png=None, camera='iso', size=(1280, 960),
-                   show_si=True, cut=None, *, z_exaggeration=1., renderer='auto'):
-    """Render solid Cu/Si, keeping the low-coordinate side of an optional cut.
+                   show_si=False, cut=None, *, z_exaggeration=1., renderer='auto'):
+    """Render the final electrolyte interface, optionally overlaying bare Si.
 
     ``renderer`` is auto, pyvista, or matplotlib. Even explicit pyvista requests
     fall back safely; inspect renderer/fallback_reason to detect this. Camera
@@ -92,11 +92,12 @@ def _pv_worker(folder):
     plotter = pv.Plotter(off_screen=True, window_size=job['size'])
     try:
         plotter.set_background('white')
-        # max is the level-set intersection: Cu is solid AND outside bare Si.
-        fields = [(np.maximum(psi, -bare), COPPER)]
+        # The final front alone: the Cu/Si intersection would also create a
+        # buried underside sheet, coincident with bare Si (z-fighting).
+        fields = [(psi, COPPER, 1.)]
         if job['show_si']:
-            fields.insert(0, (bare, SILICON))
-        for field, color in fields:
+            fields.insert(0, (bare, SILICON, .25))
+        for field, color, opacity in fields:
             points, faces = mesh(field, grid)
             if not len(faces):
                 continue
@@ -109,7 +110,7 @@ def _pv_worker(folder):
                 poly = poly.clip(normal=normal, origin=origin, invert=True)
             if poly.n_points:
                 plotter.add_mesh(poly, color=color, smooth_shading=False,
-                                 ambient=.5, diffuse=.5)
+                                 ambient=.5, diffuse=.5, opacity=opacity)
         # Fill the exposed cut with material-coloured tiles (also exposes voids).
         if job['cut']:
             cut = job['cut']
@@ -132,7 +133,7 @@ def _pv_worker(folder):
         plotter.camera_position = [cam['position'], cam['focal_point'], cam['view_up']]
         plotter.enable_parallel_projection()
         plotter.camera.parallel_scale = cam['parallel_scale']
-        plotter.show_bounds(xtitle='x (µm)', ytitle='y (µm)', ztitle='z (µm)',
+        plotter.show_bounds(xtitle='x (um)', ytitle='y (um)', ztitle='z (um)',
                             bounds=tuple(v for o, n in zip(grid.origin, grid.shape)
                                          for v in (o*1e4, (o+n*grid.dx)*1e4)),
                             font_size=10, color='black')
@@ -152,13 +153,12 @@ def _matplotlib(psi, bare, grid, path, options):
     bare_h = height_map(bare, grid)['height_um']
     x, y = np.meshgrid(h['x_um'], h['y_um'], indexing='ij')
     z = h['height_um'].copy()
-    copper = z > bare_h + grid.dx*1e2
-    colors = np.where(copper[..., None], to_rgba(COPPER), to_rgba(SILICON))
-    if not options['show_si']:
-        z[~copper] = np.nan
+    colors = np.broadcast_to(to_rgba(COPPER), z.shape+(4,))
     if options['cut']:
         cut = options['cut']
-        z[(x if cut['axis'] == 'x' else y) > cut['position_um']] = np.nan
+        removed = (x if cut['axis'] == 'x' else y) > cut['position_um']
+        z[removed] = np.nan
+        bare_h[removed] = np.nan
         sec = vertical_slice(psi, bare, grid, cut['axis'], cut['position_um'])
         s, zz = np.meshgrid(sec['s_um'], sec['z_um'], indexing='ij')
         fixed = np.full_like(s, cut['position_um'])
@@ -169,6 +169,9 @@ def _matplotlib(psi, bare, grid, path, options):
             palette[1, 3] = 0
         ax.plot_surface(xx, yy, zz, facecolors=palette[material], shade=False,
                         rstride=1, cstride=1)
+    if options['show_si']:
+        ax.plot_surface(x, y, bare_h, color=SILICON, alpha=.25,
+                        shade=False, rstride=1, cstride=1)
     ax.plot_surface(x, y, z, facecolors=colors, shade=False, rstride=1, cstride=1)
     cam = options['camera']
     elevation, azimuth = {'iso': (32, -50), 'top': (90, -90), 'front': (0, -90)}[cam['preset']]

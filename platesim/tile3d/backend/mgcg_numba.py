@@ -8,9 +8,10 @@ grid is factored. Dirichlet data affect A, not b:
 the caller must include the boundary RHS returned by operators.assemble.
 
 Cell-centred linear prolongation and its scaled transpose form a symmetric
-transfer pair. Coarse faces are transverse arithmetic averages at coincident
-fine faces, not averages of cell conductivities. Axes that cannot be halved
-exactly while retaining four cells stop coarsening independently.
+transfer pair. Odd nonperiodic axes end in a singleton aggregate. Coarse fluxes
+use actual aggregate widths/areas and a level-wide volume normalization (not
+row-wise volume division), keeping the coarse operator conservative and SPD.
+Odd periodic axes alone remain uncoarsened; other axes continue independently.
 """
 from __future__ import annotations
 
@@ -73,87 +74,114 @@ def _kernel(u, b, fx, fy, fz, base, diag, periodic, out, color, omega):
                 out[i, j, k] = v + omega * (b[i, j, k] - a) / diag[i, j, k]
 
 
-@njit(cache=True)
-def _index(i, n, periodic):
-    return i % n if periodic else min(max(i, 0), n-1)
-
-
 @njit(parallel=True, cache=True)
-def _prolong(c, out, mask, factors, periodic):
+def _prolong_kernel(c, out, mask, indices, weights):
     nx, ny, nz = out.shape
     for ij in prange(nx * ny):
         i, j = ij // ny, ij % ny
         for k in range(nz):
             value = 0.0
-            for a in range(factors[0]):
-                ci = i if factors[0] == 1 else (i-1)//2 + a
-                wi = 1.0 if factors[0] == 1 else (.75 if a == (1-i % 2) else .25)
-                ci = _index(ci, c.shape[0], periodic[0])
-                for b in range(factors[1]):
-                    cj = j if factors[1] == 1 else (j-1)//2 + b
-                    wj = 1.0 if factors[1] == 1 else (.75 if b == (1-j % 2) else .25)
-                    cj = _index(cj, c.shape[1], periodic[1])
-                    for d in range(factors[2]):
-                        ck = k if factors[2] == 1 else (k-1)//2 + d
-                        wk = 1.0 if factors[2] == 1 else (.75 if d == (1-k % 2) else .25)
-                        ck = _index(ck, c.shape[2], periodic[2])
+            for a in range(indices[0].shape[1]):
+                ci, wi = indices[0][i, a], weights[0][i, a]
+                for b in range(indices[1].shape[1]):
+                    cj, wj = indices[1][j, b], weights[1][j, b]
+                    for d in range(indices[2].shape[1]):
+                        ck, wk = indices[2][k, d], weights[2][k, d]
                         value += wi * wj * wk * c[ci, cj, ck]
             out[i, j, k] = value if mask[i, j, k] else 0
 
 
-@njit(cache=True)
-def _restriction_entry(c, offset, n, factor, periodic):
-    if factor == 1:
-        return c, 1.0
-    # Transpose of clamped (Neumann extension) cell-centred interpolation.
-    raw = 2*c - 1 + offset
-    w = .25 if offset == 0 or offset == 3 else .75
-    if periodic:
-        return raw % n, w
-    if raw < 0 or raw >= n:
-        return 0, 0.0
-    if (c == 0 and offset == 1) or (c == n//2-1 and offset == 2):
-        w = 1.0
-    return raw, w
-
-
 @njit(parallel=True, cache=True)
-def _restrict(f, out, fine_mask, coarse_mask, factors, periodic):
+def _restrict_kernel(f, out, fine_mask, coarse_mask, indices, weights, scale):
     nx, ny, nz = out.shape
-    scale = 1.0 / (factors[0] * factors[1] * factors[2])
     for ij in prange(nx * ny):
         i, j = ij // ny, ij % ny
         for k in range(nz):
             value = 0.0
-            for a in range(1 if factors[0] == 1 else 4):
-                fi, wi = _restriction_entry(i, a, f.shape[0], factors[0], periodic[0])
-                for b in range(1 if factors[1] == 1 else 4):
-                    fj, wj = _restriction_entry(j, b, f.shape[1], factors[1], periodic[1])
-                    for d in range(1 if factors[2] == 1 else 4):
-                        fk, wk = _restriction_entry(k, d, f.shape[2], factors[2], periodic[2])
+            for a in range(indices[0].shape[1]):
+                fi, wi = indices[0][i, a], weights[0][i, a]
+                for b in range(indices[1].shape[1]):
+                    fj, wj = indices[1][j, b], weights[1][j, b]
+                    for d in range(indices[2].shape[1]):
+                        fk, wk = indices[2][k, d], weights[2][k, d]
                         if fine_mask[fi, fj, fk]:
                             value += wi * wj * wk * f[fi, fj, fk]
             out[i, j, k] = scale * value if coarse_mask[i, j, k] else 0
 
 
-def _cell_average(a, factors):
-    shape = tuple(s // f for s, f in zip(a.shape, factors))
-    return a.reshape(shape[0], factors[0], shape[1], factors[1], shape[2], factors[2]).mean(axis=(1, 3, 5))
+def _transfers(shape, factors, periodic, widths=None):
+    """Tabulate linear interpolation and its exact transpose, including clamps."""
+    pi, pw, ri, rw = [], [], [], []
+    for axis, (n, factor, wrap) in enumerate(zip(shape, factors, periodic)):
+        width = np.ones(n) if widths is None else widths[axis]
+        fine = np.cumsum(width) - width / 2
+        cw = np.add.reduceat(width, np.arange(0, n, factor))
+        centers = np.cumsum(cw) - cw / 2
+        if factor == 1:
+            ids, weights = np.arange(n)[:, None], np.ones((n, 1))
+        else:
+            positions = (np.r_[centers[-1] - width.sum(), centers,
+                               centers[0] + width.sum()] if wrap else centers)
+            right = np.clip(np.searchsorted(positions, fine), 1, len(positions)-1)
+            t = np.clip((fine - positions[right-1]) /
+                        (positions[right] - positions[right-1]), 0, 1)
+            ids = np.stack((right-1, right), axis=1)
+            ids = (ids - 1) % len(cw) if wrap else ids
+            weights = np.stack((1-t, t), axis=1)
+        entries = [[] for _ in cw]
+        for i in range(n):
+            for c, w in zip(ids[i], weights[i]):
+                if w:
+                    entries[c].append((i, w))
+        size = max(map(len, entries))
+        ti, tw = np.zeros((len(cw), size), dtype=np.int64), np.zeros((len(cw), size))
+        for c, row in enumerate(entries):
+            for j, (i, w) in enumerate(row):
+                ti[c, j], tw[c, j] = i, w
+        pi.append(np.ascontiguousarray(ids)); pw.append(np.ascontiguousarray(weights))
+        ri.append(ti); rw.append(tw)
+    return tuple(pi), tuple(pw), tuple(ri), tuple(rw)
 
 
-def _coarse_faces(faces, factors):
+def _prolong(c, out, mask, factors, periodic, transfers=None):
+    t = _transfers(out.shape, factors, periodic) if transfers is None else transfers
+    _prolong_kernel(c, out, mask, t[0], t[1])
+
+
+def _restrict(f, out, fine_mask, coarse_mask, factors, periodic, transfers=None):
+    t = _transfers(f.shape, factors, periodic) if transfers is None else transfers
+    _restrict_kernel(f, out, fine_mask, coarse_mask, t[2], t[3], 1.0 / np.prod(factors))
+
+
+def _axis_average(a, axis, factor, width):
+    starts = np.arange(0, a.shape[axis], factor)
+    sh = [1] * 3
+    sh[axis] = len(width)
+    total = np.add.reduceat(a * width.reshape(sh), starts, axis=axis)
+    sh[axis] = len(starts)
+    return total / np.add.reduceat(width, starts).reshape(sh)
+
+
+def _cell_average(a, factors, widths=None):
+    for axis, factor in enumerate(factors):
+        if factor != 1:
+            width = np.ones(a.shape[axis]) if widths is None else widths[axis]
+            a = _axis_average(a, axis, factor, width)
+    return a
+
+
+def _coarse_faces(faces, factors, widths=None):
     result = []
     for axis, face in enumerate(faces):
         v = face
         for dim, factor in enumerate(factors):
             if dim == axis:
-                ix = [slice(None)] * 3
-                ix[dim] = slice(None, None, factor)
-                v = v[tuple(ix)]
+                # Include the final boundary face of a singleton aggregate.
+                indices = np.r_[np.arange(0, v.shape[dim]-1, factor), v.shape[dim]-1]
+                v = np.take(v, indices, axis=dim)
             elif factor == 2:
-                sh = list(v.shape)
-                sh[dim:dim+1] = [sh[dim] // 2, 2]
-                v = v.reshape(sh).mean(axis=dim+1)
+                width = np.ones(v.shape[dim]) if widths is None else widths[dim]
+                v = _axis_average(v, dim, factor, width)
         result.append(np.ascontiguousarray(v))
     return result
 
@@ -162,7 +190,8 @@ class MGCG:
     """Reusable geometric hierarchy; all connected components must be anchored.
 
     ``rbgs`` uses reverse colour order after coarse correction. Odd periodic
-    grids are not bipartite and automatically use damped Jacobi on that level.
+    grids are not bipartite and automatically use two damped Jacobi passes per
+    smoothing sweep on that level (the retained axis needs stronger smoothing).
     Equal positive pre/post counts are required for a symmetric preconditioner.
     ``levels`` caps depth; a large terminal grid uses 200 symmetric smoothing
     sweeps instead of a direct factorization. solve returns the shape of b.
@@ -201,20 +230,41 @@ class MGCG:
         self._bc = set(bc)
         self.hierarchy = []
         spacing = np.full(3, dx)
+        widths = tuple(np.full(n, dx) for n in mask.shape)
         while True:
-            factors = tuple(2 if n >= 8 and n % 2 == 0 else 1 for n in mask.shape)
-            level = self._level(faces, mask, spacing, factors)
+            factors = tuple(2 if n >= 4 and not (p and n % 2) else 1
+                            for n, p in zip(mask.shape, self.periodic))
+            level = self._level(faces, mask, spacing, factors, widths)
             self.hierarchy.append(level)
             if all(f == 1 for f in factors) or (levels is not None and len(self.hierarchy) >= levels):
                 break
-            faces = _coarse_faces(faces, factors)
-            mask = _cell_average(mask.astype(float), factors) > 0
+            faces = _coarse_faces(faces, factors, widths)
+            mask = _cell_average(mask.astype(float), factors, widths) > 0
+            widths = tuple(np.add.reduceat(w, np.arange(0, len(w), f))
+                           for w, f in zip(widths, factors))
             spacing = spacing * factors
         self.set_reaction(reaction)
 
-    def _level(self, physical, mask, spacing, factors):
-        faces = [np.array(f / h**2, dtype=self.dtype, order="C", copy=True)
-                 for f, h in zip(physical, spacing)]
+    def _level(self, physical, mask, spacing, factors, widths):
+        # Integrated FV flux / one nominal cell volume: a shared scalar
+        # normalization preserves Euclidean symmetry even for singleton cells.
+        volume = np.ones(mask.shape)
+        for axis, w in enumerate(widths):
+            sh = [1] * 3
+            sh[axis] = len(w)
+            volume *= (w / spacing[axis]).reshape(sh)
+        faces = []
+        for axis, physical_face in enumerate(physical):
+            w = widths[axis]
+            distance = np.r_[w[0], (w[:-1] + w[1:]) / 2, w[-1]]
+            if self.periodic[axis]:
+                distance[0] = distance[-1] = (w[0] + w[-1]) / 2
+            coefficient = physical_face.copy() / np.prod(spacing)
+            for dim in range(3):
+                sh = [1] * 3
+                sh[dim] = coefficient.shape[dim]
+                coefficient *= ((1 / distance) if dim == axis else widths[dim]).reshape(sh)
+            faces.append(np.array(coefficient, dtype=self.dtype, order="C"))
         boundary = np.zeros(mask.shape, dtype=self.dtype)
         for axis, face in enumerate(faces):
             v, m, d = (np.moveaxis(a, axis, 0) for a in (face, mask, boundary))
@@ -238,6 +288,8 @@ class MGCG:
         rbgs = self.smoother == "rbgs" and not any(
             p and n % 2 for p, n in zip(self.periodic, mask.shape))
         return SimpleNamespace(faces=tuple(faces), mask=mask.copy(), boundary=boundary,
+                               widths=widths, volume=volume,
+                               transfers=_transfers(mask.shape, factors, self.periodic, widths),
                                edge_diagonal=edge_diagonal, factors=factors, rbgs=rbgs,
                                x=np.zeros(mask.shape, dtype=self.dtype),
                                rhs=np.zeros(mask.shape, dtype=self.dtype),
@@ -250,11 +302,11 @@ class MGCG:
         if np.any(r < 0) or not np.isfinite(r).all():
             raise ValueError("reaction must be finite and nonnegative")
         for level in self.hierarchy:
-            level.base = np.where(level.mask, level.boundary + r, 1).astype(self.dtype)
+            level.base = np.where(level.mask, level.boundary + r * level.volume, 1).astype(self.dtype)
             level.diag = level.base + level.edge_diagonal
             if np.any(level.diag <= 0) or not np.isfinite(level.diag).all():
                 raise ValueError("operator has an unanchored isolated cell or storage overflow")
-            r = _cell_average(np.where(level.mask, r, 0), level.factors)
+            r = _cell_average(np.where(level.mask, r, 0), level.factors, level.widths)
         last = self.hierarchy[-1]
         last.cholesky = None
         if last.x.size <= 512:
@@ -292,6 +344,8 @@ class MGCG:
         return out.reshape(u.shape)
 
     def _smooth(self, level, sweeps, reverse=False):
+        if any(p and n % 2 for p, n in zip(self.periodic, level.x.shape)):
+            sweeps *= 2
         for _ in range(sweeps):
             if level.rbgs:
                 for color in ((1, 0) if reverse else (0, 1)):
@@ -318,9 +372,11 @@ class MGCG:
         self._apply(level, level.x, level.work)
         level.work[:] = level.rhs - level.work
         coarse = self.hierarchy[index+1]
-        _restrict(level.work, coarse.rhs, level.mask, coarse.mask, level.factors, self.periodic)
+        _restrict(level.work, coarse.rhs, level.mask, coarse.mask, level.factors,
+                  self.periodic, level.transfers)
         self._cycle(index+1)
-        _prolong(coarse.x, level.correction, level.mask, level.factors, self.periodic)
+        _prolong(coarse.x, level.correction, level.mask, level.factors,
+                 self.periodic, level.transfers)
         level.x += level.correction
         self._smooth(level, self.post, reverse=True)
 

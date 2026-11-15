@@ -107,3 +107,80 @@ def test_native_failure_isolation(tmp_path, monkeypatch, mode):
     assert a['renderer'] == 'matplotlib' and a['fallback_reason']
     check_image(p, copper=True)
     assert not list(tmp_path.glob('.vtk_*'))
+
+
+def test_contour_fill_matches_analytic_deposit_area(tmp_path, monkeypatch):
+    from shapely.geometry import Polygon, GeometryCollection
+    from platesim.render3d import plots
+    result = box_step(tmp_path / 'box')[0]
+    section = vertical_slice(result.psi(), result.psi_si, result.grid, 'x', 0)
+    captured = {}
+    def capture(fig, path, title):
+        ax = fig.axes[0]
+        # The first two collections are filled final solid and bare silicon.
+        def region(collection):
+            geometry = GeometryCollection()
+            for path in collection.get_paths():
+                for ring in path.to_polygons():
+                    geometry = geometry.symmetric_difference(Polygon(ring))
+            return geometry
+        final, bare = map(region, ax.collections[:2])
+        captured['area'] = final.difference(bare).area
+        assert not any(type(c).__name__ == 'QuadMesh' for c in ax.collections)
+        return {}
+    monkeypatch.setattr(plots, 'save', capture)
+    render_cross_section(section, tmp_path / 'unused.png')
+    # 8 um field/floor growth over the sampled width plus two 80 um walls.
+    width = np.ptp(section['s_um'])
+    assert captured['area'] == pytest.approx(width*8 + 2*80*8, rel=.02)
+
+
+def test_surface_defaults_to_final_interface(tmp_path, monkeypatch):
+    from platesim.render3d import surface
+    result = box_step(tmp_path / 'box')[0]
+    def capture(psi, bare, grid, path, options):
+        assert options['show_si'] is False
+        np.testing.assert_array_equal(psi, result.psi())
+        return {}
+    monkeypatch.setattr(surface, '_isolated_pyvista', capture)
+    assert render_surface(result, out_png=tmp_path / 'final.png')['renderer'] == 'pyvista'
+
+
+def test_matplotlib_final_front_has_no_silicon_speckles(tmp_path, monkeypatch):
+    from platesim.render3d import surface
+    result = half_filled_trench(tmp_path / 'box')[0]
+    def capture(fig, path, title):
+        ax = fig.axes[0]
+        assert len(ax.collections) == 1
+        colors = ax.collections[0].get_facecolors()
+        from matplotlib.colors import to_rgba
+        np.testing.assert_allclose(colors, np.tile(to_rgba(surface.COPPER), (len(colors), 1)))
+        assert all('µm' in label for label in (ax.get_xlabel(), ax.get_ylabel(), ax.get_zlabel()))
+        return {}
+    monkeypatch.setattr(surface, 'save', capture)
+    render_surface(result, out_png=tmp_path / 'final.png', renderer='matplotlib')
+
+
+def test_bare_surface_is_optional_transparent_and_cut(tmp_path, monkeypatch):
+    from mpl_toolkits.mplot3d.axes3d import Axes3D
+    from platesim.render3d import surface
+    result = box_step(tmp_path / 'box')[0]
+    plot_surface = Axes3D.plot_surface
+    seen = []
+    def plot(ax, x, y, z, *args, **kwargs):
+        if kwargs.get('alpha') == .25:
+            assert np.isnan(z[x > 0]).all()
+            assert np.isfinite(z[x < 0]).any()
+            seen.append(True)
+        return plot_surface(ax, x, y, z, *args, **kwargs)
+    monkeypatch.setattr(Axes3D, 'plot_surface', plot)
+    def capture(fig, path, title):
+        ax = fig.axes[0]
+        assert len(ax.collections) == 3  # cut face, optional bare, final front
+        bare = ax.collections[1]
+        assert bare.get_alpha() == .25
+        assert seen == [True]
+        return {}
+    monkeypatch.setattr(surface, 'save', capture)
+    render_surface(result, out_png=tmp_path / 'overlay.png', renderer='matplotlib',
+                   show_si=True, cut={'axis': 'x', 'position_um': 0})

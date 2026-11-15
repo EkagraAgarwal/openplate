@@ -20,7 +20,7 @@ def threads():
     set_num_threads(old)
 
 
-def trench(shape=(48, 8, 48)):
+def trench(shape=(48, 8, 48), periodic=(True, True, False)):
     """Copy of FieldSolver's diffuse geometry and potential Newton diagonal."""
     from platesim.core.constants import F
     from platesim.tile3d.backend import ls_numpy
@@ -38,7 +38,6 @@ def trench(shape=(48, 8, 48)):
     psi = np.broadcast_to(np.maximum(zc[None, None, :], np.minimum(
         nx * dx * .19 - abs(x[:, None, None]),
         zc[None, None, :] + nz * dx * .42)), shape).copy()
-    periodic = (True, True, False)
     z_plane = zc[-1] + .8 * dx
     kt = int(np.floor((z_plane - .5 * dx - z0) / dx - .5))
     assert kt == nz - 1
@@ -140,8 +139,12 @@ def test_grid_independence_slow():
     assert max(counts) <= 1.5 * min(counts), counts
 
 
-def test_reaction_reuse():
-    faces, dx, args, _, b = trench((24, 4, 24))
+@pytest.mark.parametrize("shape,periodic", [
+    ((24, 4, 24), (True, True, False)),
+    ((17, 9, 15), (False, False, False)),
+])
+def test_reaction_reuse(shape, periodic):
+    faces, dx, args, _, b = trench(shape, periodic)
     solver = MGCG(*faces, dx, **args)
     hierarchy = [(id(l), tuple(id(f) for f in l.faces)) for l in solver.hierarchy]
     reaction = args["reaction"] * 2 + .01
@@ -155,15 +158,45 @@ def test_reaction_reuse():
     np.testing.assert_allclose(x, y, rtol=1e-10, atol=1e-12)
 
 
+@pytest.mark.parametrize("shape,periodic", [
+    ((43, 55, 23), (False, False, False)),
+    ((45, 16, 31), (True, True, False)),
+])
+def test_odd_field(shape, periodic):
+    faces, dx, args, A, b = trench(shape, periodic)
+    solver = MGCG(*faces, dx, **args)
+    assert solver.hierarchy[-1].x.size <= 512
+    assert solver.hierarchy[-1].cholesky is not None
+    if periodic[0]:
+        assert all(l.x.shape[0] == shape[0] for l in solver.hierarchy)
+    x, info = solver.solve(b, tol=1e-8)
+    print(f"\nodd field {shape}: {info}")
+    assert info["converged"] and info["iterations"] <= 20, info
+    assert np.linalg.norm(b - A @ x.ravel()) / np.linalg.norm(b) <= 1e-8
+    direct = spsolve(A, b)
+    assert np.linalg.norm(x.ravel() - direct) / np.linalg.norm(direct) < 1e-6
+    if not periodic[0]:
+        ef, edx, ea, _, eb = trench((44, 56, 24), periodic)
+        even = MGCG(*ef, edx, **ea)
+        _, other = even.solve(eb, tol=1e-8)
+        assert other["converged"], other
+        assert info["iterations"] <= 1.5 * other["iterations"], (info, other)
+
+
 @pytest.mark.parametrize("smoother", ["rbgs", "jacobi"])
-def test_symmetric_cycle_and_transfers(smoother):
+@pytest.mark.parametrize("shape,periodic", [
+    ((16, 8, 16), (True, True, False)),
+    ((17, 9, 15), (False, False, False)),
+    ((9, 8, 11), (True, True, False)),
+])
+def test_symmetric_cycle_and_transfers(smoother, shape, periodic):
     from platesim.tile3d.backend.mgcg_numba import _prolong, _restrict, _coarse_faces
 
     rng = np.random.default_rng(19)
-    shape = (16, 8, 16)
-    faces = operators.face_coefficients(np.ones(shape), (True, True, False))
+    faces = operators.face_coefficients(np.ones(shape), periodic)
     mask = rng.random(shape) > .1
-    solver = MGCG(*faces, .1, reaction=2, active=mask, dirichlet={"z_hi": 0}, smoother=smoother)
+    solver = MGCG(*faces, .1, reaction=2, active=mask, dirichlet={"z_hi": 0},
+                  smoother=smoother, periodic=periodic)
     fine, coarse = solver.hierarchy[:2]
     a, b = rng.normal(size=shape), rng.normal(size=shape)
     a[~mask] = b[~mask] = 0
@@ -175,15 +208,46 @@ def test_symmetric_cycle_and_transfers(smoother):
     mb = fine.x.copy()
     assert np.vdot(a, ma) > 0
     np.testing.assert_allclose(np.vdot(a, mb), np.vdot(ma, b), rtol=1e-11, atol=1e-12)
+    np.testing.assert_allclose(solver.vcycle(2*a - b), 2*ma - mb, rtol=1e-11, atol=1e-12)
+    np.testing.assert_array_equal(solver.vcycle(a), ma)
     c = rng.normal(size=coarse.x.shape)
     pc, ra = np.empty(shape), np.empty(c.shape)
     _prolong(c, pc, mask, fine.factors, solver.periodic)
     _restrict(a, ra, mask, coarse.mask, fine.factors, solver.periodic)
-    np.testing.assert_allclose(np.vdot(a, pc), 8 * np.vdot(ra, c), rtol=1e-12)
+    np.testing.assert_allclose(np.vdot(a, pc), np.prod(fine.factors) * np.vdot(ra, c), rtol=1e-12)
     # Constant contrasts survive conservative averaging, rather than being floored.
     low = [np.full(f.shape, 1e-6) for f in faces]
     for f in _coarse_faces(low, (2, 2, 2)):
         np.testing.assert_allclose(f, 1e-6, rtol=1e-15)
+
+
+def test_singleton_geometry():
+    from platesim.tile3d.backend.mgcg_numba import _cell_average, _coarse_faces
+
+    shape, factors = (5, 7, 9), (2, 2, 2)
+    a = np.arange(np.prod(shape), dtype=float).reshape(shape)
+    average = _cell_average(a, factors)
+    assert average.shape == (3, 4, 5)
+    assert average[-1, -1, -1] == a[-1, -1, -1]
+    widths = tuple(np.r_[np.full(n//2, 2.), n % 2] for n in shape)
+    volumes = widths[0][:, None, None] * widths[1][None, :, None] * widths[2][None, None, :]
+    np.testing.assert_allclose(np.sum(average * volumes), np.sum(a))
+    # A second reduction must weight the already-singleton last cells correctly.
+    second = _cell_average(average, factors, widths)
+    cw = tuple(np.add.reduceat(w, np.arange(0, len(w), 2)) for w in widths)
+    cv = cw[0][:, None, None] * cw[1][None, :, None] * cw[2][None, None, :]
+    np.testing.assert_allclose(np.sum(second * cv), np.sum(a))
+    faces = [np.arange(np.prod(tuple(n + (d == axis) for d, n in enumerate(shape))),
+                       dtype=float).reshape(tuple(n + (d == axis) for d, n in enumerate(shape)))
+             for axis in range(3)]
+    for axis, f in enumerate(_coarse_faces(faces, factors)):
+        expected = list(average.shape)
+        expected[axis] += 1
+        assert f.shape == tuple(expected)
+        np.testing.assert_array_equal(np.take(f, -1, axis=axis),
+                                      _cell_average(np.take(faces[axis], [-1], axis=axis),
+                                                    tuple(1 if d == axis else 2 for d in range(3)))
+                                      .squeeze(axis=axis))
 
 
 def test_edge_cases():

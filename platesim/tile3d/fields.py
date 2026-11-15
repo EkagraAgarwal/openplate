@@ -63,17 +63,6 @@ class _MGFamily:
         self.mg = MGCG(*faces, dx, reaction=None, active=active, dirichlet=dirichlet, periodic=periodic)
         self.coarsest = int(np.prod(self.mg.hierarchy[-1].mask.shape))
 
-    @staticmethod
-    def coarsens_well(shape, limit=4096):
-        """True when 2x coarsening (even sizes >= 8 only, as MGCG does) reaches <= limit cells; odd sizes
-        stop coarsening and leave a large terminal grid that is smoothed 200 times per V-cycle."""
-        s = list(shape)
-        while True:
-            f = [2 if n >= 8 and n % 2 == 0 else 1 for n in s]
-            if all(v == 1 for v in f):
-                return int(np.prod(s)) <= limit
-            s = [n // v for n, v in zip(s, f)]
-
     def system(self, q):
         self.iterations = 0                            # callers add .iterations after each system
         self.mg.set_reaction(np.asarray(q, dtype=np.float64).reshape(self.shape))
@@ -246,8 +235,7 @@ class FieldSolver:
         V = V_fixed_phi(ct, phi)
         info = dict(outer=0, newton=0, cg=0)
         pc_p, pc_c = _Precond(), _Precond()            # one AMG hierarchy per family, reused
-        use_mg = self.linear == "mg" or (self.linear == "auto" and n > DIRECT_MAX and _mg_available()
-                                         and _MGFamily.coarsens_well(shape))
+        use_mg = self.linear == "mg" or (self.linear == "auto" and n > DIRECT_MAX and _mg_available())
         mode = self.linear if self.linear in ("direct", "amg") else "auto"
         info["linear"] = "mgcg" if use_mg else (
             "direct" if mode == "direct" or (mode == "auto" and n <= DIRECT_MAX) else "amg")

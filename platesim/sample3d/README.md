@@ -19,7 +19,7 @@ Existing output directories are refused.
   Edge-of-array effects are **not modelled**. Weight is the number of physical
   array members, not four times that number.
 - Isolated trenches with length/width > 4 use two tiles: `trench_mid`, the
-  **profile** result, has half width plus field margin, four cells in y and
+   **profile** result, has half width plus field margin, eight cells in y and
   periodic y boundaries. It models a translationally invariant middle section.
   `trench_end` extends from one width inside the end to one margin beyond it,
   with a no-flux symmetry approximation at the interior cut. Its weight is 2
@@ -40,8 +40,11 @@ Existing output directories are refused.
   they are rejected explicitly rather than silently treated as isolated shapes.
 
 Preview/standard/fine request 8/4/2 um, overridden by `numerics.dx_um`.
-Isolated extents round outward to whole cells. Array spacing is adjusted down
-to exactly divide both half-pitches (or full pitches); pitches are never stretched.
+Every axis has a multiple of eight cells for multigrid coarsening. Isolated XY
+extents grow only on the positive field-margin side, never moving centre or
+interior cut planes; z grows upward without moving the bottom. Array spacing
+is adjusted down to divide both half-pitches (or full pitches) into multiples
+of eight cells; pitches are never stretched.
 Preview alone may coarsen a tile in 1.25x requested-spacing steps until it fits
 the 200,000-cell cap. Such quantities are flagged `preview`; all preview-quality
 quantities carry that flag, otherwise `uncalibrated`. Underresolved pitches or
@@ -63,6 +66,13 @@ Recognised explicit lattices retain every input feature ID in their plan and
 emit the representative quantities for each input ID. Do not weight those
 duplicated quantities again. End diagnostic quantity names have a `trench_end.`
 prefix; the unqualified quantities are the profile result.
+In particular, each feature has `floor_over_field` (dimensionless floor/field
+thickness ratio) for its profile tile and `trench_end.floor_over_field` for
+its end tile. Other end names include `trench_end.field_um`,
+`trench_end.floor_um`, `trench_end.wall_um`, `trench_end.fill_fraction` and
+`trench_end.deposited_cu_volume_um3`; the same prefix applies to all end
+quantities. Undefined measurements (including ratios with zero field growth)
+are omitted rather than fabricated.
 
 Each `tiles/<tile_id>/` is a readable TileResult with original bare silicon,
 step-end frames, cumulative times/charge/volumes and three PNGs (`surface`,
@@ -75,6 +85,11 @@ cut is not reflected. Stored simulation frames remain the reduced domain.
 `deposited_cu_volume_um3` and Faraday checks use the simulated sector volume;
 void volume refers to the reflected diagnostic view. Mid-trench sections show
 only the thin periodic strip, not a fabricated reconstruction of the full length.
+End cross-sections span the full reflected x width, half a feature width inside
+the physical end cap; they do not reflect the artificial interior y cut.
+Surface PNGs show only the final electrolyte interface by default; bare Si is
+an optional semi-transparent overlay (`render_surface(..., show_si=True)`).
+Axes and geometry are in micrometres (`um` on VTK axes to avoid missing glyphs).
 
 Each recipe step receives the carried front and original field mask; times,
 charge and volume accumulate in a separate writer. Solver calls use no run

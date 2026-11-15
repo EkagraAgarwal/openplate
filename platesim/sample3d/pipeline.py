@@ -125,6 +125,20 @@ class _ReflectedResult:
         return self.reflect(self.result.psi(index))
 
 
+def _section_line(plan, grid):
+    """Transverse section across the reflected width, including end tiles.
+
+    End diagnostics sample half a width inside the physical end cap. The
+    artificial interior y cut is not a symmetry plane for reconstruction.
+    """
+    x, y, _ = (c*1e4 for c in grid.centers())
+    feature = plan['geometry_feature']
+    position = (feature['h_um']/2 - feature['w_um']/2
+                if plan['kind'] == 'trench_end' else feature['y_um'])
+    position = float(np.clip(position, y[0], y[-1]))
+    return [(x[0], position), (x[-1], position)]
+
+
 def _run_one(spec, plan, out_dir, progress=None) -> dict:
     """Run all steps into one result, saving the bare frame and each step end.
 
@@ -187,14 +201,7 @@ def _run_one(spec, plan, out_dir, progress=None) -> dict:
     heights = height_map(psi, analysis_grid)
     features = feature_report(result)
     voids = void_report(psi, analysis_grid)
-    # Transverse profile, or a longitudinal section exposing the end cap.
-    ymin = analysis_grid.origin[1]*1e4
-    ymax = ymin + analysis_grid.shape[1]*analysis_grid.dx*1e4
-    y = np.clip(plan['geometry_feature']['y_um'], ymin + plan['dx_um']/2, ymax - plan['dx_um']/2)
-    # Cell-centre endpoints avoid roundoff outside the sampler's strict bounds.
-    x_centres, y_centres, _ = analysis_grid.centers()
-    line = ([(0., y_centres[0]*1e4), (0., y_centres[-1]*1e4)] if plan['kind'] == 'trench_end'
-            else [(x_centres[0]*1e4, y), (x_centres[-1]*1e4, y)])
+    line = _section_line(plan, analysis_grid)
     section = cross_section(psi, bare, analysis_grid, line)
     renders = [render_surface(result, out_png=out / 'surface.png', camera='iso'),
                render_height_map(heights['height_um'], heights['x_um'], heights['y_um'],

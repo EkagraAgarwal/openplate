@@ -35,7 +35,9 @@ def _pitch_dx(spans, requested):
     fractions = [Fraction(str(v)).limit_denominator(10000) for v in spans]
     denominator = math.lcm(*(f.denominator for f in fractions))
     common = reduce(math.gcd, (f.numerator * (denominator // f.denominator) for f in fractions)) / denominator
-    return common / max(1, math.ceil(common / requested - 1e-10))
+    # Multiples of eight permit three multigrid coarsenings without moving
+    # either the centre plane or the physical half-pitch boundary.
+    return common / (8 * max(1, math.ceil(common / (8*requested) - 1e-10)))
 
 
 def plan_features(spec, faraday_um, duration, field_margin_um=None):
@@ -114,10 +116,11 @@ def plan_features(spec, faraday_um, duration, field_margin_um=None):
                 dx = _pitch_dx([window[2]-window[0], window[3]-window[1]], target_dx) if pitch else target_dx
                 actual = window.copy()
                 if not pitch:
-                    actual[2] = actual[0] + max(2, math.ceil((window[2]-window[0])/dx-1e-10))*dx
-                    actual[3] = actual[1] + (4 if thin else max(2, math.ceil((window[3]-window[1])/dx-1e-10)))*dx
+                    actual[2] = actual[0] + max(8, 8*math.ceil((window[2]-window[0])/(8*dx)-1e-10))*dx
+                    actual[3] = actual[1] + (8 if thin else max(8, 8*math.ceil((window[3]-window[1])/(8*dx)-1e-10)))*dx
                 zlo = -(math.ceil(depth/dx-1e-10)+2)*dx
                 zhi = math.ceil((faraday_um+spec.setup.delta_um+4*dx)/dx-1e-10)*dx
+                zhi = zlo + 8*math.ceil((zhi-zlo)/(8*dx)-1e-10)*dx
                 shape = [round((actual[2]-actual[0])/dx), round((actual[3]-actual[1])/dx), round((zhi-zlo)/dx)]
                 cells = math.prod(shape)
                 if min(shape) < 2:

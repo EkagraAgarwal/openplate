@@ -47,6 +47,7 @@ def test_shipped_plans(name, kinds, weights):
     assert [p['kind'] for p in plans] == kinds
     assert [p['weight'] for p in plans] == weights
     assert all(p['n_cells'] <= 200_000 for p in plans)
+    assert all(n % 8 == 0 for p in plans for n in p['shape'])
     assert all(p['feature_ids'] and p['assumptions'] for p in plans)
     assert all(set(p['side_bc'].values()) <= {'symmetry', 'periodic'} for p in plans)
 
@@ -137,6 +138,8 @@ def test_end_to_end_single_trench(tmp_path):
     assert Manifest.model_validate_json((out / 'manifest.json').read_text()).model_dump(mode='json') == manifest
     assert all(q['feature_id'] == 'feature_0000' for q in manifest['quantities'])
     assert all(q['flag'] == 'preview' for q in manifest['quantities'])
+    names = {q['name'] for q in manifest['quantities']}
+    assert {'floor_over_field', 'trench_end.floor_over_field'} <= names
     plans = json.loads((out / 'tiles.json').read_text())
     assert [p['kind'] for p in plans] == ['trench_mid', 'trench_end']
     for p in plans:
@@ -161,3 +164,35 @@ def test_cli_preview_plan():
                          check=True, capture_output=True, text=True)
     plans = json.loads(run.stdout)
     assert [p['kind'] for p in plans] == ['trench_mid', 'trench_end']
+
+
+def test_end_section_is_full_reflected_width(tmp_path):
+    from types import SimpleNamespace
+    from platesim.sample3d.pipeline import _ReflectedResult, _section_line
+    from platesim.analysis3d import cross_section
+    data = small(long=True)
+    plan = plan_tile(data, field_margin_um=32)[1]
+    bare, grid = build_geometry(data, plan)
+    result = _ReflectedResult(SimpleNamespace(grid=grid, psi_si=bare,
+                             times_s=[0], psi=lambda index: bare), plan['mirror_axes'])
+    line = _section_line(plan, result.grid)
+    assert line[0][0] == pytest.approx(-line[1][0])
+    assert line[0][1] == line[1][1] == pytest.approx(144)
+    section = cross_section(result.psi(), result.psi_si, result.grid, line)
+    assert np.allclose(section['psi'], section['psi'][::-1], atol=1e-9)
+    # At half depth, both walls and the central opening are present.
+    k = np.argmin(abs(np.asarray(section['z_um']) + 12))
+    row = section['psi'][:, k]
+    assert row[0] < 0 and row[-1] < 0 and row[len(row)//2] > 0
+
+
+def test_rounding_keeps_symmetry_and_extends_only_field():
+    data = small(long=True)
+    mid, end = plan_tile(data, field_margin_um=32)
+    assert mid['window_um'][:2] == [0, 0]
+    assert end['window_um'][:2] == [0, 128]
+    for plan in (mid, end):
+        dx = plan['dx_um']
+        assert all(n % 8 == 0 for n in plan['shape'])
+        assert plan['z_extent_um'][0] == -(np.ceil(24/dx)+2)*dx
+        assert plan['geometry_feature']['x_um'] == 0
