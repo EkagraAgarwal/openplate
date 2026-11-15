@@ -2,7 +2,7 @@
 
 Install the official `mcp` Python SDK and the normal sample3d / analysis3d /
 render3d dependencies in the Python environment used by the client. Real geometry
-requires `shapely` (not included in the task's isolated test dependency list).
+requires `shapely`.
 SDK v1 exposes FastMCP; SDK v2 renames it MCPServer. The wiring supports both
 official APIs (use `mcp<2` if you specifically require the FastMCP class name).
 Start with:
@@ -37,7 +37,7 @@ the ID returned by `run_sample`.
 | Tool | Example arguments |
 | --- | --- |
 | `validate_spec(spec: dict)` | `{"spec": SPEC}` — returns `ok` and field/value/message/fix errors. |
-| `plan_run(spec: dict)` | `{"spec": SPEC}` — no solver; estimates use `est_time_s`. |
+| `plan_run(spec: dict)` | `{"spec": SPEC}` — no solver; returns representative `tiles`, total `n_cells` and total `est_time_s`. Each tile also uses `est_time_s`. |
 | `run_sample(spec: dict)` | `{"spec": SPEC}` — immediately returns `run_id`. |
 | `get_status(run_id: str)` | `{"run_id":"0123456789ab-1"}` — state, dimensionless progress, message, error. |
 | `get_manifest(run_id: str)` | `{"run_id":"0123456789ab-1"}` — completed manifest. |
@@ -50,6 +50,18 @@ the ID returned by `run_sample`.
 `front` (only surface uses a 3-D camera). Section rendering without a polyline
 uses a centre-y cut along x; call `cross_section` for a custom cut. No full field
 arrays are returned. Missing numerical crossings become JSON null.
+
+The shipped single-trench example exceeds the standard-quality CPU cell cap.
+`plan_run` preserves the planner's actionable error; explicitly set
+`numerics.quality` to `preview` to allow automatic coarsening, or request a
+coarser `numerics.dx_um`. Quality is never silently changed.
+
+For multi-tile runs, analysis and rendering use the first representative tile
+listed in `tiles.json` (the first feature's profile, not a trench-end diagnostic).
+These tools use its stored, symmetry-reduced domain; they do not combine tiles
+into a whole-sample field. The manifest still describes every tile. Legacy runs
+with a single tile at the run root remain readable. Returned PNG paths are plain
+strings pointing below the configured root.
 
 Runs live at `root/<first 12 hex of canonical spec_hash>-<counter>`, with counters
 starting at one and allocated by atomic directory creation. Use a dedicated root

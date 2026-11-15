@@ -94,7 +94,15 @@ class RunService:
         if planner is None:
             from platesim.sample3d import plan_tile
             planner = plan_tile
-        plan = dict(planner(model))
+        planned = planner(model)
+        if isinstance(planned, list):
+            tiles = [dict(tile) for tile in planned]
+            for tile in tiles:
+                if "est_seconds" in tile:
+                    tile["est_time_s"] = tile.pop("est_seconds")
+            return {"tiles": tiles, "n_cells": sum(t["n_cells"] for t in tiles),
+                    "est_time_s": sum(t["est_time_s"] for t in tiles)}
+        plan = dict(planned)
         # Section 10b uses est_seconds; agent quantities carry a suffix unit.
         if "est_seconds" in plan:
             plan["est_time_s"] = plan.pop("est_seconds")
@@ -182,6 +190,14 @@ class RunService:
         # Result readers follow paths in this directory, so reject escaping links.
         for child in path.rglob("*"):
             self._file(child)
+        if not (path / "grid.json").is_file():
+            plans = json.loads(self._file(path / "tiles.json").read_text(encoding="utf-8"))
+            # The first representative tile is the profile, not a trench-end
+            # diagnostic. Keep old single-tile result directories readable too.
+            tile_id = plans[0]["tile_id"]
+            if not isinstance(tile_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]+", tile_id):
+                raise ValueError("Invalid representative tile_id")
+            path = self._file(path / "tiles" / tile_id)
         return TileResult(path)
 
     @_guard("polyline_um", "Use at least two distinct finite [x_um, y_um] points inside the tile.")
