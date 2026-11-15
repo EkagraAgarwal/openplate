@@ -31,13 +31,22 @@ def top_height(psi, grid: Grid3D):
 
 def run_tile(psi_si, grid: Grid3D, j_net_mA_cm2, duration_s, delta_um=64.0, params=None, T_C=22.0,
              run_dir=None, n_frames=10, dt_max=120.0, cfl=0.3, reinit_every=4, scheme="weno5",
-             backend="auto", field_mask=None, progress=None, meta=None, volume_correct=False):
+             backend="auto", field_mask=None, progress=None, meta=None, volume_correct=False, flow=None,
+             linear="auto"):
     """Plate the bare geometry psi_si for duration_s at the net current density j_net_mA_cm2.
 
     field_mask: bool (nx, ny) columns that count as "field" for the bulk-plane height; default: columns
     whose bare surface lies within one cell of the highest bare surface.
+    flow: None (no convection) or dict with any of shear_rate_s (0), shear_dir ((1, 0), in-plane),
+    gravity_dir (None = no buoyancy; e.g. (0, -1, 0) for gravity along -y), beta_L_mol (0.07, solutal
+    expansion per mol/L Cu2+), nu_cm2_s (0.0114), update_every (5 steps).  Steady Stokes
+    (platesim.flow3d) with the lid at the bulk plane, recomputed every update_every steps from the
+    latest Cu2+ field (lagged one solve) and used to advect Cu2+ in the field solve.
     Returns a TileResult when run_dir is given, else a dict with the final psi and the series."""
-    solver = FieldSolver(params, T_C)
+    solver = FieldSolver(params, T_C, linear=linear)
+    fl = None if flow is None else dict(dict(shear_rate_s=0.0, shear_dir=(1.0, 0.0), gravity_dir=None,
+                                             beta_L_mol=0.07, nu_cm2_s=0.0114, update_every=5), **flow)
+    flow_faces, flow_info = None, {}
     p, ph = solver.p, solver.ph
     dx, per = grid.dx, grid.periodic
     z0 = grid.origin[2]
@@ -56,7 +65,7 @@ def run_tile(psi_si, grid: Grid3D, j_net_mA_cm2, duration_s, delta_um=64.0, para
         writer = TileResultWriter(run_dir, grid, psi.astype(np.float32), meta=info)
     frame_times = np.linspace(0.0, duration_s, max(int(n_frames), 2))
     series = {k: [] for k in ("t_s", "charge_C_cm2", "solid_volume_cm3", "faraday_volume_cm3", "V",
-                              "cu_balance_rel", "ct_min_front", "outer_iterations")}
+                              "cu_balance_rel", "ct_min_front", "outer_iterations", "flow_umax_um_s")}
     t, step, state, next_frame, charge = 0.0, 0, None, 0, 0.0
     wall0 = time.time()
 
@@ -67,7 +76,8 @@ def run_tile(psi_si, grid: Grid3D, j_net_mA_cm2, duration_s, delta_um=64.0, para
                    faraday_volume_cm3=charge * area * ph.Mfac, V=out["V"],
                    cu_balance_rel=out["info"]["cu_balance_rel"],
                    ct_min_front=out["info"]["ct_min_front"],
-                   outer_iterations=float(out["info"]["outer"]))
+                   outer_iterations=float(out["info"]["outer"]),
+                   flow_umax_um_s=float(flow_info.get("umax_cm_s", 0.0)) * 1e4)
         series["t_s"].append(t)
         for key, value in row.items():
             series[key].append(value)
@@ -79,8 +89,21 @@ def run_tile(psi_si, grid: Grid3D, j_net_mA_cm2, duration_s, delta_um=64.0, para
 
     while True:
         z_plane = float(np.mean(top_height(psi, grid)[field_mask])) + delta_um * 1e-4
-        out = solver.solve(psi, dx, z0, z_plane, j, periodic=per, state=state)
-        state = out["state"]
+        if fl is not None and (flow_faces is None or step % int(fl["update_every"]) == 0):
+            # flow from the latest Cu2+ field (one solve behind); the very first one from a no-flow solve
+            if state is None or flow_faces is None:
+                prev = solver.solve(psi, dx, z0, z_plane, j, periodic=per, state=state, flow_faces=flow_faces)
+                state, ct_prev = prev["state"], prev["ct"]
+            from ..flow3d import buoyancy_force, solve_stokes3d
+            body = None
+            if fl["gravity_dir"] is not None:
+                body = buoyancy_force(ct_prev, p.c_bulk * 1e3, fl["beta_L_mol"], tuple(fl["gravity_dir"]))
+            fsol = solve_stokes3d(psi, dx, z0, z_plane, periodic=per, shear_rate_s=fl["shear_rate_s"],
+                                  shear_dir=tuple(fl["shear_dir"]), body_force=body, nu_cm2_s=fl["nu_cm2_s"])
+            flow_faces = fsol["faces"]
+            flow_info = dict(umax_cm_s=max(float(np.max(np.abs(fsol[k]))) for k in ("ux", "uy", "uz")))
+        out = solver.solve(psi, dx, z0, z_plane, j, periodic=per, state=state, flow_faces=flow_faces)
+        state, ct_prev = out["state"], out["ct"]
         if next_frame < len(frame_times) and t >= frame_times[next_frame] - 1e-9:
             save(out)
         if t >= duration_s - 1e-9:

@@ -89,6 +89,30 @@ def test_cross_flow_changes_floor_and_balance_closes():
     assert out["info"]["ct_min_front"] > base["info"]["ct_min_front"] + 1e-4
 
 
+def _floor_over_field(res, psi0, grid):
+    from platesim.tile3d.sim import top_height
+    grown = (top_height(res["psi"], grid) - top_height(psi0, grid))[:, 0] / UM
+    xc = grid.centers()[0] / UM
+    return grown[np.abs(xc) < 16].mean() / grown[np.abs(xc) > 48].mean(), grown
+
+
+def test_run_tile_flow_axial_noop_and_shear_helps():
+    from platesim.tile3d.sim import run_tile
+    grid, psi = trench(nz_um=320)
+    kw = dict(delta_um=64.0, params=Params(suppressor=False), n_frames=2)
+    base = run_tile(psi, grid, 15.0, 900.0, **kw)
+    axial = run_tile(psi, grid, 15.0, 900.0, flow=dict(gravity_dir=(0.0, -1.0, 0.0), update_every=2), **kw)
+    shear = run_tile(psi, grid, 15.0, 900.0, flow=dict(shear_rate_s=30.0, update_every=2), **kw)
+    r0, g0 = _floor_over_field(base, psi, grid)
+    ra, ga = _floor_over_field(axial, psi, grid)
+    rs, _ = _floor_over_field(shear, psi, grid)
+    assert max(axial["series"]["flow_umax_um_s"]) > 0.1          # buoyant flow exists along the trench
+    assert np.max(np.abs(ga - g0)) < 1e-3                         # ... and changes nothing (dc/dy = 0)
+    assert rs > r0 + 0.005                                        # cross shear feeds the floor
+    for r in (base, axial, shear):
+        assert abs(r["summary"]["faraday_error_rel"]) < 0.05
+
+
 @pytest.mark.parametrize("linear", ["mg", "amg"])
 def test_iterative_matches_direct_with_flow(linear):
     grid, psi = trench(ny=8)
