@@ -10,6 +10,11 @@ const L1_UNUSED = {
     'Not used by L1 yet: orientation, up_edge (no buoyancy), taped, area_cm2. stir_shear_1_s (if set, EXPERIMENTAL) adds resolved shear flow with the lid at the bulk plane; delta_um still sets the bulk plane. stir_angle_deg sets the shear direction in die axes. Sheared runs use full periodic tiles and are ~20x slower (quick_trench: 24 min instead of ~1 min).'
 }
 
+const FIELD_LABELS: Record<string, string> = {
+  'layout.die_um.0': 'die width x (µm)',
+  'layout.die_um.1': 'die height y (µm)'
+}
+
 export function SpecEditor({
   spec,
   onChange,
@@ -45,7 +50,7 @@ export function SpecEditor({
     })
     return (
       <label key={path} className={`sample3d-field ${issue ? 'sample3d-invalid' : ''}`}>
-        <span>{path.split('.').slice(-1)[0]}</span>
+        <span>{FIELD_LABELS[path] ?? path.split('.').slice(-1)[0]}</span>
         {choices ? (
           <select
             aria-label={path}

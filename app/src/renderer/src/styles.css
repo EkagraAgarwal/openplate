@@ -118,6 +118,11 @@ code {
 }
 
 .brand-mark {
+  align-self: center;
+  flex: none;
+}
+
+.brand-accent {
   color: var(--accent);
 }
 

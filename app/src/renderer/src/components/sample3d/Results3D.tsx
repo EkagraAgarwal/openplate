@@ -9,7 +9,7 @@ import {
   type Series3D,
   type Tile3D
 } from '../../api/client3d'
-import { decimateHeight, outlineTraces, polylineFromClicks } from '../../lib/sample3d'
+import { decimateHeight, depositFill, outlineTraces, polylineFromClicks } from '../../lib/sample3d'
 import { Plot3D } from './Plot3D'
 import { ManifestTables } from './ManifestTables'
 import { CompareRuns } from './CompareRuns'
@@ -140,7 +140,9 @@ export function Results3D({
     : 1
   return (
     <section>
-      <h3>Results · {id}</h3>
+      <h3>
+        Results <span className="muted small mono" title={id}>{id.slice(0, 8)}</span>
+      </h3>
       <div className="row gap sample3d-controls">
         <label>
           Tile{' '}
@@ -197,7 +199,8 @@ export function Results3D({
           <Plot3D
             title="Cu / Si section"
             data={[
-              ...outlineTraces(section.cu_outline, 'Cu selected frame', '#b87333', false, true),
+              ...depositFill(section.cu_outline, section.si_outline),
+              ...outlineTraces(section.cu_outline, 'Cu selected frame', '#b87333'),
               ...outlineTraces(initial?.cu_outline ?? [], 'Cu initial', '#b87333', true),
               ...outlineTraces(section.si_outline, 'Si', '#888888')
             ]}
@@ -234,13 +237,41 @@ export function Results3D({
                 xaxis: { title: 'x (µm)' },
                 yaxis: { title: 'y (µm)' },
                 zaxis: { title: 'Height (µm)' },
+                // Tiles put the feature centre at the origin: look at that corner.
+                camera: { eye: { x: -1.5, y: -1.5, z: 1.1 } },
                 aspectmode: 'manual',
                 aspectratio: { x: 1, y: spanY / spanX, z: (exaggeration * spanZ) / spanX }
               }
             }}
           />
         )}
-        {series && (
+        {series && !series.V.some((v) => v != null) && (
+          <Plot3D
+            title="Deposited Cu vs Faraday"
+            data={[
+              {
+                type: 'scatter',
+                mode: 'lines+markers',
+                name: 'Simulated Cu',
+                x: series.t_s.map((t) => t / 60),
+                y: series.solid_volume_cm3.map((v) => (v == null ? null : v * 1e12))
+              },
+              {
+                type: 'scatter',
+                mode: 'lines',
+                name: 'Faraday limit',
+                line: { dash: 'dash' },
+                x: series.t_s.map((t) => t / 60),
+                y: series.faraday_volume_cm3.map((v) => (v == null ? null : v * 1e12))
+              }
+            ]}
+            layout={{
+              xaxis: { title: 'Time (min)' },
+              yaxis: { title: 'Deposited Cu volume (µm³)' }
+            }}
+          />
+        )}
+        {series && series.V.some((v) => v != null) && (
           <Plot3D
             title="Time series"
             data={[

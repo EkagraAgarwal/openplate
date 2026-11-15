@@ -91,6 +91,27 @@ export function outlineTraces(
     ...(filled ? { fill: 'toself', fillcolor: 'rgba(184,115,51,0.45)' } : {})
   }))
 }
+/**
+ * Shaded deposit between the Cu surface and the Si surface on a section.
+ * Outlines are open lines along the cut, so the fill polygon is the Cu line followed by the
+ * reversed Si line. Returns no trace unless each outline is a single line.
+ */
+export function depositFill(cu: Point3D[][], si: Point3D[][]): Record<string, unknown>[] {
+  if (cu.length !== 1 || si.length !== 1 || cu[0].length < 2 || si[0].length < 2) return []
+  const poly = [...cu[0], ...[...si[0]].reverse(), cu[0][0]]
+  return [
+    {
+      type: 'scatter',
+      mode: 'none',
+      name: 'Deposit',
+      hoverinfo: 'skip',
+      x: poly.map((p) => p[0]),
+      y: poly.map((p) => p[1]),
+      fill: 'toself',
+      fillcolor: 'rgba(184,115,51,0.45)'
+    }
+  ]
+}
 /** Bound both axes, preserve endpoints, and transpose x-major API arrays for Plotly. */
 export function decimateHeight(x: number[], y: number[], values: (number | null)[][], maxN = 200) {
   const indices = (n: number) => {

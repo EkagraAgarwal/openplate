@@ -376,7 +376,14 @@ export function App() {
         )}
         <header className="topbar">
           <div className="brand">
-            <span className="brand-mark">▣</span> platesim
+            <svg className="brand-mark" viewBox="0 0 64 64" width="22" height="22" aria-hidden="true">
+              <rect x="2" y="2" width="60" height="60" rx="14" fill="#1f6feb" />
+              <path d="M10 26 H24 V48 H40 V26 H54 V54 H10 Z" fill="#dbe7fb" />
+              <path d="M10 18 H30 V40 H34 V18 H54 V26 H40 V48 H24 V26 H10 Z" fill="#e08a4a" />
+            </svg>
+            <span>
+              Open<span className="brand-accent">Plate</span>
+            </span>
             <span className="muted small">Cu electroplating simulator</span>
           </div>
           <div className="topbar-right">

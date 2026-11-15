@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Sample3DApi, Sample3DError, url3d } from '@/api/client3d'
 import {
   decimateHeight,
+  depositFill,
   expandFeatures,
   featurePath,
   tileFootprints,
@@ -128,6 +129,26 @@ describe('sample spec helpers', () => {
     expect(outlineTraces(lines, 'Initial', '#888', true)[0]).toMatchObject({
       line: { dash: 'dash' }
     })
+  })
+  it('fills the deposit between open Cu and Si section lines', () => {
+    const cu: [number, number][][] = [
+      [
+        [2, 3],
+        [0, 1]
+      ]
+    ]
+    const si: [number, number][][] = [
+      [
+        [2, 0],
+        [0, -1]
+      ]
+    ]
+    expect(depositFill(cu, si)[0]).toMatchObject({
+      x: [2, 0, 0, 2, 2],
+      y: [3, 1, -1, 0, 3],
+      fill: 'toself'
+    })
+    expect(depositFill([...cu, ...cu], si)).toEqual([])
   })
   it('transposes asymmetric x-major heights and decimates preserving endpoints and nulls', () => {
     expect(
