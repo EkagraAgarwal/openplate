@@ -3,6 +3,13 @@ import type { FieldIssue, Plan3D, SampleSpec3D } from '../../api/client3d'
 import { defaultSpec3D, parseSpec, recipeMath, specToForm } from '../../lib/sample3d'
 import { LayoutPreview } from './LayoutPreview'
 
+/** Spec fields the L1 sample pipeline does not read yet (kept in the spec for later physics levels). */
+const L1_UNUSED = {
+  bath: 'Not used by L1 yet: cl_ppm (no additive/chloride chemistry). Cu and H2SO4 set the bulk Cu2+, H+ and SO4 2- (migration); conductivity is an uncalibrated default.',
+  setup:
+    'Not used by L1 yet: orientation, up_edge, stir_shear_1_s, stir_angle_deg (no resolved flow or buoyancy in sample runs), taped, area_cm2. delta_um (boundary-layer thickness) carries the stirring.'
+}
+
 export function SpecEditor({
   spec,
   onChange,
@@ -304,6 +311,7 @@ export function SpecEditor({
               {field('bath.name', spec.bath.name, undefined, true)}
               {fields('bath', spec.bath, ['cu_g_L', 'h2so4_g_L', 'cl_ppm', 'temperature_C'])}
             </div>
+            <p className="muted">{L1_UNUSED.bath}</p>
           </fieldset>
           <fieldset>
             <legend>Setup</legend>
@@ -329,6 +337,7 @@ export function SpecEditor({
               />{' '}
               Taped
             </label>
+            <p className="muted">{L1_UNUSED.setup}</p>
           </fieldset>
           <fieldset>
             <legend>Numerics</legend>
