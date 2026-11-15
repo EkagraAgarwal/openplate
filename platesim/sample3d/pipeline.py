@@ -33,13 +33,47 @@ def _duration(step):
             else step.charge_C_cm2 * 1000 / step.j_net_mA_cm2)
 
 
+def _shear_assumption(spec):
+    return (f'Resolved Couette shear G={spec.setup.stir_shear_1_s:g} 1/s at angle '
+            f'{spec.setup.stir_angle_deg:g} deg (die axes); lid at the bulk plane; no buoyancy.')
+
+
+def _tile_rotation(plan):
+    """Degrees from die x to the tile x axis (planner: feature-local tiles; arrays keep die axes)."""
+    return float(plan.get('rotation_from_die_deg', 0.0))
+
+
+def _tile_flow(spec, plan):
+    """Rotate die-frame shear and reject flow across any no-flux tile side."""
+    angle = np.deg2rad(spec.setup.stir_angle_deg - _tile_rotation(plan))
+    direction = (float(np.cos(angle)), float(np.sin(angle)))
+    if spec.setup.stir_shear_1_s > 0:
+        for axis, component in zip('xy', direction):
+            boundaries = [f'{axis}_{side}' for side in ('lo', 'hi')
+                          if plan['side_bc'].get(f'{axis}_{side}') == 'symmetry']
+            if boundaries and abs(component) > 1e-12:
+                raise ValueError(
+                    f'setup.stir_shear_1_s={spec.setup.stir_shear_1_s:g}: resolved shear '
+                    f'crosses symmetry/no-flux boundary {boundaries} of tile {plan["tile_id"]}; '
+                    'fix: use stir_angle_deg along the symmetry axis, or a full tile '
+                    '(non-mirrored periodic array cell). Quarter tiles and trench-end '
+                    'diagnostics have no compatible nonzero in-plane shear direction.')
+    return dict(shear_rate_s=spec.setup.stir_shear_1_s, shear_dir=direction,
+                lid_um=None, update_every=5, axial_net_flux_zero=None)
+
+
 def plan_tile(spec: SampleSpec, *, field_margin_um=None) -> list[dict]:
     """Return representative feature-local tiles; see README for assumptions."""
     from .planner import plan_features
     spec = _spec(spec)
     charge = sum(s.j_net_mA_cm2 * 1e-3 * _duration(s) for s in spec.recipe.steps)
-    return plan_features(spec, charge * MFAC * 1e4,
-                         sum(_duration(s) for s in spec.recipe.steps), field_margin_um)
+    plans = plan_features(spec, charge * MFAC * 1e4,
+                          sum(_duration(s) for s in spec.recipe.steps), field_margin_um)
+    if spec.setup.stir_shear_1_s is not None:
+        for plan in plans:
+            _tile_flow(spec, plan)  # validate every tile before creating output or solving
+            plan['assumptions'].append(_shear_assumption(spec))
+    return plans
 
 
 def _layout(spec):
@@ -159,6 +193,7 @@ def _run_one(spec, plan, out_dir, progress=None) -> dict:
         raise ValueError('numerics: only physics="L1", use_surrogate=False supported; fix these fields.')
     if isinstance(spec.numerics.device, int):
         raise ValueError('numerics.device: L1 sample pipeline is CPU-only; fix: use "cpu" or "auto".')
+    flow_kwargs = {} if spec.setup.stir_shear_1_s is None else dict(flow=_tile_flow(spec, plan))
     bare, grid = build_geometry(spec, plan)
     psi = bare.copy()
     out = Path(out_dir)
@@ -185,7 +220,8 @@ def _run_one(spec, plan, out_dir, progress=None) -> dict:
                          f'recipe {index + 1}/{len(durations)}: {message}')
         step_result = run_tile(psi, grid, step.j_net_mA_cm2, duration,
                           delta_um=spec.setup.delta_um, params=params, T_C=spec.bath.temperature_C,
-                          n_frames=2, backend='numpy', field_mask=field_mask, progress=report)
+                           n_frames=2, backend='numpy', field_mask=field_mask, progress=report,
+                           **flow_kwargs)
         psi = step_result['psi']
         elapsed += duration
         charge += step.j_net_mA_cm2 * 1e-3 * duration
@@ -238,7 +274,9 @@ def _run_one(spec, plan, out_dir, progress=None) -> dict:
         Check(name='cu_balance_rel', value=worst_balance, limit=.01, passed=worst_balance <= .01)],
         waveform_sensitivity='L1 uses only the net current; pulse timing and reverse-current effects '
                              'beyond the cycle average are not resolved.',
-        artifacts=artifacts, summary_text='Uncalibrated L1, CPU, no additives or resolved flow. '
+        artifacts=artifacts, summary_text=('Uncalibrated L1, CPU, no additives or resolved flow. '
+        if spec.setup.stir_shear_1_s is None else 'Uncalibrated L1, CPU, no additives. '
+        + _shear_assumption(spec) + ' ') +
         'One result retains original silicon and cumulative step-end frames. '
         'Seed thinning is not modelled; conductivity and kinetics use uncalibrated engine defaults. '
         'Faraday volume correction is disabled; checks report actual numerical drift.')
@@ -295,7 +333,10 @@ def run_sample(spec: SampleSpec | dict | str, out_dir, progress=None, *, field_m
                    'Mirrored renders/analysis reconstruct centre cuts; end cuts are not reflected. '
                    'Weights count physical copies, not symmetry sectors; do not sum overlapping diagnostic volumes. '
                    'Deposited volumes are simulated-sector volumes, while void analysis uses the reflected view. '
-                   'No additives, resolved flow or seed thinning; conductivity/kinetics are uncalibrated defaults. '
+                   + ('No additives, resolved flow or seed thinning; conductivity/kinetics are uncalibrated defaults. '
+                      if spec.setup.stir_shear_1_s is None else
+                      'No additives or seed thinning; conductivity/kinetics are uncalibrated defaults. '
+                      + _shear_assumption(spec) + ' ')
                    + ' | '.join(descriptions))
     payload = Manifest.model_validate(payload).model_dump(mode='json')
     temporary = out / 'manifest.json.tmp'

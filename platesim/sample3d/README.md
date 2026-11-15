@@ -35,7 +35,8 @@ Existing output directories are refused.
   depth in a depth-vs-width table used conservatively. Each feature uses its own
   layer's etch. Isolated domains are in feature-local coordinates, with the
   narrow axis x and the long axis y; the source centre and rotation assumption
-  are recorded. Rotating local axes is valid for isotropic L1, not resolved flow.
+   are recorded. Resolved shear directions are transformed from die axes into
+   these local axes (including any narrow/long-axis swap).
   Imported file layouts currently require conversion to parametric features;
   they are rejected explicitly rather than silently treated as isolated shapes.
 
@@ -104,5 +105,23 @@ diameter. Rendering metadata is filtered to the strict Artifact schema.
 Only CPU L1 without a surrogate is supported. Net current, temperature, bulk
 Cu and fully dissociated acid migration enhancement are mapped to the engine;
 pulse timing beyond its cycle average, chloride/additives, seed thinning,
-orientation, stirring and resolved flow are not modelled. Conductivity and
-kinetics remain uncalibrated engine defaults.
+orientation and up_edge (buoyancy) are not modelled. Conductivity and kinetics
+remain uncalibrated engine defaults.
+
+## Optional resolved shear
+
+`setup.stir_shear_1_s=None` preserves the no-flow solver path (no `flow` argument).
+When set, it supplies Couette shear in 1/s; `stir_angle_deg` is measured in die
+axes, not tile axes. The moving lid remains at the bulk plane set by `delta_um`;
+flow updates every five solver steps, with no buoyancy and the solver's default
+axial-flux constraint. Plans and manifest summaries record the shear assumption.
+
+Mirrored tiles have no-flux sides that shear cannot cross, so a sheared spec is
+planned with full tiles periodic in x and y instead: `trench_mid_periodic`
+(full width, periodic image of the trench every 2*(w/2 + margin)),
+`compact_periodic`, and full `array_periodic` unit cells. The trench-end
+diagnostic is omitted under shear. Each plan carries `rotation_from_die_deg`,
+used to turn the die-axis shear direction into tile axes. Full tiles are 2-4x
+larger than mirrored ones and add Stokes solves, so sheared runs are several
+times slower. A shear component normal to a remaining no-flux side is still
+rejected before any tile runs.

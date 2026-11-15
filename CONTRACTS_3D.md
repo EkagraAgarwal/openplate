@@ -279,6 +279,13 @@ def run_sample(spec: SampleSpec | dict | str, out_dir, progress=None) -> dict
 
 CLI: `python -m platesim.sample3d run <spec.json> --out <dir>` and `... plan <spec.json>`.
 
+Resolved shear (2026-11-15): `setup.stir_shear_1_s` (None = no flow, unchanged path) drives
+`run_tile(flow=dict(shear_rate_s, shear_dir rotated from die axes by -rotation_from_die_deg,
+lid_um=None, update_every=5))`. Sheared specs plan full tiles periodic in x and y
+(`trench_mid_periodic`, `compact_periodic`, `array_periodic`; no trench-end diagnostic), since
+mirrored tiles have no-flux sides. Plans carry `rotation_from_die_deg`. Buoyancy
+(orientation/up_edge) stays unused.
+
 ## 10c. Agent interface (`platesim/mcp3d/`)
 
 MCP server (`mcp` Python SDK, FastMCP, stdio) exposing tools that wrap 10b and section 9:

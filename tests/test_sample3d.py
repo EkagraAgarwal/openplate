@@ -196,3 +196,120 @@ def test_rounding_keeps_symmetry_and_extends_only_field():
         assert all(n % 8 == 0 for n in plan['shape'])
         assert plan['z_extent_um'][0] == -(np.ceil(24/dx)+2)*dx
         assert plan['geometry_feature']['x_um'] == 0
+
+
+def test_default_does_not_pass_flow(tmp_path, monkeypatch):
+    from platesim.tile3d import sim
+
+    class Captured(Exception):
+        pass
+
+    def capture(*args, **kwargs):
+        assert 'flow' not in kwargs
+        raise Captured
+
+    monkeypatch.setattr(sim, 'run_tile', capture)
+    data = small(long=True)
+    assert data['setup'].get('stir_shear_1_s') is None
+    plans = plan_tile(data)
+    assert all(not any('Resolved Couette shear' in a for a in p['assumptions']) for p in plans)
+    with pytest.raises(Captured):
+        run_sample(data, tmp_path / 'default')
+
+
+def test_rotated_parallel_shear_kwargs(tmp_path, monkeypatch):
+    from platesim.sample3d.pipeline import _run_one, _spec
+    from platesim.tile3d import sim
+
+    data = small(long=True)
+    data['layout']['features'][0]['rotation_deg'] = 90
+    mid = plan_tile(data, field_margin_um=32)[0]
+    # Only the middle strip has a single nonperiodic axis. The end diagnostic
+    # also has a no-flux y cut and cannot support this axial shear.
+    data['setup'].update(stir_shear_1_s=30, stir_angle_deg=180)
+
+    class Captured(Exception):
+        pass
+
+    def capture(*args, **kwargs):
+        flow = kwargs['flow']
+        assert flow['shear_rate_s'] == 30
+        assert flow['shear_dir'] == pytest.approx((0, 1), abs=1e-12)
+        assert flow['lid_um'] is None
+        assert flow['update_every'] == 5
+        assert flow['axial_net_flux_zero'] is None
+        assert set(flow) == {'shear_rate_s', 'shear_dir', 'lid_um',
+                             'update_every', 'axial_net_flux_zero'}
+        raise Captured
+
+    monkeypatch.setattr(sim, 'run_tile', capture)
+    with pytest.raises(Captured):
+        _run_one(_spec(data), mid, tmp_path / 'parallel')
+
+    data['setup']['stir_angle_deg'] = 360
+    def capture_reverse(*args, **kwargs):
+        assert kwargs['flow']['shear_dir'] == pytest.approx((0, -1), abs=1e-12)
+        raise Captured
+    monkeypatch.setattr(sim, 'run_tile', capture_reverse)
+    with pytest.raises(Captured):
+        _run_one(_spec(data), mid, tmp_path / 'parallel_reverse')
+
+
+@pytest.mark.parametrize('long,angle', [(False, 0), (False, 45), (True, 0), (True, 90)])
+def test_shear_plans_full_periodic_tiles(long, angle):
+    # mirrored tiles have no-flux sides that shear cannot cross: sheared runs plan full periodic tiles
+    from platesim.sample3d.pipeline import _tile_flow, _spec
+    data = small(long=long)
+    data['setup'].update(stir_shear_1_s=30, stir_angle_deg=angle)
+    plans = plan_tile(data)
+    assert [p['kind'] for p in plans] == (['trench_mid_periodic'] if long else ['compact_periodic'])
+    for p in plans:
+        assert p['mirror_axes'] == [] and all(v == 'periodic' for v in p['side_bc'].values())
+        assert p['window_um'][0] < 0 < p['window_um'][2]
+        assert any('periodic image' in a for a in p['assumptions'])
+        flow = _tile_flow(_spec(data), p)           # no symmetry error
+        a = np.deg2rad(angle - p['rotation_from_die_deg'])
+        assert flow['shear_dir'] == pytest.approx((np.cos(a), np.sin(a)))
+    # without shear the mirrored tiles are unchanged
+    data['setup']['stir_shear_1_s'] = None
+    assert all(p['mirror_axes'] for p in plan_tile(data))
+
+
+def test_real_preview_resolved_shear(tmp_path, monkeypatch):
+    from platesim.tile3d import sim
+
+    data = example('quick_trench')
+    data['layout']['die_um'] = [600, 600]
+    feature = data['layout']['features'][0]
+    # A rotated array uses the planner's existing full periodic cell. Quarter
+    # compact tiles cannot support any nonzero in-plane shear honestly.
+    feature.update(rotation_deg=30,
+                   array=dict(nx=2, ny=2, pitch_x_um=160, pitch_y_um=160))
+    data['numerics']['dx_um'] = 10
+    data['recipe']['steps'][0]['duration_h'] = .1
+    captured = []
+    real_run_tile = sim.run_tile
+
+    def capture(*args, **kwargs):
+        captured.append(kwargs)
+        return real_run_tile(*args, **kwargs)
+
+    monkeypatch.setattr(sim, 'run_tile', capture)
+    baseline = run_sample(data, tmp_path / 'still')
+    assert all('flow' not in kw for kw in captured)
+    captured.clear()
+    data['setup'].update(stir_shear_1_s=30, stir_angle_deg=0)
+    out = tmp_path / 'shear'
+    flowing = run_sample(data, out)
+    assert captured and all(kw['flow']['shear_rate_s'] == 30 for kw in captured)
+    assert all(kw['flow']['shear_dir'] == pytest.approx((1, 0)) for kw in captured)
+    faraday = [c for c in flowing['checks'] if c['name'].endswith('faraday_error_rel')]
+    assert faraday and all(c['passed'] for c in faraday)
+    def ratio(manifest):
+        return next(q['value'] for q in manifest['quantities'] if q['name'] == 'floor_over_field')
+    assert abs(ratio(flowing) - ratio(baseline)) > 1e-6
+    assert 'Resolved Couette shear G=30 1/s at angle 0' in flowing['summary_text']
+    assert 'no buoyancy' in flowing['summary_text']
+    assert 'No additives, resolved flow' not in flowing['summary_text']
+    plans = json.loads((out / 'tiles.json').read_text())
+    assert all(any('Resolved Couette shear G=30' in a for a in p['assumptions']) for p in plans)
