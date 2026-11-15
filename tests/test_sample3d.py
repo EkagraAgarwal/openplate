@@ -271,8 +271,11 @@ def test_shear_plans_full_periodic_tiles(long, angle):
         a = np.deg2rad(angle - p['rotation_from_die_deg'])
         assert flow['shear_dir'] == pytest.approx((np.cos(a), np.sin(a)))
     # without shear the mirrored tiles are unchanged
-    data['setup']['stir_shear_1_s'] = None
-    assert all(p['mirror_axes'] for p in plan_tile(data))
+    for off in (None, 0):                            # 0 means "no shear", same as None
+        data['setup']['stir_shear_1_s'] = off
+        plans = plan_tile(data)
+        assert all(p['mirror_axes'] for p in plans)
+        assert not any('Resolved Couette shear' in a for p in plans for a in p['assumptions'])
 
 
 def test_real_preview_resolved_shear(tmp_path, monkeypatch):

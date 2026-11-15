@@ -7,7 +7,7 @@ import { LayoutPreview } from './LayoutPreview'
 const L1_UNUSED = {
   bath: 'Not used by L1 yet: cl_ppm (no additive/chloride chemistry). Cu and H2SO4 set the bulk Cu2+, H+ and SO4 2- (migration); conductivity is an uncalibrated default.',
   setup:
-    'Not used by L1 yet: orientation, up_edge (no buoyancy), taped, area_cm2. stir_shear_1_s (if set) adds resolved shear flow; delta_um still sets the bulk plane. stir_angle_deg sets the shear direction in die axes. Sheared runs use full periodic tiles and are ~20x slower (quick_trench: 24 min instead of ~1 min).'
+    'Not used by L1 yet: orientation, up_edge (no buoyancy), taped, area_cm2. stir_shear_1_s (if set, EXPERIMENTAL) adds resolved shear flow with the lid at the bulk plane; delta_um still sets the bulk plane. stir_angle_deg sets the shear direction in die axes. Sheared runs use full periodic tiles and are ~20x slower (quick_trench: 24 min instead of ~1 min).'
 }
 
 export function SpecEditor({

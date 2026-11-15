@@ -124,4 +124,9 @@ diagnostic is omitted under shear. Each plan carries `rotation_from_die_deg`,
 used to turn the die-axis shear direction into tile axes. Full tiles are 2-4x
 larger than mirrored ones and add Stokes solves, so sheared runs are several
 times slower. A shear component normal to a remaining no-flux side is still
-rejected before any tile runs.
+rejected before any tile runs. `stir_shear_1_s = 0` is the same as None.
+
+**Experimental:** the moving lid sits at the bulk plane (delta_um above the
+field). In the T2.5 comparison that convention differed from the 2-D engine's
+domain-top lid by +0.03 in floor/field at 50/s, while a domain-top lid matched;
+a lid-height option for sample runs is not wired yet.

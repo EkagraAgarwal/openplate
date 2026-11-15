@@ -35,7 +35,7 @@ def _duration(step):
 
 def _shear_assumption(spec):
     return (f'Resolved Couette shear G={spec.setup.stir_shear_1_s:g} 1/s at angle '
-            f'{spec.setup.stir_angle_deg:g} deg (die axes); lid at the bulk plane; no buoyancy.')
+            f'{spec.setup.stir_angle_deg:g} deg (die axes); EXPERIMENTAL: lid at the bulk plane (vs 2-D domain-top lid: +0.03 floor/field at 50/s in T2.5); no buoyancy.')
 
 
 def _tile_rotation(plan):
@@ -69,7 +69,7 @@ def plan_tile(spec: SampleSpec, *, field_margin_um=None) -> list[dict]:
     charge = sum(s.j_net_mA_cm2 * 1e-3 * _duration(s) for s in spec.recipe.steps)
     plans = plan_features(spec, charge * MFAC * 1e4,
                           sum(_duration(s) for s in spec.recipe.steps), field_margin_um)
-    if spec.setup.stir_shear_1_s is not None:
+    if spec.setup.stir_shear_1_s:  # 0 and None both mean no resolved shear
         for plan in plans:
             _tile_flow(spec, plan)  # validate every tile before creating output or solving
             plan['assumptions'].append(_shear_assumption(spec))
@@ -193,7 +193,7 @@ def _run_one(spec, plan, out_dir, progress=None) -> dict:
         raise ValueError('numerics: only physics="L1", use_surrogate=False supported; fix these fields.')
     if isinstance(spec.numerics.device, int):
         raise ValueError('numerics.device: L1 sample pipeline is CPU-only; fix: use "cpu" or "auto".')
-    flow_kwargs = {} if spec.setup.stir_shear_1_s is None else dict(flow=_tile_flow(spec, plan))
+    flow_kwargs = {} if not spec.setup.stir_shear_1_s else dict(flow=_tile_flow(spec, plan))
     bare, grid = build_geometry(spec, plan)
     psi = bare.copy()
     out = Path(out_dir)
@@ -275,7 +275,7 @@ def _run_one(spec, plan, out_dir, progress=None) -> dict:
         waveform_sensitivity='L1 uses only the net current; pulse timing and reverse-current effects '
                              'beyond the cycle average are not resolved.',
         artifacts=artifacts, summary_text=('Uncalibrated L1, CPU, no additives or resolved flow. '
-        if spec.setup.stir_shear_1_s is None else 'Uncalibrated L1, CPU, no additives. '
+        if not spec.setup.stir_shear_1_s else 'Uncalibrated L1, CPU, no additives. '
         + _shear_assumption(spec) + ' ') +
         'One result retains original silicon and cumulative step-end frames. '
         'Seed thinning is not modelled; conductivity and kinetics use uncalibrated engine defaults. '
@@ -334,7 +334,7 @@ def run_sample(spec: SampleSpec | dict | str, out_dir, progress=None, *, field_m
                    'Weights count physical copies, not symmetry sectors; do not sum overlapping diagnostic volumes. '
                    'Deposited volumes are simulated-sector volumes, while void analysis uses the reflected view. '
                    + ('No additives, resolved flow or seed thinning; conductivity/kinetics are uncalibrated defaults. '
-                      if spec.setup.stir_shear_1_s is None else
+                      if not spec.setup.stir_shear_1_s else
                       'No additives or seed thinning; conductivity/kinetics are uncalibrated defaults. '
                       + _shear_assumption(spec) + ' ')
                    + ' | '.join(descriptions))
