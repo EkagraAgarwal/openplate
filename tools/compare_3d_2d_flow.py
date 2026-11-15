@@ -97,7 +97,7 @@ def buoyancy_diagnostic(dx=16.):
                 constrained_pressure_gradient_cm_s2=closed['info']['mean_pressure_gradient_cm_s2'])
 
 
-def compare_flow(kind="shear", shear=None, dx=8., hours=1.):
+def compare_flow(kind="shear", shear=None, dx=8., hours=1., lid_convention="native"):
     if shear is None:
         shear = 10. if kind == 'shear' else 0.
     sim, psi0, grid, field = setup(dx=dx, hours=hours)
@@ -106,6 +106,16 @@ def compare_flow(kind="shear", shear=None, dx=8., hours=1.):
     h0 = heights(sim.psi, g)
     h03 = top_height(psi0, grid)
     name = f"{kind}_G{shear:g}_dx{dx:g}_{hours:g}h"
+    if lid_convention not in ("native", "domain_top", "bulk_plane"):
+        raise ValueError(f"Unknown lid convention: {lid_convention}")
+    if lid_convention != "native":
+        name += "_" + lid_convention
+        # lid_um is relative to the INITIAL mean field, not the silicon z=0.
+        # Keep the original full-height grid for BOTH lid ablations.
+        lid = grid.origin[2] + grid.shape[2] * grid.dx
+        flow['lid_um'] = ((lid - float(h03[field].mean())) * 1e4
+                          if lid_convention == "domain_top" else None)
+        flow['axial_net_flux_zero'] = False
     measured = dict(max_speed_um_s=0., max_face_speed_um_s=0., updates=0)
     native = sim.cavity_flow
 
@@ -161,6 +171,17 @@ def compare_flow(kind="shear", shear=None, dx=8., hours=1.):
                       "Maximum speed means max absolute cell component, not vector norm. 3-D speed sampled at 32 frame times; 2-D at every flow update; reported maxima need not be strict whole-run maxima.",
                   ])
     result['misses'] = [r['quantity'] for r in result['rows'] if r['passed'] is False]
+    result['lid_convention'] = lid_convention
+    result['flow_3d'] = flow
+    result['grid_top_um'] = (grid.origin[2] + grid.shape[2] * grid.dx) * 1e4
+    result['initial_field_mean_um'] = float(h03[field].mean() * 1e4)
+    if lid_convention != "native":
+        result['diagnosis'] = [
+            "Controlled lid ablation: same full-height extruded grid and beta=0.15 in both engines; 3-D periodic x flux is unconstrained in both contrasts.",
+            "domain_top uses the exact 2-D domain top, converted to run_tile's initial-mean-field-relative lid_um; bulk_plane retains the moving mean-field+64um lid.",
+            "2-D lid speed is G*(z_top-H), fixed in time; 3-D is G*(lid-highest front), so matching initial lid position does not keep lid speeds identical as copper grows.",
+            "Residual candidates: 2-D flow every 10 steps or one-cell movement versus 3-D every 5; 2-D initially uniform concentration versus 3-D initially equilibrated no-flow concentration (buoyancy); different growth, redistancing and bulk-plane discretisation. These have not been isolated.",
+            "Both species solvers use SG advection; no volume correction, solver edits, or fitted shear multipliers."]
     return result
 
 
@@ -168,6 +189,23 @@ def axial_invariance(axial, baseline):
     return {f"max_profile_difference_{dim}_um": float(np.max(np.abs(
         np.array(axial[f'profile_{dim}_um']) - baseline[f'profile_{dim}_um'])))
             for dim in ('2d', '3d')}
+
+
+def summarize_matched_lids(results):
+    part = results['partA_T2_5']
+    part['status'] = 'complete' if len(part['cases']) == 4 else 'partial'
+    part['verdicts'] = {c['case']: not c['misses'] for c in part['cases']}
+    part['next_diagnosis'] = (
+        'Fixed full-domain lid closes shear 50/s. Across buoyancy still misses at the '
+        'matched full-domain lid; the unconstrained bulk-plane contrast passes, but '
+        'has a physically different velocity field and may involve error cancellation. '
+        'Best remaining hypothesis is buoyancy startup/history and update cadence: '
+        '2-D initially uniform ct gives zero initial forcing and waits 10 growth '
+        'steps or one-cell field movement; 3-D first equilibrates no-flow ct and '
+        'updates every 5 steps. Frozen same-domain/same-ct unconstrained velocities '
+        'match to roundoff. This growth ablation does not isolate startup from cadence '
+        'or bulk-plane/growth discretisation differences.')
+    return results
 
 
 def annotate_existing(results):
@@ -215,10 +253,26 @@ def annotate_existing(results):
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--fast', action='store_true')
+    ap.add_argument('--matched-lids', action='store_true',
+                    help='T2.5 shear 50/s and across buoyancy at domain-top and bulk-plane lids')
     ap.add_argument('--annotate-existing', action='store_true',
                     help='Refresh diagnostics and notes without rerunning growth')
     args = ap.parse_args()
     dest = Path(__file__).with_name('compare_3d_2d_flow_results.json')
+    if args.matched_lids:
+        results = json.loads(dest.read_text(encoding='utf-8'))
+        results['partA_T2_5'] = dict(
+            configuration=dict(width_um=227, depth_um=88, requested_dx_um=8,
+                               hours=.01 if args.fast else 1., beta_L_mol=.15,
+                               axial_net_flux_zero=False, field_relative_tolerance=.005,
+                               floor_field_absolute_tolerance=.01), cases=[])
+        for kind, shear in [('shear', 50.), ('across', 0.)]:
+            for lid in ('domain_top', 'bulk_plane'):
+                case = compare_flow(kind, shear, 8., .01 if args.fast else 1., lid)
+                results['partA_T2_5']['cases'].append(case)
+                print_table(case)
+                save_json(dest, summarize_matched_lids(results))
+        return
     if args.annotate_existing:
         results = annotate_existing(json.loads(dest.read_text(encoding='utf-8')))
         save_json(dest, results)
