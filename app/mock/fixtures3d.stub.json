@@ -1,0 +1,278 @@
+{
+  "GET /api/3d/schema": { "spec_schema": { "title": "SampleSpec", "type": "object" } },
+  "GET /api/3d/examples": {
+    "examples": [
+      {
+        "name": "stub_trench",
+        "title": "Hand-made stub trench (not solver data)",
+        "spec": {
+          "layout": {
+            "die_um": [128, 64],
+            "features": [{ "kind": "rect", "x_um": 64, "y_um": 32, "w_um": 32, "h_um": 32 }]
+          },
+          "etch": { "default": { "depth_um": 32, "sidewall_deg": 90 } },
+          "recipe": {
+            "steps": [
+              {
+                "t_forward_ms": 10,
+                "t_reverse_ms": 0,
+                "t_off_ms": 0,
+                "j_forward_mA_cm2": 10,
+                "j_reverse_mA_cm2": 0,
+                "duration_h": 0.001
+              }
+            ]
+          },
+          "bath": {
+            "name": "EP-EC1-65L",
+            "cu_g_L": 65,
+            "h2so4_g_L": 8,
+            "cl_ppm": 50,
+            "temperature_C": 22
+          },
+          "setup": {
+            "orientation": "vertical",
+            "up_edge": "+y",
+            "stir_shear_1_s": 0,
+            "stir_angle_deg": 0,
+            "delta_um": 64,
+            "area_cm2": 1,
+            "taped": false
+          },
+          "numerics": { "quality": "preview", "dx_um": 8, "physics": "L1", "device": "cpu" }
+        }
+      }
+    ]
+  },
+  "POST /api/3d/validate": { "ok": true, "errors": [] },
+  "POST /api/3d/validate errors": {
+    "ok": false,
+    "errors": [
+      {
+        "field": "numerics.quality",
+        "message": "Unknown quality",
+        "fix": "Choose preview, standard or fine."
+      }
+    ]
+  },
+  "POST /api/3d/plan": {
+    "ok": true,
+    "errors": [],
+    "tiles": [
+      {
+        "tile_id": "profile",
+        "kind": "profile",
+        "feature_ids": ["0"],
+        "shape": [16, 8, 16],
+        "dx_um": 8,
+        "n_cells": 2048,
+        "est_time_s": 5,
+        "weight": 1,
+        "assumptions": ["Hand-made fixture; not a solver estimate"],
+        "flags": ["preview"]
+      }
+    ],
+    "n_cells": 2048,
+    "est_time_s": 5
+  },
+  "POST /api/3d/runs": { "run_id": "stub-3d" },
+  "GET /api/3d/runs": {
+    "runs": [
+      {
+        "run_id": "stub-3d",
+        "label": "Hand-made stub",
+        "status": "done",
+        "progress": 1,
+        "message": "done",
+        "created": 0,
+        "finished": 5
+      }
+    ]
+  },
+  "GET /api/3d/runs/{id}": {
+    "run_id": "stub-3d",
+    "label": "Hand-made stub",
+    "status": "done",
+    "progress": 1,
+    "message": "done",
+    "error": null,
+    "spec": {
+      "layout": {
+        "die_um": [128, 64],
+        "features": [{ "kind": "rect", "x_um": 64, "y_um": 32, "w_um": 32, "h_um": 32 }]
+      },
+      "etch": { "default": { "depth_um": 32, "sidewall_deg": 90 } },
+      "recipe": {
+        "steps": [
+          {
+            "t_forward_ms": 10,
+            "t_reverse_ms": 0,
+            "t_off_ms": 0,
+            "j_forward_mA_cm2": 10,
+            "j_reverse_mA_cm2": 0,
+            "duration_h": 0.001
+          }
+        ]
+      },
+      "bath": {
+        "name": "EP-EC1-65L",
+        "cu_g_L": 65,
+        "h2so4_g_L": 8,
+        "cl_ppm": 50,
+        "temperature_C": 22
+      },
+      "setup": {
+        "orientation": "vertical",
+        "up_edge": "+y",
+        "stir_shear_1_s": 0,
+        "stir_angle_deg": 0,
+        "delta_um": 64,
+        "area_cm2": 1,
+        "taped": false
+      },
+      "numerics": { "quality": "preview", "dx_um": 8, "physics": "L1", "device": "cpu" }
+    }
+  },
+  "POST /api/3d/runs/{id}/cancel": {
+    "run_id": "stub-3d",
+    "label": "Hand-made stub",
+    "status": "cancelled",
+    "progress": 0.5,
+    "message": "cancelled",
+    "error": null,
+    "spec": {
+      "layout": {
+        "die_um": [128, 64],
+        "features": [{ "kind": "rect", "x_um": 64, "y_um": 32, "w_um": 32, "h_um": 32 }]
+      },
+      "etch": { "default": { "depth_um": 32, "sidewall_deg": 90 } },
+      "recipe": {
+        "steps": [
+          {
+            "t_forward_ms": 10,
+            "t_reverse_ms": 0,
+            "t_off_ms": 0,
+            "j_forward_mA_cm2": 10,
+            "j_reverse_mA_cm2": 0,
+            "duration_h": 0.001
+          }
+        ]
+      },
+      "bath": {
+        "name": "EP-EC1-65L",
+        "cu_g_L": 65,
+        "h2so4_g_L": 8,
+        "cl_ppm": 50,
+        "temperature_C": 22
+      },
+      "setup": {
+        "orientation": "vertical",
+        "up_edge": "+y",
+        "stir_shear_1_s": 0,
+        "stir_angle_deg": 0,
+        "delta_um": 64,
+        "area_cm2": 1,
+        "taped": false
+      },
+      "numerics": { "quality": "preview", "dx_um": 8, "physics": "L1", "device": "cpu" }
+    }
+  },
+  "GET /api/3d/runs/{id}/tiles": {
+    "tiles": [
+      {
+        "tile_id": "profile",
+        "kind": "profile",
+        "feature_ids": ["0"],
+        "weight": 1,
+        "shape": [16, 8, 16],
+        "dx_um": 8,
+        "x_um": [0, 128],
+        "y_um": [0, 64]
+      }
+    ]
+  },
+  "GET /api/3d/runs/{id}/height": {
+    "tile_id": "profile",
+    "frame": 1,
+    "t_s": 3.6,
+    "x_um": [0, 32, 64, 96, 128],
+    "y_um": [0, 32, 64],
+    "height_um": [
+      [2, 2, 2],
+      [2, 2, 2],
+      [2, -30, 2],
+      [2, 2, 2],
+      [2, 2, 2]
+    ],
+    "bare_height_um": [
+      [0, 0, 0],
+      [0, 0, 0],
+      [0, -32, 0],
+      [0, 0, 0],
+      [0, 0, 0]
+    ],
+    "stats": { "tir_um": 32 }
+  },
+  "POST /api/3d/runs/{id}/section": {
+    "s_um": [0, 32, 64, 96, 128],
+    "z_um": [-32, 0, 2],
+    "cu_outline": [
+      [
+        [0, 2],
+        [48, 2],
+        [48, -30],
+        [80, -30],
+        [80, 2],
+        [128, 2]
+      ]
+    ],
+    "si_outline": [
+      [
+        [0, 0],
+        [48, 0],
+        [48, -32],
+        [80, -32],
+        [80, 0],
+        [128, 0]
+      ]
+    ],
+    "length_um": 128
+  },
+  "GET /api/3d/runs/{id}/series": {
+    "t_s": [0, 3.6],
+    "V": [0.1, 0.12],
+    "faraday_volume_cm3": [0, 0.000001],
+    "solid_volume_cm3": [0, 0.000001],
+    "ct_min_front": [1, 0.9],
+    "cu_balance_rel": [0, 0.001]
+  },
+  "GET /api/3d/runs/{id}/frames": { "t_s": [0, 3.6] },
+  "GET /api/3d/runs/{id}/manifest": {
+    "spec_hash": "stub",
+    "code_version": "stub",
+    "backend": "stub",
+    "device": "cpu",
+    "dx_um": 8,
+    "physics": "L1",
+    "created_utc": "2026-01-01T00:00:00Z",
+    "quantities": [
+      {
+        "name": "field_um",
+        "value": 2,
+        "unit": "µm",
+        "feature_id": "0",
+        "flag": "uncalibrated",
+        "uncertainty": null
+      }
+    ],
+    "checks": [{ "name": "cu_balance_rel", "value": 0.001, "limit": 0.01, "passed": true }],
+    "waveform_sensitivity": "net current only",
+    "artifacts": [{ "kind": "png", "path": "height.png", "title": "Stub thumbnail (placeholder)" }],
+    "summary_text": "Hand-made UI stub only; not solver output."
+  },
+  "GET /api/3d/runs/{id}/artifact": {
+    "path": "height.png",
+    "media_type": "image/png",
+    "base64": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+afoQAAAAASUVORK5CYII="
+  }
+}

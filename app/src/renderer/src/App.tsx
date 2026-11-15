@@ -3,6 +3,7 @@ import { AppContext, type AppState, type BackendDto, type CompareEntry, type Pag
 import { PlatesimApi } from './api/client'
 import { GROUP_ORDER, groupFor, type ModelSpec } from './types'
 import { ModelPage } from './pages/ModelPage'
+import { Sample3DPage } from './pages/Sample3DPage'
 import { DataPage } from './pages/DataPage'
 import { AssistantPage } from './pages/AssistantPage'
 import { SettingsPage } from './pages/SettingsPage'
@@ -38,6 +39,7 @@ function Sidebar({
 
   const navItems: [Page, string][] = [
     ['models', 'Models'],
+    ['sample3d', '3-D sample'],
     ['data', 'Data'],
     ['assistant', 'Assistant'],
     ['settings', 'Settings']
@@ -407,6 +409,7 @@ export function App() {
           />
           <main className="main">
             {page === 'models' && <ModelPage />}
+            {page === 'sample3d' && <Sample3DPage />}
             {page === 'data' && <DataPage />}
             {page === 'assistant' && <AssistantPage />}
             {page === 'settings' && <SettingsPage />}

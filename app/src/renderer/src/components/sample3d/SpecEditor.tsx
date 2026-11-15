@@ -1,0 +1,344 @@
+import { useState } from 'react'
+import type { FieldIssue, SampleSpec3D } from '../../api/client3d'
+import { defaultSpec3D, parseSpec, recipeMath, specToForm } from '../../lib/sample3d'
+
+export function SpecEditor({
+  spec,
+  onChange,
+  errors,
+  onValid
+}: {
+  spec: SampleSpec3D
+  onChange: (s: SampleSpec3D) => void
+  errors: FieldIssue[]
+  onValid: (valid: boolean) => void
+}) {
+  const [tab, setTab] = useState('form')
+  const [raw, setRaw] = useState('')
+  const [jsonError, setJsonError] = useState('')
+  const update = (path: string, value: unknown): void => {
+    const next = specToForm(spec)
+    const keys = path.split('.')
+    let obj = next as unknown as Record<string, unknown>
+    for (const key of keys.slice(0, -1)) {
+      if (obj[key] == null) obj[key] = {}
+      obj = obj[key] as Record<string, unknown>
+    }
+    if (value === undefined) delete obj[keys[keys.length - 1]]
+    else obj[keys[keys.length - 1]] = value
+    onChange(next)
+  }
+  const field = (path: string, value: unknown, choices?: string[], text = false) => {
+    const issue = errors.find((e) => {
+      const name = e.field.replace(/^spec\./, '').replace(/\[(\d+)\]/g, '.$1')
+      return name === path || path.startsWith(`${name}.`)
+    })
+    return (
+      <label key={path} className={`sample3d-field ${issue ? 'sample3d-invalid' : ''}`}>
+        <span>{path.split('.').slice(-1)[0]}</span>
+        {choices ? (
+          <select
+            aria-label={path}
+            aria-invalid={Boolean(issue)}
+            value={String(value ?? choices[0])}
+            onChange={(e) => update(path, e.target.value)}
+          >
+            {choices.map((c) => (
+              <option key={c}>{c}</option>
+            ))}
+          </select>
+        ) : (
+          <input
+            aria-label={path}
+            aria-invalid={Boolean(issue)}
+            type={text ? 'text' : 'number'}
+            step="any"
+            value={value == null ? '' : String(value)}
+            onChange={(e) =>
+              update(
+                path,
+                text ? e.target.value : e.target.value === '' ? null : Number(e.target.value)
+              )
+            }
+          />
+        )}
+        {issue && (
+          <span className="field-error">
+            {issue.message} {issue.fix}
+          </span>
+        )}
+      </label>
+    )
+  }
+  const fields = (prefix: string, obj: Record<string, unknown>, names: string[]) =>
+    names.map((key) => field(`${prefix}.${key}`, obj[key]))
+  return (
+    <section className="card">
+      <div className="row gap">
+        <h3>Sample specification</h3>
+        {['form', 'JSON'].map((t) => (
+          <button
+            type="button"
+            className={`btn ${tab === t ? 'btn-primary' : ''}`}
+            key={t}
+            onClick={() => {
+              if (t === 'JSON') setRaw(JSON.stringify(spec, null, 2))
+              setTab(t)
+            }}
+            disabled={t === 'form' && Boolean(jsonError)}
+          >
+            {t}
+          </button>
+        ))}
+      </div>
+      {tab === 'JSON' ? (
+        <>
+          <textarea
+            className="sample3d-json mono"
+            aria-label="Sample JSON"
+            value={raw}
+            onChange={(e) => {
+              setRaw(e.target.value)
+              try {
+                onChange(parseSpec(e.target.value))
+                setJsonError('')
+                onValid(true)
+              } catch {
+                onValid(false)
+                setJsonError(
+                  'Invalid spec JSON. Supply layout, etch, recipe, bath, setup and numerics; fix JSON syntax before using the form.'
+                )
+              }
+            }}
+          />
+          <div className="field-error" role="alert">
+            {jsonError}
+          </div>
+        </>
+      ) : (
+        <>
+          <fieldset>
+            <legend>Layout (µm)</legend>
+            <div className="sample3d-fields">
+              {field('layout.die_um.0', spec.layout.die_um[0])}
+              {field('layout.die_um.1', spec.layout.die_um[1])}
+            </div>
+            {(spec.layout.features ?? []).map((feature, i) => (
+              <div className="sample3d-subcard" key={i}>
+                <div className="row gap">
+                  <strong>Feature {i + 1}</strong>
+                  <button
+                    type="button"
+                    className="btn btn-small"
+                    onClick={() =>
+                      update(
+                        'layout.features',
+                        spec.layout.features?.filter((_, j) => j !== i)
+                      )
+                    }
+                  >
+                    Remove
+                  </button>
+                </div>
+                <div className="sample3d-fields">
+                  {field(`layout.features.${i}.kind`, feature.kind, [
+                    'rect',
+                    'rounded_rect',
+                    'circle'
+                  ])}
+                  {fields(`layout.features.${i}`, feature, [
+                    'x_um',
+                    'y_um',
+                    'w_um',
+                    'h_um',
+                    'r_um'
+                  ])}
+                </div>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={Boolean(feature.array)}
+                    onChange={(e) =>
+                      update(
+                        `layout.features.${i}.array`,
+                        e.target.checked ? { nx: 2, ny: 1, pitch_x_um: 40, pitch_y_um: 40 } : null
+                      )
+                    }
+                  />{' '}
+                  Array
+                </label>
+                {feature.array && (
+                  <div className="sample3d-fields">
+                    {fields(`layout.features.${i}.array`, feature.array, [
+                      'nx',
+                      'ny',
+                      'pitch_x_um',
+                      'pitch_y_um'
+                    ])}
+                  </div>
+                )}
+              </div>
+            ))}
+            <button
+              type="button"
+              className="btn"
+              onClick={() =>
+                update('layout.features', [
+                  ...(spec.layout.features ?? []),
+                  { ...defaultSpec3D.layout.features![0] }
+                ])
+              }
+            >
+              Add feature
+            </button>
+          </fieldset>
+          <fieldset>
+            <legend>Etch default</legend>
+            <div className="sample3d-fields">
+              {fields('etch.default', spec.etch.default, ['depth_um', 'sidewall_deg'])}
+            </div>
+          </fieldset>
+          <fieldset>
+            <legend>Recipe steps</legend>
+            <div className="table-scroll">
+              <table className="data-table sample3d-recipe">
+                <thead>
+                  <tr>
+                    {[
+                      'Forward ms',
+                      'Reverse ms',
+                      'Off ms',
+                      'Forward mA/cm²',
+                      'Reverse mA/cm²',
+                      'Stop by',
+                      'Value',
+                      'Net mA/cm²',
+                      'Duty',
+                      ''
+                    ].map((s, i) => (
+                      <th key={i}>{s}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {spec.recipe.steps.map((step, i) => {
+                    const math = recipeMath(step),
+                      charge = step.charge_C_cm2 != null
+                    return (
+                      <tr key={i}>
+                        {(
+                          [
+                            't_forward_ms',
+                            't_reverse_ms',
+                            't_off_ms',
+                            'j_forward_mA_cm2',
+                            'j_reverse_mA_cm2'
+                          ] as const
+                        ).map((key) => (
+                          <td key={key}>{field(`recipe.steps.${i}.${key}`, step[key])}</td>
+                        ))}
+                        <td>
+                          <select
+                            aria-label={`Step ${i + 1} stop by`}
+                            value={charge ? 'charge' : 'duration'}
+                            onChange={(e) => {
+                              const steps = spec.recipe.steps.map((s, j) =>
+                                j !== i
+                                  ? s
+                                  : e.target.value === 'charge'
+                                    ? { ...s, duration_h: undefined, charge_C_cm2: 1 }
+                                    : { ...s, charge_C_cm2: undefined, duration_h: 0.001 }
+                              )
+                              update('recipe.steps', steps)
+                            }}
+                          >
+                            <option value="duration">Duration (h)</option>
+                            <option value="charge">Charge (C/cm²)</option>
+                          </select>
+                        </td>
+                        <td>
+                          {field(
+                            `recipe.steps.${i}.${charge ? 'charge_C_cm2' : 'duration_h'}`,
+                            charge ? step.charge_C_cm2 : step.duration_h
+                          )}
+                        </td>
+                        <td>{math.net.toFixed(3)}</td>
+                        <td>{(100 * math.duty).toFixed(1)}%</td>
+                        <td>
+                          <button
+                            type="button"
+                            className="btn btn-small"
+                            onClick={() =>
+                              update(
+                                'recipe.steps',
+                                spec.recipe.steps.filter((_, j) => i !== j)
+                              )
+                            }
+                          >
+                            Remove
+                          </button>
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+            <button
+              type="button"
+              className="btn"
+              onClick={() =>
+                update('recipe.steps', [...spec.recipe.steps, { ...defaultSpec3D.recipe.steps[0] }])
+              }
+            >
+              Add step
+            </button>
+          </fieldset>
+          <fieldset>
+            <legend>Bath</legend>
+            <div className="sample3d-fields">
+              {field('bath.name', spec.bath.name, undefined, true)}
+              {fields('bath', spec.bath, ['cu_g_L', 'h2so4_g_L', 'cl_ppm', 'temperature_C'])}
+            </div>
+          </fieldset>
+          <fieldset>
+            <legend>Setup</legend>
+            <div className="sample3d-fields">
+              {field('setup.orientation', spec.setup.orientation, [
+                'vertical',
+                'face_up',
+                'face_down'
+              ])}
+              {field('setup.up_edge', spec.setup.up_edge, ['+x', '-x', '+y', '-y'])}
+              {fields('setup', spec.setup, [
+                'stir_shear_1_s',
+                'stir_angle_deg',
+                'delta_um',
+                'area_cm2'
+              ])}
+            </div>
+            <label>
+              <input
+                type="checkbox"
+                checked={Boolean(spec.setup.taped)}
+                onChange={(e) => update('setup.taped', e.target.checked)}
+              />{' '}
+              Taped
+            </label>
+          </fieldset>
+          <fieldset>
+            <legend>Numerics</legend>
+            <div className="sample3d-fields">
+              {field('numerics.quality', spec.numerics.quality ?? 'preview', [
+                'preview',
+                'standard',
+                'fine'
+              ])}
+              {field('numerics.dx_um', spec.numerics.dx_um)}
+            </div>
+          </fieldset>
+        </>
+      )}
+    </section>
+  )
+}

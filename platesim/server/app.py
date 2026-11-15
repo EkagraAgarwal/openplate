@@ -314,6 +314,12 @@ def create_app(data_dir: Optional[str | Path] = None, ready_port: Optional[int] 
             except Exception:
                 pass
 
+    try:
+        from .routes3d import router
+        app.include_router(router)
+    except ImportError:
+        pass
+
     # web mode: serve the built desktop UI (app/out/renderer) at "/" so a browser can use it
     ui_dir = Path(__file__).resolve().parents[2] / "app" / "out" / "renderer"
     if ui_dir.is_dir():
