@@ -120,6 +120,23 @@ def test_run_tile_flow_axial_noop_and_shear_helps():
 
 
 @pytest.mark.parametrize("linear", ["mg", "amg"])
+def test_high_peclet_falls_back_and_matches_direct(linear):
+    # strong shear with the lid far above the bulk plane: cell Peclet >> 1, where the symmetric-part
+    # preconditioner stalls (wide-trench validation failure); ILU/LU fallback must recover the solution
+    grid, psi = trench(ny=8, nz_um=512)
+    z_plane = grid.origin[2] + 160 * UM
+    fl = flow(grid, psi, z_plane + 320 * UM, shear_rate_s=3000.0)
+    ref = solve(psi, grid, flow_faces=fl["faces"], linear="direct")
+    s = FieldSolver(Params(suppressor=False), linear=linear)
+    out = s.solve(psi, grid.dx, grid.origin[2], z_plane, 0.5 * 2 * F * s.ph.D_c * s.p.c_bulk / (64 * UM),
+                  periodic=grid.periodic, flow_faces=fl["faces"])
+    assert out["info"]["cell_peclet_max"] > 10
+    assert out["info"]["converged"]
+    assert np.max(np.abs(out["ct"] - ref["ct"])) < 1e-6
+    assert out["V"] == pytest.approx(ref["V"], abs=1e-6)
+
+
+@pytest.mark.parametrize("linear", ["mg", "amg"])
 def test_iterative_matches_direct_with_flow(linear):
     grid, psi = trench(ny=8)
     z_plane = grid.origin[2] + 160 * UM

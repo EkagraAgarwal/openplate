@@ -27,6 +27,7 @@ from . import operators
 from .backend import ls_numpy
 
 DIRECT_MAX = 40000      # unknowns up to which a sparse LU is used; above it AMG-preconditioned CG
+LU_FALLBACK_MAX = 600000  # advection systems up to this size may fall back to sparse LU at high Peclet
 
 
 class _Precond:
@@ -81,12 +82,19 @@ class _AdvLinear:
     the symmetric part (same faces and sink, no advection): one MGCG V-cycle (fam: _MGFamily) or the
     reused AMG hierarchy of A_sym + diag(q).  Fine while the cell Peclet number is O(1)."""
 
-    def __init__(self, A, q, direct, fam=None, A_sym=None, pc=None, tol=1e-8):
-        from scipy.sparse.linalg import LinearOperator
-        self.A, self.tol, self.iterations = A, tol, 0
+    def __init__(self, A, q, direct, fam=None, A_sym=None, pc=None, tol=1e-8, start=None):
+        # start: None, "ilu" or "lu" - begin with a fallback that an earlier system already needed
+        from scipy.sparse.linalg import LinearOperator, spilu
+        self.A, self.tol, self.iterations, self.fallback = A, tol, 0, None
+        if start == "lu" and not direct:
+            direct, self.fallback = True, "lu"
         self._lu = splu(A.tocsc()) if direct else None
         self._M = None
-        if not direct:
+        if not direct and start == "ilu":
+            n = A.shape[0]
+            ilu = spilu(A.tocsc(), drop_tol=1e-5, fill_factor=15)
+            self._M, self.fallback = LinearOperator((n, n), matvec=ilu.solve, dtype=np.float64), "ilu"
+        elif not direct:
             n = A.shape[0]
             if fam is not None:
                 fam.system(q)
@@ -103,8 +111,53 @@ class _AdvLinear:
         x, info = gmres(self.A, b, x0=x0, rtol=self.tol, atol=0.0, M=self._M, restart=60, maxiter=20,
                         callback=lambda _: count.__setitem__(0, count[0] + 1), callback_type="pr_norm")
         self.iterations += count[0]
-        if info != 0:
-            raise RuntimeError(f"GMRES did not converge (info={info}); cell Peclet number too high?")
+        if info == 0:
+            return x
+        if self.fallback == "ilu":                # ILU already failed: exact LU (or give up)
+            if self.A.shape[0] > LU_FALLBACK_MAX:
+                raise RuntimeError(f"GMRES+ILU did not converge (info={info}, n={self.A.shape[0]})")
+            self._lu, self.fallback = splu(self.A.tocsc()), "lu"
+            return self._lu.solve(b)
+        # High cell Peclet: the symmetric-part preconditioner no longer captures the operator.  The SG
+        # operator is an M-matrix, so ILU of the full matrix is a robust preconditioner; exact LU last.
+        from scipy.sparse.linalg import LinearOperator, spilu
+        n = self.A.shape[0]
+        try:
+            ilu = spilu(self.A.tocsc(), drop_tol=1e-5, fill_factor=15)
+            M = LinearOperator((n, n), matvec=ilu.solve, dtype=np.float64)
+            count[0] = 0
+            x, info = gmres(self.A, b, x0=x, rtol=self.tol, atol=0.0, M=M, restart=60, maxiter=20,
+                            callback=lambda _: count.__setitem__(0, count[0] + 1), callback_type="pr_norm")
+            self.iterations += count[0]
+        except RuntimeError:                      # singular ILU factor
+            info = -1
+        if info == 0:
+            self._M, self.fallback = M, "ilu"
+            return x
+        if n > LU_FALLBACK_MAX:
+            raise RuntimeError(f"GMRES did not converge with MG or ILU preconditioning (info={info}, "
+                               f"n={n}); cell Peclet number too high for this grid?")
+        self._lu, self.fallback = splu(self.A.tocsc()), "lu"
+        return self._lu.solve(b)
+
+
+class _Sticky:
+    """Remember an _AdvLinear fallback on the FieldSolver so later systems (next root-find step, next
+    time step) start with it, and report it in info["linear_cu"]."""
+
+    def __init__(self, lin, owner, info):
+        self.lin, self.owner, self.info = lin, owner, info
+
+    @property
+    def iterations(self):
+        return self.lin.iterations
+
+    def solve(self, b, x0=None):
+        x = self.lin.solve(b, x0=x0)
+        if self.lin.fallback and self.lin.fallback != self.owner._cu_fallback:
+            self.owner._cu_fallback = self.lin.fallback
+        if self.lin.fallback and not self.info["linear_cu"].endswith("->" + self.lin.fallback):
+            self.info["linear_cu"] = self.info["linear_cu"].split("->")[0] + "->" + self.lin.fallback
         return x
 
 
@@ -169,6 +222,7 @@ class FieldSolver:
         self.ph = derive(self.p, T_C)
         self.T_C = T_C
         self.linear = linear
+        self._cu_fallback = None   # "ilu" / "lu" once a high-Peclet Cu system needed it (sticky)
 
     def solve(self, psi, dx, z0, z_plane, j_net_A_cm2, periodic=(True, True, False), state=None,
               tol=2e-4, maxit=30, flow_faces=None):
@@ -266,8 +320,9 @@ class FieldSolver:
             A_sym_c = system(ph.D_c, 1.0)[0] if not (use_mg or direct_c) else None
 
             def lin_c_of(q):
-                return _AdvLinear(A_c + sparse.diags(q), q, direct_c,
-                                  fam_c if use_mg else None, A_sym=A_sym_c, pc=pc_c)
+                lin = _AdvLinear(A_c + sparse.diags(q), q, direct_c, fam_c if use_mg else None,
+                                 A_sym=A_sym_c, pc=pc_c, start=self._cu_fallback)
+                return _Sticky(lin, self, info)
         else:
             F_top = None
         relax = 1.0
