@@ -145,3 +145,34 @@ def test_run_plugin_contract():
     assert isinstance(out["assumptions"], list) and out["assumptions"]
     assert len(out["residuals"]) == 16                   # 8 DOE means + 8 SEM points
     json.dumps(out)
+
+
+# ------------------------------------- optional F3 / F4 wiring (no measured data)
+
+def test_pipeline_optional_pr_and_march_defaults_unchanged():
+    """pr=None, march=False is the DC path; the new options are additive only."""
+    run = {"j_mA_cm2": 12.0, "t_min": 20.0, "stir_pct": 30.0, "setup": "base"}
+    base = simulate_run(run, dict(DEFAULT_THETA), resolution="coarse")
+    assert "pr" not in base and "march" not in base
+
+    pr = {"t_f_ms": 9.0, "t_r_ms": 0.5, "t_off_ms": 0.5, "rr": 2.0}
+    with_pr = simulate_run(run, dict(DEFAULT_THETA), resolution="coarse", pr=pr)
+    assert with_pr["pr"]["rr"] == 2.0
+    assert "march" not in with_pr
+    assert with_pr["maps"]["j_mA_cm2"] != base["maps"]["j_mA_cm2"]
+    # the net PR map is still a deposition map at the same nominal current
+    assert 0.5 < with_pr["mean_thickness_um"] / base["mean_thickness_um"] < 1.5
+
+    mar = simulate_run(run, dict(DEFAULT_THETA), resolution="coarse",
+                       march={"n_stages": 2, "seed_R_sq0": 0.1})
+    assert mar["march"]["n_stages"] == 2
+    assert "pr" not in mar
+    print(f"\nbase mean {base['mean_thickness_um']:.3f} um -> march "
+          f"{mar['mean_thickness_um']:.3f} um, mass balance "
+          f"{mar['march']['mass_balance']:.6f}, R_s "
+          f"{mar['march']['R_s_mean_ohm_sq']:.4g} ohm/sq")
+    assert mar["march"]["mass_balance"] == pytest.approx(1.0, abs=1e-3)
+    assert mar["mean_thickness_um"] == pytest.approx(base["mean_thickness_um"], rel=0.1)
+    for out in (with_pr, mar):
+        json.dumps(out)                      # still JSON-serialisable
+        assert len(out["maps"]["j_mA_cm2"]) == 41

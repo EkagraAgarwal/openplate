@@ -2,6 +2,8 @@
 
 Small grids, analytic references: plane Couette over a flat wall, discrete divergence of the face
 fluxes, shear sign symmetry, trench eddies, the Stokes lid-driven cavity and a loose LBM comparison.
+The body-force (Boussinesq buoyancy) term is checked by exact superposition with the shear drive, by a
+hydrostatic force in a closed box (pressure absorbs it: no flow) and by a laterally forced cavity.
 """
 import time
 import warnings
@@ -238,4 +240,80 @@ def test_pocket_across_the_x_seam_is_one_region():
     print(f"\nseam pocket: {pocket.sum()} cells, regions = {flow.info['n_fluid_regions']}, "
           f"max|u|/u_top in the pocket = {inside:.1e}, max|ux|/u_top = "
           f"{np.abs(flow.ux).max() / u_top:.3f}")
+
+
+# ------------------------------------------------------------------ body force: Boussinesq buoyancy
+def _lateral_force(g, amp):
+    """f_z = amp (x - x_c): a laterally heated box, force up on the right (hot) half."""
+    fz = amp * (g.x_um[None, :] - 0.5 * g.pitch_um) * np.ones((g.shape[0], 1))
+    return np.zeros(g.shape), fz
+
+
+def test_body_force_superposes_with_shear():
+    """Stokes is linear: u(G, f) == u(G, 0) + u(0, f) to round-off, for any right-hand side."""
+    g = _box_cavity(24, dx=1.0)
+    fx, fz = _lateral_force(g, 1e4)
+    lid = solve_stokes(g, 40.0)
+    buoy = solve_stokes(g, 0.0, body_force=(fx, fz))
+    both = solve_stokes(g, 40.0, body_force=(fx, fz))
+    u_top = 40.0 * g.height_um * 1e-4
+    assert np.abs(buoy.ux).max() > 1e-2 * buoy.info["u_scale_cm_s"], "body force did not drive the flow"
+    assert np.abs(lid.ux).max() > 1e-2 * u_top
+    scale = max(np.abs(both.ux).max(), np.abs(both.uz).max())
+    du = float(np.abs(both.ux - lid.ux - buoy.ux).max() / scale)
+    dw = float(np.abs(both.uz - lid.uz - buoy.uz).max() / scale)
+    assert max(du, dw) < 1e-10, f"superposition error ux {du:.2e}, uz {dw:.2e}"
+    print(f"\nsuperposition: max rel. error ux {du:.2e}, uz {dw:.2e}; "
+          f"u_scale(G,f) = {both.info['u_scale_cm_s']:.3e} cm/s = max({lid.info['u_scale_cm_s']:.3e}, "
+          f"{buoy.info['u_scale_cm_s']:.3e}); max|u| lid {np.abs(lid.ux).max():.3e}, "
+          f"buoyant {max(np.abs(buoy.ux).max(), np.abs(buoy.uz).max()):.3e}, "
+          f"both {scale:.3e} cm/s")
+
+
+def test_hydrostatic_body_force_drives_no_flow():
+    """A force that is the gradient of a pressure (f parallel to g, varying only along z) in a closed box
+    is absorbed by the pressure: zero velocity to round-off, and it does not disturb an imposed shear."""
+    g = _box_cavity(24, dx=1.0)
+    nz, nx = g.shape
+    fz = np.linspace(0.0, 2e-4, nz)[:, None] * np.ones((1, nx))
+    flow = solve_stokes(g, 0.0, body_force=(np.zeros((nz, nx)), fz))
+    scale = flow.info["u_scale_cm_s"]
+    rel = max(np.abs(flow.ux).max(), np.abs(flow.uz).max()) / scale
+    assert rel < 1e-12, f"hydrostatic force drove a flow: max|u|/u_scale = {rel:.3e}"
+    # a closed box needs no lid: with shear 0 the whole field is at rest (the pressure absorbs f)
+    assert flow.info["u_top_cm_s"] == 0.0
+    # the pressure absorbs it in the presence of a shear too
+    lid = solve_stokes(g, 40.0)
+    both = solve_stokes(g, 40.0, body_force=(np.zeros((nz, nx)), fz))
+    u_top = 40.0 * g.height_um * 1e-4
+    d = float(np.abs(both.ux - lid.ux).max() / u_top)
+    assert d < 1e-12, f"hydrostatic force changed the Couette flow by {d:.3e}"
+    print(f"\nhydrostatic force: max|u|/u_scale = {rel:.2e} (rest), Couette change {d:.2e}")
+
+
+def test_laterally_heated_square_cavity():
+    """Solid walls all round, body force f_z = A (x - x_c): one counter-clockwise cell (up the hot right
+    wall, left along the top) and a velocity that scales exactly linearly with the force amplitude."""
+    g = _box_cavity(24, dx=1.0)
+    nz, nx = g.shape
+    fx, fz = _lateral_force(g, 1e4)
+    flow = solve_stokes(g, 0.0, body_force=(fx, fz))
+    iz = nz // 2
+    assert flow.uz[iz, -2] > 0.0, "fluid must rise along the hot (right) wall"
+    assert flow.uz[iz, 1] < 0.0, "fluid must sink along the cold (left) wall"
+    assert flow.ux[-2, nx // 2] < 0.0, "the top branch of the cell must run to -x"
+    assert flow.ux[1, nx // 2] > 0.0, "the bottom branch of the cell must run to +x"
+    # circulation along the wall midlines, counter-clockwise = +x at the bottom, +z at the right wall
+    circ = (flow.ux[1, 1:nx - 1].sum() + flow.uz[:nz, -2].sum()
+            - flow.ux[-2, 1:nx - 1].sum() - flow.uz[:nz, 1].sum())
+    assert circ > 0.0, f"circulation {circ:.3e} is not counter-clockwise"
+    doubled = solve_stokes(g, 0.0, body_force=(2.0 * fx, 2.0 * fz))
+    scale = max(np.abs(flow.ux).max(), np.abs(flow.uz).max())
+    e = max(float(np.abs(doubled.ux - 2.0 * flow.ux).max()),
+            float(np.abs(doubled.uz - 2.0 * flow.uz).max())) / scale
+    assert e < 1e-10, f"speed is not linear in the force amplitude: {e:.2e}"
+    assert abs(doubled.info["body_force_max_cm_s2"] / flow.info["body_force_max_cm_s2"] - 2.0) < 1e-12
+    print(f"\nlateral force: max|u| = {scale:.3e} cm/s for {flow.info['body_force_max_cm_s2']:.2e} cm/s2 "
+          f"(u_scale {flow.info['u_scale_cm_s']:.3e}), circulation {circ / scale:+.3f} x max|u|, "
+          f"doubling error {e:.2e}")
 

@@ -10,11 +10,16 @@ dynamics with exact exponential waiting times:
   {0, 1, 2} counts the in-plane nearest neighbours of the moving atom at its
   current height (Clarke-Vvedensky-type bond counting, 1+1 D);
 * optional static suppressor mask (coverage ``theta_block``) that blocks
-  deposition on a random subset of columns - the hook for additive inhibition.
+  deposition on a random subset of columns;
+* optional dynamic additive layer (``additive=Additive(...)``, E3b): suppressor /
+  accelerator / chloride adsorption, desorption, chloride-mediated co-adsorption
+  and burial by growth, all in the same BKL bookkeeping (see
+  :mod:`platesim.kmc.additive`).  ``effective_rates`` maps a run back onto the
+  continuum coverage equation (``k_plus``, ``k_minus``).
 
-This is the engine + validation only; the continuum model is not coupled here.
 ``run_sos`` returns the final heights, W(t) = std(h), the mean height, the
-event counts and the KMC time.
+event counts and the KMC time; with the additive layer it also returns the
+coverage time series and event tallies.
 
 Entry point::
 
@@ -24,19 +29,33 @@ Entry point::
 """
 from __future__ import annotations
 
+from .additive import Additive, effective_rates
 from .sos import ASSUMPTIONS, interface_width, run_sos
 from .units import (
-    E_CHARGE_C, K_B_EV, N_SITES_CM2, deposition_rate, deposition_rate_mA, hop_rate,
+    E_CHARGE_C,
+    K_B_EV,
+    MONOLAYER_CM,
+    N_A,
+    N_SITES_CM2,
+    deposition_rate,
+    deposition_rate_mA,
+    hop_rate,
+    monolayer_thickness_cm,
 )
 
 __all__ = [
     "ASSUMPTIONS",
     "E_CHARGE_C",
     "K_B_EV",
+    "MONOLAYER_CM",
+    "N_A",
     "N_SITES_CM2",
+    "Additive",
     "deposition_rate",
     "deposition_rate_mA",
+    "effective_rates",
     "hop_rate",
     "interface_width",
+    "monolayer_thickness_cm",
     "run_sos",
 ]

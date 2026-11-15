@@ -515,7 +515,8 @@ def _k_for_wall_concentration(grid, flow, D_cm2_s, c_wall_target, scheme="upwind
 
 def particle_cross_check(width_um=120.0, depth_um=60.0, dx_um=6.0, height_um=90.0,
                          delta_um=128.0, c_wall_target=0.7, use_flow=True, scheme="upwind",
-                         n_ref_per_um2=0.25, t_burn_s=30.0, t_sample_s=30.0, seed=0):
+                         n_ref_per_um2=0.25, t_burn_s=30.0, t_sample_s=30.0, seed=0,
+                         interp="nearest", wall="return", reactive="first", backend="numpy"):
     """Brownian tracers against the continuum solution in a real 120 x 60 um trench.
 
     The surface rate constant is chosen by :func:`_k_for_wall_concentration` so that the field-plane
@@ -530,6 +531,21 @@ def particle_cross_check(width_um=120.0, depth_um=60.0, dx_um=6.0, height_um=90.
     per um2 then gives ~2000 field and ~900 floor absorption events in ~15 s of wall time).  The
     earlier, shorter settings (8 s / 15 s) left the trench un-equilibrated and biased floor/field
     low by 10 %.
+
+    ``interp``/``wall``/``reactive``/``backend`` are forwarded to ``simulate`` (the defaults are the
+    solver defaults, so the numbers here are the historical ones).  A high-statistics run uses
+    ``backend="numba"`` and ``n_ref_per_um2`` of order 10-20: the standard error of floor/field falls
+    as ``1/sqrt(count)``, so 0.25 -> 16 particles per um2 buys ~8x in se (~0.03 -> ~0.004) at 65x the
+    wall time.
+
+    Read the residual with care: at se 0.005 the four interp x wall combinations all land 1-2 % below
+    the continuum and at the same time within ~1 se of each other, so the gap is a property of the
+    comparison, not of the wall rule.  Two measured contributions: this continuum is a first-order
+    upwind FV solve whose numerical diffusion (u dx/2 ~ 20 % of D at dx 6) smooths the field-to-floor
+    gradient -- ``scheme="hybrid"`` moves floor/field from 0.7361 to 0.7305, i.e. 0.6 % towards the
+    particles -- and the tracer's top reservoir imposes ``c = 1`` over a source layer of thickness
+    ``max(3 sigma, dx)`` (6.3 um here) instead of exactly at ``z = height_um``, which truncating the
+    continuum domain by one layer moves a further 0.3 % (0.7361 -> 0.7338).
     """
     T_C = 22.0
     D, c_bulk, _ = model_constants(T_C)
@@ -543,7 +559,8 @@ def particle_cross_check(width_um=120.0, depth_um=60.0, dx_um=6.0, height_um=90.
     crm = region_means(cres, grid)
     pres = simulate_particles(grid, flow, D_cm2_s=D, k_cm_s=k,
                               n_ref_per_um2=float(n_ref_per_um2), t_burn_s=float(t_burn_s),
-                              t_sample_s=float(t_sample_s), seed=int(seed))
+                              t_sample_s=float(t_sample_s), seed=int(seed), interp=interp,
+                              wall=wall, reactive=reactive, backend=backend)
     prm = particle_region_means(pres, grid)
 
     def _cmp(key):
@@ -595,6 +612,8 @@ def particle_cross_check(width_um=120.0, depth_um=60.0, dx_um=6.0, height_um=90.
             "c_wall_target": float(c_wall_target),
             "n_ref_per_um2": float(n_ref_per_um2), "t_burn_s": float(t_burn_s),
             "t_sample_s": float(t_sample_s), "seed": int(seed),
+            "interp": interp, "wall": wall, "reactive": reactive, "backend": pres.get("backend"),
+            "sigma_um": _finite(pres.get("sigma_um")),
             "grid_shape": [int(v) for v in grid.shape],
             "lbm_steps": int((flow.info or {}).get("steps", 0)) if flow is not None else 0,
             "lbm_converged": bool(flow.converged) if flow is not None else True,

@@ -29,6 +29,15 @@ Conventions and caveats
 * Waveform. The coupon pipeline is DC (one steady state, see
   ``coupon/validate.py``); ``feature.calibrate.predict`` applies each SEM site's
   own pulse-reverse block (9/0.5/0.5 ms, rr = 2), which the flow model cannot do.
+* Two-way coupling (Plan F1, ``two_way=True``, default OFF -> the one-way path
+  above and its numbers are unchanged). A trench array has more true surface area
+  per projected area than a flat plane, so it draws more current locally.  One
+  quick ``stokes`` feature stage gives the region flux ratios, from which
+  :func:`effective_area_factor` builds ``A_eff = I_pitch/(j_flat*pitch)``;
+  :func:`coupon_area_map` iterates ``j_field = j_coupon*A_eff/<A_eff>`` over the
+  coupon to a fixed point, and the feature model is then run at ``j_field``.
+  ``<A_eff>`` is current-weighted, which conserves the coupon total current.  No
+  parameter is fitted in the two-way path either.
 * The level-set prediction is cached inside ``feature.calibrate`` by
   ``(site id, theta, dx_um, use_pr)``. Every coupon position therefore gets a
   UNIQUE site id: without it all positions would silently return the first
@@ -47,7 +56,7 @@ import numpy as np
 from ..coupon.calibrate import theta_from_calibration
 from ..coupon.pipeline import simulate_run
 from ..feature.calibrate import predict as _feature_predict
-from ..trenchflow.model import model_constants, predict_site
+from ..trenchflow.model import model_constants, predict_site, shear_from_delta, stage
 
 DEFAULT_RUN = {"setup": "imp1", "j_mA_cm2": 15.0, "t_min": 270.0,
                "stir_pct": 30.0, "T_C": 22.0}
@@ -56,10 +65,16 @@ DEFAULT_RUN = {"setup": "imp1", "j_mA_cm2": 15.0, "t_min": 270.0,
 SIM_CACHE: dict[str, dict] = {}
 _CACHE_STATS = {"hits": 0, "misses": 0}
 
+# Two-way coupling caches (only populated when two_way=True).
+_A_EFF_CACHE: dict[str, dict] = {}
+_AREA_MAP_CACHE: dict[str, dict] = {}
+
 
 def clear_cache() -> None:
-    """Drop the memoised coupon solves (mainly for tests)."""
+    """Drop the memoised coupon solves and two-way factors (mainly for tests)."""
     SIM_CACHE.clear()
+    _A_EFF_CACHE.clear()
+    _AREA_MAP_CACHE.clear()
     _CACHE_STATS["hits"] = 0
     _CACHE_STATS["misses"] = 0
 
@@ -182,6 +197,267 @@ def site_conditions(run: dict | None = None, x_cm: float = 0.0, y_cm: float = 0.
 
 
 # ---------------------------------------------------------------------------
+# 1b. two-way coupling: the trench array feeds its own area back to the coupon
+# ---------------------------------------------------------------------------
+TWO_WAY_TOL = 1e-3          # fixed-point stop: max |change| of A_eff between sweeps
+TWO_WAY_MAX_ITER = 10       # fixed-point iteration cap
+DEFAULT_F_OPEN = 0.2        # open-area fraction of the trench array
+
+
+def effective_area_factor(site: dict, f_open: float, conditions: dict,
+                          dx_um: float | None = None, deposit_um: float = 0.0,
+                          flow_solver: str = "stokes", p=None, ph=None) -> dict:
+    """Effective area (true area x local efficiency) factor ``A_eff`` of a trench array.
+
+    One pitch of the array (``pitch = width_um / f_open``) has the projected field
+    surface ``pitch - width``, the floor ``width`` and two walls of height ``depth``
+    (per unit length into the page; the model geometry is rectangular).  A quick
+    feature solve (:func:`platesim.trenchflow.model.stage`, ``flow_solver='stokes'``,
+    one direct sparse flow solve, deposit 0 = the as-etched trench) gives the mean
+    flux density of each region RELATIVE to the field surface, ``r_floor``,
+    ``r_up``, ``r_down``.  The current drawn by one pitch at a field current density
+    ``j_flat`` is therefore
+
+        I_pitch = (pitch - width)*j_flat + width*r_floor*j_flat
+                  + depth*(r_up + r_down)*j_flat                            [C]
+
+    and
+
+        A_eff = I_pitch / (j_flat * pitch)
+              = 1 + [width*(r_floor - 1) + depth*(r_up + r_down)] / pitch    [C]
+
+    i.e. the true-surface-area gain of the walls and floor times their local
+    transport efficiency (all surfaces share one k: Wagner number >> 1).  ``A_eff``
+    is 1 for no trenches (``depth == 0`` or ``f_open -> 0``: the trench area is a
+    vanishing fraction of the pitch) and grows with the wall area per pitch.
+
+    Conventions and caveats
+    -----------------------
+    * ``conditions`` supplies ``j_mA_cm2`` and ``delta_um``; ``T_C`` comes from
+      ``site``.  The shear rate is ``shear_from_delta`` (the same closure as
+      ``trenchflow.model.predict_site``).
+    * The region ratios are local concentration ratios, so they are only weakly
+      dependent on the periodic-cell pitch.  They are taken from the model's own
+      cell (default pitch ``width + max(4*depth, width)``) while the AREA weighting
+      uses the array pitch ``width/f_open``: adding far-field area contributes
+      exactly 1:1 to both ``I_pitch`` and ``j_flat*pitch``, which is what the
+      ``1 + (...) / pitch`` form expresses.  A different pitch is not passed to
+      ``stage`` because the model has no such argument.
+    * ``deposit_um`` defaults to 0 (the as-etched area is the largest one).
+    * ``j`` at or above the mass-transfer limit of the field surface makes
+      ``stage`` raise; the factor then falls back to 1.0 (no coupling at that
+      position) and the reason is reported in ``warnings``.
+
+    Returns ``{a_eff, pitch_um, j_mA_cm2, delta_um, shear_rate_s,
+    floor_over_field, wall_up_over_field, wall_down_over_field, k_cm_s,
+    flow_solver, grid_shape, warnings}``.  No parameter is fitted here.
+    """
+    width = float(site["width_um"])
+    depth = float(site["depth_um"])
+    f = float(f_open)
+    if not 0.0 < f <= 1.0:
+        raise ValueError(f"f_open must be in (0, 1], got {f_open!r}")
+    T_C = float(site.get("T_C", 22.0))
+    j = float(conditions["j_mA_cm2"])
+    delta = float(conditions["delta_um"])
+    dx = (4.0 if width < 400.0 else 6.0) if dx_um is None else float(dx_um)
+    pitch = width / f
+
+    base = {"a_eff": 1.0, "pitch_um": pitch, "j_mA_cm2": j, "delta_um": delta,
+            "shear_rate_s": None, "floor_over_field": None,
+            "wall_up_over_field": None, "wall_down_over_field": None,
+            "k_cm_s": None, "flow_solver": str(flow_solver), "grid_shape": None,
+            "warnings": []}
+    if depth <= 0.0:
+        base["warnings"].append("no trench (depth_um = 0): effective area factor = 1.0")
+        return base
+    if delta <= 0.0 or j <= 0.0:
+        base["warnings"].append("non-positive j/delta: effective area factor = 1.0")
+        return base
+
+    key = (f"{width!r}|{depth!r}|{T_C!r}|{f!r}|{j:.12g}|{delta:.12g}|{dx!r}|"
+           f"{float(deposit_um)!r}|{str(flow_solver)}")
+    hit = _A_EFF_CACHE.get(key)
+    if hit is not None:
+        return hit
+
+    D = float(model_constants(T_C)[0])
+    shear = float(shear_from_delta(delta, D))
+    try:
+        st = stage(width, depth, delta, shear, j, float(deposit_um), T_C=T_C,
+                   dx_um=dx, use_flow=True, p=p, ph=ph,
+                   flow_solver=str(flow_solver))
+    except ValueError as exc:          # above the mass-transfer limit of the field
+        base["shear_rate_s"] = shear
+        base["warnings"].append(f"stage solve rejected: {exc}; effective area factor = 1.0")
+        _A_EFF_CACHE[key] = base
+        return base
+
+    rf = float(st["floor_over_field"])
+    ru = float(st["wall_up_over_field"])
+    rd = float(st["wall_down_over_field"])
+    out = {**base, "shear_rate_s": shear, "floor_over_field": rf,
+           "wall_up_over_field": ru, "wall_down_over_field": rd,
+           "k_cm_s": float(st["k_cm_s"]), "flow_solver": str(st["flow_solver"]),
+           "grid_shape": tuple(st["grid_shape"])}
+    if not all(np.isfinite([rf, ru, rd])):
+        out["warnings"].append("empty trench region in the stage solve; factor = 1.0")
+        _A_EFF_CACHE[key] = out
+        return out
+
+    i_pitch = (pitch - width) + width * rf + depth * (ru + rd)
+    out["a_eff"] = float(i_pitch / pitch)
+    _A_EFF_CACHE[key] = out
+    return out
+
+
+def rescale_coupon_currents(j_coupon_mA_cm2, a_eff,
+                            weights=None) -> tuple[np.ndarray, float]:
+    """Galvanostatic rescaling of a coupon current map by the array area factor.
+
+    The array region draws ``A_eff`` times more current per projected area than a
+    flat surface, so the local field current density that the feature model must
+    see is ``j_coupon * A_eff / <A_eff>``.  ``<A_eff>`` is the mean over the coupon
+    weighted by the coupon current itself,
+
+        <A_eff> = sum(w*j_coupon*A_eff) / sum(w*j_coupon),
+
+    which equals the area-weighted mean when the coupon current is uniform and is
+    the normalisation that conserves the coupon total current exactly:
+    ``sum(w*j_field) == sum(w*j_coupon)`` to round-off.  ``weights`` are the cell
+    areas (``None`` = uniform).
+
+    Returns ``(j_field_mA_cm2, a_eff_mean)``.
+    """
+    j = np.asarray(j_coupon_mA_cm2, float)
+    a = np.asarray(a_eff, float)
+    if j.shape != a.shape:
+        raise ValueError(f"j and a_eff must have the same shape, got {j.shape} and {a.shape}")
+    w = np.ones_like(j) if weights is None else np.asarray(weights, float)
+    if w.shape != j.shape:
+        raise ValueError(f"weights must have the shape of j, got {w.shape} and {j.shape}")
+    total = float((w * j).sum())
+    if not total > 0.0:
+        raise ValueError("the coupon total current must be positive")
+    mean = float((w * j * a).sum()) / total
+    if not mean > 0.0:
+        raise ValueError("the current-weighted mean A_eff must be positive")
+    return j * a / mean, mean
+
+
+def coupon_area_map(site: dict, f_open: float = DEFAULT_F_OPEN, run: dict | None = None,
+                    theta: dict | None = None, resolution: str = "coarse", n: int = 3,
+                    tol: float = TWO_WAY_TOL, max_iter: int = TWO_WAY_MAX_ITER,
+                    dx_um: float | None = None, p=None, ph=None) -> dict:
+    """Coupon-scale two-way map: ``A_eff`` and the rescaled local current density.
+
+    The coupon face is sampled on an ``n x n`` grid of cell CENTRES (equal cell
+    areas, so a plain mean is the area-weighted mean), the coupon conditions at each
+    node come from :func:`site_conditions` (one memoised coupon solve for the whole
+    map), and the coupon <-> feature exchange is iterated to a fixed point:
+
+    1. ``A_eff`` at the coupon current (one quick ``stokes`` stage per node);
+    2. ``j_field = j_coupon * A_eff / <A_eff>`` (:func:`rescale_coupon_currents`);
+    3. ``A_eff`` again at the rescaled field current (the flux ratios change weakly
+       with the galvanostatic ``k``);
+    4. repeat until ``max|A_eff_new - A_eff| < tol`` or ``max_iter`` sweeps.
+
+    The feedback is negative (a larger ``A_eff`` raises ``j_field``, a larger current
+    depletes the trench and lowers ``A_eff``), so the sweep contracts.  The coupon
+    efficiency and Nernst thickness are NOT updated: the coupon solve is
+    galvanostatic and the same total current is only redistributed inside the face.
+
+    Returns ``{x_cm, y_cm, weights, j_coupon_mA_cm2, j_field_mA_cm2, a_eff,
+    delta_um, efficiency, a_eff_mean, a_eff_mean_area, iterations, history,
+    converged, f_open, tol, max_iter, width_um, depth_um, run, resolution, n}``.
+    ``a_eff_mean`` is the current-weighted mean used for the normalisation,
+    ``a_eff_mean_area`` its unweighted (area) counterpart, and ``history`` is one
+    ``{iteration, max_change, a_eff_mean}`` dict per sweep.  The map is memoised on
+    ``(site geometry, f_open, run, theta, resolution, n, tol, max_iter, dx)``.
+    """
+    run = dict(DEFAULT_RUN if run is None else run)
+    th = theta_from_calibration()[0] if theta is None else {**theta}
+    n = int(n)
+    if n < 2:
+        raise ValueError("n must be >= 2 (the sampler is bilinear)")
+    f = float(f_open)
+    key = "|".join((_sim_key(run, th, resolution), json.dumps(
+        {"n": n, "width": float(site["width_um"]), "depth": float(site["depth_um"]),
+         "T_C": float(site.get("T_C", 22.0)), "f_open": f, "tol": float(tol),
+         "max_iter": int(max_iter),
+         "dx_um": None if dx_um is None else float(dx_um)},
+        sort_keys=True, default=str)))
+    hit = _AREA_MAP_CACHE.get(key)
+    if hit is not None:
+        return hit
+
+    sim = _simulate_cached(run, th, resolution)
+    x_lo, x_hi, y_lo, y_hi = face_extent_cm(sim)
+    xs = x_lo + (np.arange(n) + 0.5) * (x_hi - x_lo) / n
+    ys = y_lo + (np.arange(n) + 0.5) * (y_hi - y_lo) / n
+
+    j_c = np.empty((n, n))
+    delta = np.empty((n, n))
+    eff = np.empty((n, n))
+    a_eff = np.empty((n, n))
+    conds = [[{} for _ in range(n)] for _ in range(n)]
+    for iy in range(n):
+        for ix in range(n):
+            c = site_conditions(run, float(xs[ix]), float(ys[iy]), theta=th,
+                                resolution=resolution)
+            conds[iy][ix] = c
+            j_c[iy, ix] = float(c["j_mA_cm2"])
+            delta[iy, ix] = float(c["delta_um"])
+            eff[iy, ix] = float(c["efficiency"])
+            a_eff[iy, ix] = effective_area_factor(
+                site, f, c, dx_um=dx_um, p=p, ph=ph)["a_eff"]
+
+    weights = np.ones_like(j_c)
+    j_field, mean = rescale_coupon_currents(j_c, a_eff, weights)
+    history: list[dict] = []
+    converged = False
+    for it in range(int(max_iter)):
+        a_new = np.empty_like(a_eff)
+        for iy in range(n):
+            for ix in range(n):
+                c2 = {**conds[iy][ix], "j_mA_cm2": float(j_field[iy, ix])}
+                a_new[iy, ix] = effective_area_factor(
+                    site, f, c2, dx_um=dx_um, p=p, ph=ph)["a_eff"]
+        change = float(np.max(np.abs(a_new - a_eff)))
+        a_eff = a_new
+        j_field, mean = rescale_coupon_currents(j_c, a_eff, weights)
+        history.append({"iteration": it + 1, "max_change": change,
+                        "a_eff_mean": float(mean)})
+        if change < float(tol):
+            converged = True
+            break
+
+    out = {"x_cm": xs, "y_cm": ys, "weights": weights,
+           "j_coupon_mA_cm2": j_c, "j_field_mA_cm2": j_field, "a_eff": a_eff,
+           "delta_um": delta, "efficiency": eff,
+           "a_eff_mean": float(mean), "a_eff_mean_area": float(a_eff.mean()),
+           "iterations": len(history), "history": history,
+           "converged": bool(converged), "f_open": f, "tol": float(tol),
+           "max_iter": int(max_iter), "width_um": float(site["width_um"]),
+           "depth_um": float(site["depth_um"]), "run": run,
+           "resolution": str(resolution), "n": n}
+    _AREA_MAP_CACHE[key] = out
+    return out
+
+
+def _check_area_map(amap: dict, site: dict, f_open: float) -> None:
+    """Reject a two-way map built for another trench geometry / open fraction."""
+    for key, want in (("width_um", float(site["width_um"])),
+                      ("depth_um", float(site["depth_um"]))):
+        got = float(amap[key])
+        if abs(got - want) > 1e-9 * max(1.0, abs(want)):
+            raise ValueError(f"two_way_map {key}={got} does not match the site ({want})")
+    got_f = float(amap["f_open"])
+    if abs(got_f - float(f_open)) > 1e-12:
+        raise ValueError(f"two_way_map f_open={got_f} does not match f_open={f_open}")
+
+
+# ---------------------------------------------------------------------------
 # 2. feature-scale prediction at one coupon position
 # ---------------------------------------------------------------------------
 def _unique_site(site: dict, site_id: str, j_mA_cm2: float) -> dict:
@@ -198,7 +474,10 @@ def _unique_site(site: dict, site_id: str, j_mA_cm2: float) -> dict:
 
 
 def predict_trench(site: dict, conditions: dict, model: str = "levelset",
-                   quick: bool = False, k_mix: float = 1.0) -> dict:
+                   quick: bool = False, k_mix: float = 1.0, two_way: bool = False,
+                   f_open: float = DEFAULT_F_OPEN, two_way_map: dict | None = None,
+                   two_way_n: int = 3, two_way_tol: float = TWO_WAY_TOL,
+                   two_way_max_iter: int = TWO_WAY_MAX_ITER) -> dict:
     """Predict field/floor/wall thickness of one trench ``site`` at local conditions.
 
     ``conditions`` is a :func:`site_conditions` dict; ``model`` is ``"levelset"``
@@ -237,6 +516,18 @@ def predict_trench(site: dict, conditions: dict, model: str = "levelset",
         (``floor_over_field``, wall asymmetry) shift weakly with ``k`` through the
         concentration field.  The ratios are therefore mildly, not exactly,
         insensitive to the efficiency assumption.
+    two_way
+        ``two_way=False`` (default) is the one-way path above and is bit-identical
+        to it: ``conditions`` is used unchanged and :func:`effective_area_factor` is
+        never called.  ``two_way=True`` adds the array -> coupon feedback: the array
+        draws ``A_eff`` times more current per projected area, so the feature model
+        is run at ``j_coupon * A_eff / <A_eff>``, where ``<A_eff>`` is the
+        current-weighted mean over the coupon (:func:`coupon_area_map` iterated to
+        ``max|dA| < two_way_tol``, at most ``two_way_max_iter`` sweeps).  The
+        normalisation conserves the coupon total current exactly.  ``two_way_map``
+        lets a caller reuse a map built once for this site (``f_open`` and the
+        geometry are validated); otherwise a map is built from :data:`DEFAULT_RUN`
+        with an ``two_way_n x two_way_n`` coupon grid.
 
     Returns ``{model, site_id, x_cm, y_cm, j_mA_cm2, efficiency, delta_um, quick,
     k_mix, field_um, floor_um, floor_over_field, wall_um}`` plus, for ``flow``,
@@ -245,10 +536,37 @@ def predict_trench(site: dict, conditions: dict, model: str = "levelset",
     returns the thicknesses as ``None`` with ``error`` set and a warning, so a
     high-current sweep does not abort.
     ``wall_um`` is ``None`` for the level-set run (that model has no wall split).
+    The two-way keys are always present: ``two_way``, ``a_eff`` (local factor or
+    ``None``), ``a_eff_mean``, ``j_coupon_mA_cm2``, ``two_way_iterations``,
+    ``two_way_history`` (per-sweep ``{iteration, max_change, a_eff_mean}``) and
+    ``two_way_converged``.
     """
     model = str(model).lower()
-    j_local = float(conditions["j_mA_cm2"])
+    j_coupon = float(conditions["j_mA_cm2"])
     hours = float(site["hours"])
+    # One-way by default: `conditions` is used verbatim and no feature solve is
+    # started for the area factor, so the default path is bit-identical.
+    two_way_info = {"two_way": False, "a_eff": None, "a_eff_mean": None,
+                    "j_coupon_mA_cm2": j_coupon, "two_way_iterations": 0,
+                    "two_way_history": [], "two_way_converged": None}
+    j_local = j_coupon
+    if two_way:
+        amap = two_way_map if two_way_map is not None else coupon_area_map(
+            site, f_open=f_open, n=two_way_n, tol=two_way_tol,
+            max_iter=two_way_max_iter)
+        _check_area_map(amap, site, f_open)
+        a_here = _bilinear(amap["x_cm"], amap["y_cm"], amap["a_eff"],
+                           conditions["x_cm"], conditions["y_cm"])
+        # j_coupon * A_eff / <A_eff>: the caller's own local current is rescaled by
+        # the local factor and the coupon normalisation; the map only supplies the
+        # (smooth, weakly varying) factor and its current-weighted mean.
+        j_local = j_coupon * a_here / float(amap["a_eff_mean"])
+        two_way_info = {"two_way": True, "a_eff": float(a_here),
+                        "a_eff_mean": float(amap["a_eff_mean"]),
+                        "j_coupon_mA_cm2": j_coupon,
+                        "two_way_iterations": int(amap["iterations"]),
+                        "two_way_history": list(amap["history"]),
+                        "two_way_converged": bool(amap["converged"])}
     # Position- AND condition-unique site id: feature.calibrate caches on
     # (site id, theta, dx_um, use_pr), so the id must carry the local current and
     # duration too - a different j at the same position/theta would otherwise be
@@ -265,6 +583,7 @@ def predict_trench(site: dict, conditions: dict, model: str = "levelset",
         "delta_um": float(conditions["delta_um"]),
         "quick": bool(quick),
         "k_mix": (float(k_mix) if model == "levelset" else None),
+        **two_way_info,
     }
 
     if model == "levelset":
@@ -320,6 +639,7 @@ def predict_trench(site: dict, conditions: dict, model: str = "levelset",
     raise ValueError(f"model must be 'levelset' or 'flow', got {model!r}")
 
 
-__all__ = ["DEFAULT_RUN", "SIM_CACHE", "cache_stats", "clear_cache",
-           "coupon_centre_z_cm", "face_extent_cm", "predict_trench",
-           "site_conditions"]
+__all__ = ["DEFAULT_F_OPEN", "DEFAULT_RUN", "SIM_CACHE", "TWO_WAY_MAX_ITER",
+           "TWO_WAY_TOL", "cache_stats", "clear_cache", "coupon_area_map",
+           "coupon_centre_z_cm", "effective_area_factor", "face_extent_cm",
+           "predict_trench", "rescale_coupon_currents", "site_conditions"]
