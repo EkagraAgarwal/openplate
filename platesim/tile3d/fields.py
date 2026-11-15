@@ -75,6 +75,38 @@ class _MGFamily:
         return np.asarray(x, dtype=np.float64).ravel()
 
 
+class _AdvLinear:
+    """Non-symmetric Cu2+ system with advection.  direct: sparse LU.  Otherwise GMRES preconditioned by
+    the symmetric part (same faces and sink, no advection): one MGCG V-cycle (fam: _MGFamily) or the
+    reused AMG hierarchy of A_sym + diag(q).  Fine while the cell Peclet number is O(1)."""
+
+    def __init__(self, A, q, direct, fam=None, A_sym=None, pc=None, tol=1e-8):
+        from scipy.sparse.linalg import LinearOperator
+        self.A, self.tol, self.iterations = A, tol, 0
+        self._lu = splu(A.tocsc()) if direct else None
+        self._M = None
+        if not direct:
+            n = A.shape[0]
+            if fam is not None:
+                fam.system(q)
+                self._M = LinearOperator((n, n), matvec=fam.mg.vcycle, dtype=np.float64)
+            else:
+                S = A_sym + sparse.diags(q)
+                self._M = pc.get(S)
+
+    def solve(self, b, x0=None):
+        if self._lu is not None:
+            return self._lu.solve(b)
+        from scipy.sparse.linalg import gmres
+        count = [0]
+        x, info = gmres(self.A, b, x0=x0, rtol=self.tol, atol=0.0, M=self._M, restart=60, maxiter=20,
+                        callback=lambda _: count.__setitem__(0, count[0] + 1), callback_type="pr_norm")
+        self.iterations += count[0]
+        if info != 0:
+            raise RuntimeError(f"GMRES did not converge (info={info}); cell Peclet number too high?")
+        return x
+
+
 def _mg_available():
     try:
         import numba  # noqa: F401
@@ -138,10 +170,12 @@ class FieldSolver:
         self.linear = linear
 
     def solve(self, psi, dx, z0, z_plane, j_net_A_cm2, periodic=(True, True, False), state=None,
-              tol=2e-4, maxit=30):
+              tol=2e-4, maxit=30, flow_faces=None):
         """psi: (nx, ny, nz) level set in cm (positive in electrolyte); z0: z of the low domain face;
         z_plane: height of the bulk plane (cm); j_net_A_cm2: net current per projected area.
         state: dict returned by a previous call (warm start) or None.
+        flow_faces: optional (ux, uy, uz) MAC face velocities on the full grid, cm/s, shaped (nx+1, ny, nz),
+        (nx, ny+1, nz), (nx, ny, nz+1) (platesim.flow3d.solve_stokes3d(...)["faces"]); they advect Cu2+.
         Returns dict(ct, phi, i, speed, V, w, active, kt, info) on the full grid; i is the interface
         current density (A/cm2) of each cell, speed = Mfac * i (cm/s)."""
         p, ph = self.p, self.ph
@@ -214,6 +248,27 @@ class FieldSolver:
 
             def lin_c_of(q):
                 return _Linear(A_c + sparse.diags(q), precond=pc_c, mode=mode)
+        if flow_faces is not None:
+            # Cu2+ with advection: non-symmetric exponentially fitted operator.  Small systems: sparse LU;
+            # large: GMRES preconditioned by the symmetric part (diffusion + the same sink), one MGCG V-cycle
+            # (or the reused AMG hierarchy without numba).  The potential equation has no advection.
+            fx, fy, fz = (np.asarray(f, dtype=np.float64) for f in flow_faces)
+            slab = (fx[:, :, :kt + 1], fy[:, :, :kt + 1], fz[:, :, :kt + 2])
+            A_c, b_c = operators.assemble_advdiff(ph.D_c * hx, ph.D_c * hy, ph.D_c * hz, dx, slab,
+                                                  active=active, dirichlet={"z_hi": 1.0}, periodic=per)
+            F_top = fz[:, :, kt + 1] / dx * active[:, :, -1]        # > 0 leaves through the bulk plane
+            gmax = float(np.max([np.max(np.abs(f[:, :, :kt + 1])) for f in slab[:2]] + [np.max(np.abs(slab[2]))]))
+            info["cell_peclet_max"] = gmax * dx / ph.D_c
+            direct_c = self.linear == "direct" or (self.linear == "auto" and n <= DIRECT_MAX)
+            info["linear_cu"] = "direct" if direct_c else ("gmres+mgcg" if use_mg else "gmres+amg")
+
+            A_sym_c = system(ph.D_c, 1.0)[0] if not (use_mg or direct_c) else None
+
+            def lin_c_of(q):
+                return _AdvLinear(A_c + sparse.diags(q), q, direct_c,
+                                  fam_c if use_mg else None, A_sym=A_sym_c, pc=pc_c)
+        else:
+            F_top = None
         relax = 1.0
         last_change = np.inf
         for outer in range(maxit):
@@ -281,6 +336,9 @@ class FieldSolver:
         ct3 = ct.reshape(shape)
         influx = float(np.sum(ph.D_c * Hs[:, :, -1] / (dx * d_top) * (1.0 - ct3[:, :, -1])
                               * active[:, :, -1]) * p.c_bulk * dx ** 3)
+        if F_top is not None:                            # upwinded advective flux through the bulk plane
+            adv = -np.where(F_top < 0, F_top * 1.0, F_top * ct3[:, :, -1])
+            influx += float(np.sum(adv) * p.c_bulk * dx ** 3)
         need = j_net_A_cm2 * nx * ny * dx * dx * p.efficiency / (2.0 * F)
         info["cu_balance_rel"] = influx / need - 1.0
         info["ct_min_front"] = float(np.min(ct[wf > 0.25 * wf.max()]))

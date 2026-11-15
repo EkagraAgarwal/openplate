@@ -324,6 +324,17 @@ class MGCG:
         level.x += level.correction
         self._smooth(level, self.post, reverse=True)
 
+    def vcycle(self, r):
+        """One V-cycle applied to r: a fixed linear SPD approximation of A^-1 (a preconditioner for
+        Krylov solvers of nearby non-symmetric systems).  Returns an array shaped like r."""
+        r = np.asarray(r)
+        level = self.hierarchy[0]
+        level.rhs[:] = r.reshape(self.shape)
+        self._cycle()
+        z = level.x.copy()
+        z[~level.mask] = level.rhs[~level.mask]          # inactive identity rows
+        return z.astype(np.float64).reshape(r.shape)
+
     def solve(self, b, x0=None, tol=1e-8, maxiter=200):
         """PCG, reporting a freshly recomputed residual, including failed solves.
 

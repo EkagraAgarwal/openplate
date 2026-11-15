@@ -151,6 +151,63 @@ def assemble(kx, ky, kz, dx, reaction=None, active=None, dirichlet=None, periodi
     return A, rhs.ravel()
 
 
+def assemble_advdiff(kx, ky, kz, dx, faces_u, reaction=None, active=None, dirichlet=None,
+                     periodic=None):
+    """CSR A and flat b_bc for  -div(k grad u) + div(v u) + r u  (exponentially fitted faces).
+
+    faces_u = (ux, uy, uz): MAC face velocities (cm/s), shaped like kx, ky, kz; periodic seam faces
+    duplicated (face 0 == face n), as platesim.flow3d.solve_stokes3d returns them.  Every interior or
+    seam edge p -> q (along +axis) with diffusive weight g = k/dx^2 and advective weight F = u/dx
+    carries the Scharfetter-Gummel flux  N = g B(-P) u_p - g B(P) u_q,  P = F/g (as the 2-D engine's
+    sg_advdiff, the same as plain diffusion for F = 0 and upwind for |P| >> 1).  The advective flux is
+    the sharp MAC flux, not weighted by k (2-D mac_face_fluxes convention), so a discretely
+    divergence-free field keeps a uniform solution uniform.  On a Dirichlet outer face the advective
+    flux is upwinded: outflow adds F to the diagonal, inflow adds |F| * value to b_bc.  Other outer
+    faces must carry zero normal velocity.  The result is an M-matrix (non-symmetric)."""
+    from ..feature.engine.fields import sg_face_coeffs
+    shape, faces, mask, diagonal, rhs, wraps = _prepare(
+        kx, ky, kz, dx, reaction, active, dirichlet, periodic)
+    n = int(np.prod(shape))
+    ids = np.arange(n).reshape(shape)
+    diag, b = diagonal.ravel().copy(), rhs.ravel().copy()
+    bc = {} if dirichlet is None else dirichlet
+    rows, cols, data = [], [], []
+    for axis, (face, vel) in enumerate(zip(faces, faces_u)):
+        vel = np.asarray(vel, dtype=np.float64)
+        if vel.shape != face.shape or not np.isfinite(vel).all():
+            raise ValueError("face velocities must be finite and shaped like the face coefficients")
+        i, m, f, v = (np.moveaxis(a, axis, 0) for a in (ids, mask, face, vel))
+        batches = [(m[:-1] & m[1:] & (f[1:-1] > 0), i[:-1], i[1:], f[1:-1], v[1:-1])]
+        if wraps[axis] and shape[axis] > 1:
+            batches.append((m[-1] & m[0] & (f[0] > 0), i[-1], i[0], f[0], v[0]))
+        for ok, p, q, g, u in batches:
+            Np, Nq = sg_face_coeffs(g[ok] / dx**2, u[ok] / dx)
+            p, q = p[ok], q[ok]
+            rows.extend((p, p, q, q))
+            cols.extend((p, q, p, q))
+            data.extend((Np, -Nq, -Np, Nq))
+        if not wraps[axis]:
+            for side, index, sign in ((0, 0, -1.0), (1, -1, 1.0)):
+                key = f"{'xyz'[axis]}_{('lo', 'hi')[side]}"
+                Fo = sign * v[index] / dx * m[index]             # > 0 leaves the domain
+                if key not in bc:
+                    if np.any(np.abs(Fo) > 0):
+                        raise ValueError(f"nonzero normal velocity on the insulating face {key}")
+                    continue
+                value = np.broadcast_to(np.asarray(bc[key], dtype=np.float64), Fo.shape)
+                cells = i[index]
+                np.add.at(diag, cells[Fo > 0].ravel(), Fo[Fo > 0].ravel())
+                np.add.at(b, cells[Fo < 0].ravel(), (-Fo * value)[Fo < 0].ravel())
+    idx = np.arange(n)
+    rows.append(idx)
+    cols.append(idx)
+    data.append(diag)
+    A = sparse.coo_matrix((np.concatenate(data), (np.concatenate(rows), np.concatenate(cols))),
+                          shape=(n, n)).tocsr()
+    A.eliminate_zeros()
+    return A, b
+
+
 def apply_matrix_free(u, kx, ky, kz, dx, reaction=None, active=None, dirichlet=None,
                       periodic=None):
     """Apply only A to a cell-shaped u; return cell shape, without b_bc."""
