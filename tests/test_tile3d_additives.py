@@ -1,4 +1,4 @@
-"""Additives in the 3-D tile engine, Phase 1 (research/sims_3d/additives_3d_plan.md section 3.2).
+"""Additives in the 3-D tile engine, Phase 1 (3-D additives port, test plan).
 
 What is covered:
   * test 1 -- additives off is bit-identical: the pre-change reference numbers of the additive-free

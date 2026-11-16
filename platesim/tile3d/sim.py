@@ -89,7 +89,7 @@ def run_tile(psi_si, grid: Grid3D, j_net_mA_cm2, duration_s, delta_um=64.0, para
     frame_times = np.linspace(0.0, duration_s, max(int(n_frames), 2))
     series = {k: [] for k in ("t_s", "charge_C_cm2", "solid_volume_cm3", "faraday_volume_cm3", "V",
                               "cu_balance_rel", "ct_min_front", "outer_iterations", "flow_umax_um_s")}
-    # Phase 1-2 additives (additives_3d_plan.md): Params.additives='cl_ndr' switches on the cell-local
+    # Phase 1-2 additives (3-D additives port): Params.additives='cl_ndr' switches on the cell-local
     # Cl-/suppressor coverages, 'acc' adds the Phase-2 transported accelerator field; 'legacy' (default)
     # leaves cov None and every legacy number untouched.
     if p.additives == "full":
