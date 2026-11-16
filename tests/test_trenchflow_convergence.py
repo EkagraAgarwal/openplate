@@ -40,8 +40,9 @@ def quick_path(tmp_path_factory):
 
 
 @pytest.fixture(scope="module")
-def quick_result(quick_path):
+def quick_result(quick_path, require_data):
     """One quick run, shared by the key/JSON assertions (it costs ~30 s)."""
+    require_data("trench_sem.json")
     return run(quick=True, out_path=quick_path)
 
 

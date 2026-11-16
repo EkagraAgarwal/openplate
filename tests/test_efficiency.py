@@ -103,7 +103,8 @@ def test_loss_monotone_in_magnitude():
 # ---------------------------------------------------------------------------
 # 3. MAP fit of H4 reproduces runs 1-8 within 1.0 um RMS
 # ---------------------------------------------------------------------------
-def test_map_h4_rms_under_1um():
+def test_map_h4_rms_under_1um(require_data):
+    require_data("planar_doe.json")
     res = fit_map("H4", n_starts=3, max_nfev=300)
     runs = calibration_runs()
     resid = [r["actual_um"] - predict(r, res["theta_map"], hypothesis="H4")["thickness_um"]
@@ -121,7 +122,8 @@ def test_map_h4_rms_under_1um():
 # ---------------------------------------------------------------------------
 # 4. MCMC smoke test (few steps) - emcee if present, else Metropolis fallback
 # ---------------------------------------------------------------------------
-def test_mcmc_smoke():
+def test_mcmc_smoke(require_data):
+    require_data("planar_doe.json")
     m = sample_mcmc("H1", n_steps=60, seed=1)
     assert m["backend"] in ("emcee", "metropolis")
     assert m["n_samples"] > 10
@@ -153,7 +155,8 @@ def test_run_predict_mode():
     assert len(bar["categories"]) == len(bar["series"][0]["y"]) == 6
 
 
-def test_run_calibrate_mode_and_pending_predictions():
+def test_run_calibrate_mode_and_pending_predictions(require_data):
+    require_data("planar_doe.json")
     out = model_run({"mode": "calibrate", "hypothesis": "H4", "method": "map"})
     comp = out["summary"]["comparison_table"]
     assert {c["hypothesis"] for c in comp} == {"H1", "H2", "H3", "H4"}

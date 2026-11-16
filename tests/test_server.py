@@ -219,7 +219,8 @@ def test_websocket_streams_job_updates(tmp_path):
             assert seen_running and seen_done
 
 
-def test_data_endpoints(tmp_path):
+def test_data_endpoints(tmp_path, require_data):
+    require_data('planar_doe.json')  # team DOE table is gitignored
     with TestClient(create_app(data_dir=tmp_path / "psdata")) as c:
         doe = c.get("/api/data/planar_doe")
         assert doe.status_code == 200

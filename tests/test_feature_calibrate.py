@@ -61,7 +61,8 @@ def test_unknown_parameter_raises():
         cal.predict(sites[0], {"nonsense": 1.0}, dx_um=8.0)
 
 
-def test_load_sites_trench1():
+def test_load_sites_trench1(require_data):
+    require_data("trench_sem.json")
     sites = cal.load_sites()
     assert [s["id"] for s in sites] == ["trench1_wide", "trench1_narrow"]
     assert {s["sample"] for s in sites} == {"Trench 1"}

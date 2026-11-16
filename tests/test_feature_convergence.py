@@ -71,7 +71,8 @@ def test_cu_balance_survives_a_filled_stop():
 
 
 # ------------------------------------------------------------------ convergence harness
-def test_quick_run_returns_expected_keys():
+def test_quick_run_returns_expected_keys(require_data):
+    require_data('trench_sem.json')
     t0 = time.time()
     out = conv.run(quick=True)                       # no `out` -> the production JSON is not touched
     assert time.time() - t0 < 60.0, time.time() - t0

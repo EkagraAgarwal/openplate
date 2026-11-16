@@ -27,5 +27,5 @@
   ]},
   "bath": {"cu_g_L": 40, "h2so4_g_L": 100, "cl_ppm": 50, "temperature_C": 25},
   "setup": {"orientation": "vertical", "taped": true, "area_cm2": 1.0},
-  "numerics": {}
+  "numerics": {"quality": "preview", "device": "cpu"}
 }

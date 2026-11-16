@@ -66,7 +66,8 @@ def test_thickness_integrates_to_faraday(sims):
                                                            abs=1e-6)
 
 
-def test_sem_points_and_direction():
+def test_sem_points_and_direction(require_data):
+    require_data("sem_measurements.json")
     assert {p["label"] for p in load_sem_points()} >= {
         "top_left", "top_left_2", "bottom_left", "bottom_right",
         "run1_top", "run1_bottom", "run2_mid", "run2_bottom"}
@@ -93,8 +94,9 @@ def test_sem_points_and_direction():
     assert float(ef[:, 0].mean()) > float(ef[:, -1].mean()) + 0.01
 
 
-def test_calibration_smoke():
+def test_calibration_smoke(require_data):
     """2 runs, small budget: returns a fitted theta + residual table fast."""
+    require_data("planar_doe.json")
     runs = [r for r in load_doe()["runs"] if r["id"] in (1, 7)]
     t0 = time.perf_counter()
     res = calibrate_joint(runs=runs, sem_points=[], max_nfev=3, save=False,
@@ -116,7 +118,8 @@ def test_calibration_smoke():
     assert load_calibration() is None or True             # save=False wrote nothing new
 
 
-def test_predict_table_matches_pipeline(sims):
+def test_predict_table_matches_pipeline(sims, require_data):
+    require_data("planar_doe.json", "sem_measurements.json")
     theta = dict(DEFAULT_THETA)
     doe_rows, sem_rows = predict_table(theta, runs=[_run_row(1)],
                                        resolution="coarse")
@@ -131,7 +134,8 @@ def _run_row(run_id: int) -> dict:
     return next(r for r in load_doe()["runs"] if r["id"] == run_id)
 
 
-def test_run_plugin_contract():
+def test_run_plugin_contract(require_data):
+    require_data("planar_doe.json", "sem_measurements.json")
     out = run({"mode": "simulate", "use_calibration": False, "setup": "imp1",
                "resolution": "coarse"})
     assert MODEL_SPEC["id"] == "coupon_pipeline"

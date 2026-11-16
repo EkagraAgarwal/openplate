@@ -194,6 +194,15 @@ CONTRACTS_3D.md  3-D spec, manifest, HTTP API and agent interface
 
 ## Contributing
 
+### Running the tests
+
+Run `bash tools/ci_local.sh` (Git Bash on Windows) for the public Python tests,
+app tests and TypeScript checks. It installs the Python extras and uses a fresh
+writable pytest temp directory; override its parent with `CI_TEMP_ROOT`.
+Tests needing absent private measured data skip with the missing filename.
+For the full Python suite, use the same `uv run` command in the script without
+`-m "not slow and not gpu"`; the public quick-trench golden takes about 95 s.
+
 Issues and pull requests are welcome. For a new model, follow the plug-in contract above and add tests in
 `tests/test_<module>.py`. Please tag every literature value with its source and do not commit personal data.
 
