@@ -112,6 +112,18 @@ class Params:
     c_acc: float = 5e-9                        # mol/cm3
     k_acc: float = 1.76e6                      # cm3/(mol s)
     b_acc: float = 4.5e-3 / 2.6e-5             # i0 multiplier slope: i0 *= (1 + b_acc*theta_a)
+    # ---- transported accelerator (additives_3d_plan.md Phase 2; tile3d/additives3d.py).
+    # The 2-D engine never transports the accelerator (it uses the bulk c_acc at the front), so these
+    # constants are NEW here and every one of them is a judgement value [J], not a measurement:
+    #   D_acc25   SPS/MPS-class molecule in the 64 um Nernst layer; 1e-6 cm2/s is the same order as the
+    #             polyether suppressor (Braun D ~ 1e-10 m2/s) and gives a diffusion length sqrt(D dt) ~ 35 um
+    #             over a 120 s step, i.e. comparable to delta.  [J]
+    #   Gamma_acc monolayer capacity ~ a few percent of the Cu(111) site density (2.4e-9 mol/cm2).  [J]
+    #   k_inc_a   burial/incorporation of the adsorbate by the growing front, the 2-D AdditiveSet default.  [J]
+    D_acc25: float = 1.0e-6                    # cm2/s at 25 C (Stokes-Einstein scaled)
+    Gamma_acc: float = 1.0e-10                 # mol/cm2 accelerator saturation coverage [J]
+    k_inc_a: float = 1.0e5                     # 1/cm incorporation by the advancing front [J]
+    k_des_a: float = 0.0                       # 1/s thermal desorption (2-D accelerator: none) [J]
     # ---- convection / boundary layer
     delta_um: float = 20.0                     # diffusion boundary layer above the field
     D_t0: float = 1e-3                         # cm2/s eddy diffusivity at the via mouth
@@ -330,6 +342,7 @@ class Phys:
     z_h: float = 1.0
     z_so4: float = -2.0
     kappa_ne: float = 0.0   # bulk Nernst-Einstein conductivity F^2/(RT) sum z^2 D c (S/cm)
+    D_acc: float = 0.0      # accelerator diffusivity (3-D 'acc' mode only; 0 when the mode is off)
 
 
 TRANSPORTS = ("enhanced", "tertiary")
@@ -338,7 +351,7 @@ FLOW_SOLVERS = ("lbm", "stokes")
 ADV_SCHEMES = ("upwind", "sg", "tvd")
 LS_SCHEMES = ("godunov1", "weno5")
 BULK_PLANES = ("edge", "field_mean", "fixed")
-ADDITIVES_MODES = ("legacy", "cl_ndr", "full")
+ADDITIVES_MODES = ("legacy", "cl_ndr", "acc", "full")
 INTERFACES = ("diffuse", "sharp")
 
 
@@ -373,6 +386,12 @@ def derive(p: Params, T_C: float) -> Phys:
         raise ValueError(f"cov_relax must be in (0, 1], got {p.cov_relax!r}")
     if min(p.k_cl, p.k_des_cl, p.k_inc_cl, p.k_des_s) < 0.0:
         raise ValueError("Cl-/suppressor coverage rate constants must be nonnegative")
+    if not np.isfinite(p.D_acc25) or p.D_acc25 <= 0.0:
+        raise ValueError(f"D_acc25 must be finite and > 0, got {p.D_acc25!r}")
+    if not np.isfinite(p.Gamma_acc) or p.Gamma_acc <= 0.0:
+        raise ValueError(f"Gamma_acc must be finite and > 0, got {p.Gamma_acc!r}")
+    if min(p.k_acc, p.k_inc_a, p.k_des_a, p.c_acc) < 0.0:
+        raise ValueError("accelerator rate constants and c_acc must be nonnegative")
     if not 0.0 <= p.bubble_contact_deg <= 180.0:
         raise ValueError(f"bubble_contact_deg must be in [0, 180], got {p.bubble_contact_deg!r}")
     if p.bubble_max < 0:
@@ -400,6 +419,7 @@ def derive(p: Params, T_C: float) -> Phys:
         T_C=T_C, T_K=T_K, f_RT=f_RT,
         D_cu=D_cu, D_c=D_cu if tertiary else p.E_mig * D_cu, D_s=p.D_s25 * fD,
         D_lev=(p.D_lev25 * fD if p.additives == "full" else 0.0),
+        D_acc=(p.D_acc25 * fD if p.additives == "acc" else 0.0),
         kappa=p.kappa_22 * (1 + p.kappa_per_K * (T_C - 22.0)),
         i0_u=p.i0_u * arr, i0_s=p.i0_s * arr, i0_a=p.i0_a * arr,
         Mfac=M_CU / (2 * F * RHO_CU) * p.efficiency,

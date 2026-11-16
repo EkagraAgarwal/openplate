@@ -48,8 +48,9 @@ def run_tile(psi_si, grid: Grid3D, j_net_mA_cm2, duration_s, delta_um=64.0, para
     field surface.  The values multiply the exchange current density i0_u of every interface cell: a
     prescribed *effective suppression map*, uncalibrated (e.g. 0.85 for cells deeper than 25 um stands
     in for a floor-depleted accelerator).  Params.additives='cl_ndr' adds the Cl-gated suppressor
-    coverage of tile3d.additives3d on top of it; the default 'legacy' keeps every additive path off
-    (bit-identical to the additive-free engine).
+    coverage of tile3d.additives3d on top of it; 'acc' adds the Phase-2 transported accelerator bulk
+    field (series keys theta_a_floor/field, a_floor/field; frames theta_a, a_acc).  The default
+    'legacy' keeps every additive path off (bit-identical to the additive-free engine).
     field_mask: bool (nx, ny) columns that count as "field" for the bulk-plane height; default: columns
     whose bare surface lies within one cell of the highest bare surface.
     flow: None (no convection) or dict with any of shear_rate_s (0), shear_dir ((1, 0), in-plane),
@@ -88,16 +89,23 @@ def run_tile(psi_si, grid: Grid3D, j_net_mA_cm2, duration_s, delta_um=64.0, para
     frame_times = np.linspace(0.0, duration_s, max(int(n_frames), 2))
     series = {k: [] for k in ("t_s", "charge_C_cm2", "solid_volume_cm3", "faraday_volume_cm3", "V",
                               "cu_balance_rel", "ct_min_front", "outer_iterations", "flow_umax_um_s")}
-    # Phase 1 additives (additives_3d_plan.md): Params.additives='cl_ndr' switches on the cell-local
-    # Cl-/suppressor coverages; 'legacy' (default) leaves cov None and every legacy number untouched.
+    # Phase 1-2 additives (additives_3d_plan.md): Params.additives='cl_ndr' switches on the cell-local
+    # Cl-/suppressor coverages, 'acc' adds the Phase-2 transported accelerator field; 'legacy' (default)
+    # leaves cov None and every legacy number untouched.
     if p.additives == "full":
         raise NotImplementedError(
-            "run_tile: additives='full' has no 3-D implementation (bulk additive transport and the CEAC "
-            "accelerator/leveller are phases 2-3 of the 3-D additives port); use 'cl_ndr'")
-    cov = None if p.additives == "legacy" else additives3d.coverage_init(grid.shape, p.theta0)
+            "run_tile: additives='full' has no 3-D implementation (transported leveller, surface coverage "
+            "transport and the CEAC curvature term are phases 3-4 of "
+            "the 3-D additives port); use 'cl_ndr' or 'acc'")
+    cov = None if p.additives == "legacy" else additives3d.coverage_init(
+        grid.shape, p.theta0, with_acc=p.additives == "acc")
+    acc_on = cov is not None and p.additives == "acc"
     if cov is not None:
         for key in ("theta_s_floor", "theta_s_field", "theta_cl_floor", "theta_cl_field"):
             series[key] = []
+        if acc_on:
+            for key in ("theta_a_floor", "theta_a_field", "a_floor", "a_field"):
+                series[key] = []
     zc = grid.centers()[2]
     t, step, state, next_frame, charge = 0.0, 0, None, 0, 0.0
     wall0 = time.time()
@@ -110,10 +118,18 @@ def run_tile(psi_si, grid: Grid3D, j_net_mA_cm2, duration_s, delta_um=64.0, para
             floor_cols = field_mask
         th_s = cov["theta_s"][ii, jj, kk]
         th_cl = cov["theta_cl"][ii, jj, kk]
-        return dict(theta_s_floor=float(np.mean(th_s[floor_cols])),
-                    theta_s_field=float(np.mean(th_s[field_mask])),
-                    theta_cl_floor=float(np.mean(th_cl[floor_cols])),
-                    theta_cl_field=float(np.mean(th_cl[field_mask])))
+        row = dict(theta_s_floor=float(np.mean(th_s[floor_cols])),
+                   theta_s_field=float(np.mean(th_s[field_mask])),
+                   theta_cl_floor=float(np.mean(th_cl[floor_cols])),
+                   theta_cl_field=float(np.mean(th_cl[field_mask])))
+        if acc_on:
+            th_a = cov["theta_a"][ii, jj, kk]
+            a = cov[additives3d.ACC_KEY][ii, jj, kk]
+            row.update(theta_a_floor=float(np.mean(th_a[floor_cols])),
+                       theta_a_field=float(np.mean(th_a[field_mask])),
+                       a_floor=float(np.mean(a[floor_cols])),
+                       a_field=float(np.mean(a[field_mask])))
+        return row
 
     def save(out):
         nonlocal next_frame
@@ -134,7 +150,10 @@ def run_tile(psi_si, grid: Grid3D, j_net_mA_cm2, duration_s, delta_um=64.0, para
                           speed=out["speed"].astype(np.float32))
             if cov is not None:
                 fields.update(theta_s=cov["theta_s"].astype(np.float32),
-                              theta_cl=cov["theta_cl"].astype(np.float32))
+                              theta_cl=cov["theta_cl"].astype(np.float32),
+                              theta_a=cov["theta_a"].astype(np.float32))
+                if acc_on:
+                    fields["a_acc"] = cov[additives3d.ACC_KEY].astype(np.float32)
             writer.add_frame(t, psi.astype(np.float32), fields=fields, scalars=row)
         if frame_callback is not None:
             frame_callback(t, psi, row)
@@ -198,4 +217,4 @@ def run_tile(psi_si, grid: Grid3D, j_net_mA_cm2, duration_s, delta_um=64.0, para
     if writer is not None:
         writer.close(dict(summary=summary))
         return TileResult(run_dir)
-    return dict(psi=psi, series=series, summary=summary, grid=grid)
+    return dict(psi=psi, series=series, summary=summary, grid=grid, fields=out)
