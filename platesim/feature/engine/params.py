@@ -227,9 +227,8 @@ class Params:
     # 3-D resolved pulses only: areal double-layer capacitance. 0 preserves legacy kinetics.
     C_dl_F_cm2: float = 0.0
     # 3-D only, uncalibrated anodic Tafel coefficient in exp(alpha*F*eta/RT).
-    # Literature-review fitting range 1.0-1.5: research/sims_3d/pulse_reverse_literature.md,
-    # section 6; Mattsson & Bockris (1959), doi:10.1039/TF9595501586;
-    # Bockris & Enyo (1962), doi:10.1039/TF9625801187 (mechanistic references).
+    # Literature fitting range 1.0-1.5 for Cu dissolution in acid sulfate (mechanistic references:
+    # Mattsson & Bockris, Trans. Faraday Soc. 1959; Bockris & Enyo, Trans. Faraday Soc. 1962).
     # This is an uncalibrated lumped model value, NOT a measured bath coefficient.
     # Keep the older 2-D alpha_a=1.5 untouched.
     pulse_alpha_a: float = 1.5

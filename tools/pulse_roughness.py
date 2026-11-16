@@ -114,7 +114,7 @@ def main():
         'sqrt(D*T) may not be small versus 3 um wavelength: short-wave results are exploratory.',
         'No grain refinement, nucleation, texture, additives or seed depletion.',
         'RC model is periodic and lumped over interface area, not a spatial transient RC solve.',
-        'Reference: pulse_reverse_literature.md sections 5-7; alpha_a=1.5 and i0=2 mA/cm2 are uncalibrated.',
+        'Literature ranges for C_dl and alpha_a; alpha_a=1.5 and i0=2 mA/cm2 are uncalibrated.',
         'Review Wa~150 uses kappa=0.5 S/cm; engine default kappa=0.065 S/cm is reported separately.',
         'No Faraday volume correction: actual discretisation drift is reported.',
         'Rates include numerical level-set smoothing; perform dx/dt convergence before physical inference.'])

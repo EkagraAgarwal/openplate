@@ -93,7 +93,7 @@ def run_tile(psi_si, grid: Grid3D, j_net_mA_cm2, duration_s, delta_um=64.0, para
     if p.additives == "full":
         raise NotImplementedError(
             "run_tile: additives='full' has no 3-D implementation (bulk additive transport and the CEAC "
-            "accelerator/leveller are phases 2-3 of research/sims_3d/additives_3d_plan.md); use 'cl_ndr'")
+            "accelerator/leveller are phases 2-3 of the 3-D additives port); use 'cl_ndr'")
     cov = None if p.additives == "legacy" else additives3d.coverage_init(grid.shape, p.theta0)
     if cov is not None:
         for key in ("theta_s_floor", "theta_s_field", "theta_cl_floor", "theta_cl_field"):

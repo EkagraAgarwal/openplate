@@ -262,7 +262,7 @@ def run_tile(psi_si, grid, j_net_mA_cm2, duration_s, delta_um=64.0, params=None,
 
 `Params.additives` selects the additive model. `'legacy'` (default) = no additives, bit-identical
 to the pre-additive engine. `'cl_ndr'` switches on the cell-local Cl-/suppressor coverages of
-`tile3d/additives3d.py` (Phase 1 of `research/sims_3d/additives_3d_plan.md`); `'full'` raises
+`tile3d/additives3d.py` (Phase 1 of the 3-D additives port); `'full'` raises
 `NotImplementedError` (bulk additive transport, CEAC accelerator and leveller are phases 2-3).
 
 Per interface cell, the quasi-steady 2-D balances are

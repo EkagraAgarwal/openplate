@@ -8,8 +8,8 @@ time grid, start-up cycles, and arrays of size cells x harmonics. Phase means
 converge as n**(-5/2); 512 harmonics are inexpensive (a 3 x 3 matrix).
 The independent-normal-column approximation requires sqrt(D T) small compared
 with lateral curvature scales. It is not a grain/nucleation model.
-Pulse-diffusion background: Cheh, JES 118 (1971), doi:10.1149/1.2408110;
-Ibl (1980), doi:10.1016/0376-4583(80)90056-4. The Fourier/Abel equations above
+Pulse-diffusion background: Cheh, J. Electrochem. Soc. 118 (1971);
+Ibl, Surface Technology (1980). The Fourier/Abel equations above
 are derived directly from the diffusion PDE, not fitted to a roughness outcome.
 """
 from __future__ import annotations
@@ -127,8 +127,8 @@ def capacitive_cycle(durations, currents, C_dl, i0, alpha_c_f, alpha_a_f,
     Cdl=0 computes the same *diagnostic* transient at 30 uF/cm2 while leaving
     returned Faradaic currents identical to the applied waveform.
 
-    Cdl range/context: pulse_reverse_literature.md sections 5-7 (25-40 uF/cm2;
-    30% reverse charge is an estimate, not an enforced calibration target).
+    Cdl range/context: literature 25-40 uF/cm2 for Cu in acid sulfate (~30% of the
+    reverse charge is an estimate, not an enforced calibration target).
     """
     from scipy.integrate import solve_ivp
     from scipy.optimize import brentq

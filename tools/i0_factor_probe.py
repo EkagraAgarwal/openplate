@@ -1,6 +1,6 @@
 """Prescribed floor-vs-field exchange-current factor on a public synthetic trench.
 
-Step 0 of ``research/sims_3d/additives_3d_plan.md`` as a first-class engine call: the factor is
+Step 0 of the 3-D additives port as a first-class engine call: the factor is
 passed through ``run_tile(kinetics_factor=...)`` instead of patching the solver.  The map is
 
     f(z) = f_deep      for z below (current mean field top - cut_um)
@@ -10,9 +10,9 @@ an *effective, uncalibrated* stand-in for a floor-depleted accelerator or a fiel
 breakdown: a differential, not a uniform suppression.  The point of the probe is the sign and the
 magnitude of the floor/field response.
 
-Geometry (public, synthetic -- no measured data): 228 um wide x 88 um deep rectangular trench,
-field surface at z = 0, pitch 228 / 0.2 = 1140 um (open fraction 0.2), 4 periodic y cells, dx 8 um,
-delta 64 um, 11.6 mA/cm2 for 4.5 h.  floor/field is the mean grown thickness of the floor columns
+Geometry (generic round numbers, not a measured sample): 200 um wide x 80 um deep rectangular
+trench, field surface at z = 0, pitch 200 / 0.2 = 1000 um (open fraction 0.2), 4 periodic y cells,
+dx 8 um, delta 64 um, 12 mA/cm2 for 4 h.  floor/field is the mean grown thickness of the floor columns
 (|x| <= 57 um) over the far-field columns (|x| >= 300 um).
 
 Usage::
@@ -34,19 +34,18 @@ from platesim.tile3d.grid import Grid3D
 from platesim.tile3d.sim import run_tile, top_height
 
 UM = 1e-4
-WIDTH_UM, DEPTH_UM, F_OPEN = 228.0, 88.0, 0.2
-DX_UM, DELTA_UM, J_MA, HOURS = 8.0, 64.0, 11.6, 4.5
+WIDTH_UM, DEPTH_UM, F_OPEN = 200.0, 80.0, 0.2
+DX_UM, DELTA_UM, J_MA, HOURS = 8.0, 64.0, 12.0, 4.0
 
 
 def geometry():
     """(psi, grid, field_mask) of the synthetic trench, cm."""
     pitch_um = WIDTH_UM / F_OPEN
-    nx = int(round(pitch_um / DX_UM))                       # 142.5 -> 143 cells is not integer
+    nx = int(round(pitch_um / DX_UM))
     nx += nx % 2                                            # keep the trench centred on a cell edge
     ny = 4
-    # z in [-96, 192] um: the field grows Mfac*j*4.5 h = 69 um over the projected area, i.e. ~86 um
-    # of field thickness at f_open 0.2, so the moving Dirichlet plane (field top + delta = 150 um)
-    # must stay well inside the domain (run_tile raises when it does not).
+    # z in [-96, 192] um: the field grows ~64 um (Mfac*j*4 h) plus the open-fraction excess, so the
+    # moving Dirichlet plane (field top + delta) stays inside the domain (run_tile raises otherwise).
     nz = 36
     grid = Grid3D((nx, ny, nz), DX_UM * UM, (-0.5 * nx * DX_UM * UM, 0.0, -96 * UM))
     x, _, z = grid.meshgrid()
