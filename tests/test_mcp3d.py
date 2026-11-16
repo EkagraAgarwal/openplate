@@ -177,6 +177,7 @@ def test_render_tools(completed, monkeypatch):
 
 
 def test_fastmcp_tool_list(tmp_path):
+    pytest.importorskip('mcp', reason='optional MCP SDK not installed')
     from platesim.mcp3d.server import create_server
     server = create_server(tmp_path)
     tools = asyncio.run(server.list_tools())
@@ -219,6 +220,7 @@ def test_real_tiny_preview(tmp_path, spec):
 
 def test_stdio_round_trip(tmp_path, spec):
     """Exercise the actual module entry point, SDK transport and real solver."""
+    pytest.importorskip('mcp', reason='optional MCP SDK not installed')
     import anyio
     from mcp import ClientSession, StdioServerParameters
     from mcp.client.stdio import stdio_client

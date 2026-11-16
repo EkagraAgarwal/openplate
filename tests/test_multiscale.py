@@ -79,8 +79,9 @@ def test_grid_conditions_shared_solve_and_mean_current(centre):
 
 @pytest.mark.parametrize("site_index", [0, 1])
 @pytest.mark.parametrize("model", ["levelset", "flow"])
-def test_predict_trench_quick(centre, site_index, model):
+def test_predict_trench_quick(centre, site_index, model, require_data):
     """predict_trench runs end to end in quick mode for both models and both sites."""
+    require_data("trench_sem.json")
     site = load_sites()[site_index]
     out = predict_trench(site, centre, model=model, quick=True)
     assert COMMON_KEYS <= set(out), COMMON_KEYS - set(out)
@@ -102,8 +103,9 @@ def test_predict_trench_quick(centre, site_index, model):
         assert out["j_field_mA_cm2"] > 0.0
 
 
-def test_levelset_cache_uses_unique_ids(centre):
+def test_levelset_cache_uses_unique_ids(centre, require_data):
     """Two positions must not share the feature.calibrate cache entry (unique ids)."""
+    require_data("trench_sem.json")
     site = load_sites()[0]
     a = predict_trench(site, {**centre, "x_cm": 0.0, "y_cm": 0.0}, "levelset", quick=True)
     b = predict_trench(site, {**centre, "x_cm": 0.8, "y_cm": 0.8}, "levelset", quick=True)
@@ -113,8 +115,9 @@ def test_levelset_cache_uses_unique_ids(centre):
     assert c["field_um"] == pytest.approx(b["field_um"])
 
 
-def test_flow_field_current_from_local_conditions(centre):
+def test_flow_field_current_from_local_conditions(centre, require_data):
     """flow: field_um = j*1e-3*Mfac*eff*hours*3600/1e-4 and j_field = j*eff (narrow site)."""
+    require_data("trench_sem.json")
     site = load_sites()[1]                       # narrow site: cheapest flow solve
     out = predict_trench(site, centre, model="flow", quick=True)
     mfac = float(model_constants(float(site["T_C"]))[2])
@@ -128,8 +131,9 @@ def test_flow_field_current_from_local_conditions(centre):
     assert out["site_id"].endswith(f"_j{j:.3f}_h{float(site['hours']):g}")
 
 
-def test_summarize_measured_intervals():
+def test_summarize_measured_intervals(require_data):
     """summarize() uses the measured range [lo,hi]; only the degenerate floor is 53+-3."""
+    require_data("trench_sem.json")
     sites = load_sites()
     narrow = [s for s in sites if str(s["id"]).endswith("narrow")][0]
     key = f"{narrow['id']}|levelset"
@@ -163,8 +167,9 @@ def test_summarize_measured_intervals():
     assert "best +/- 3" in out["measured_rule"]
 
 
-def test_kmix_switch_changes_levelset_flow_ignores_it(centre):
+def test_kmix_switch_changes_levelset_flow_ignores_it(centre, require_data):
     """k_mix is a level-set model switch: it lowers floor/ratio; flow ignores it."""
+    require_data("trench_sem.json")
     site = load_sites()[1]                       # narrow site (cheapest solves)
     hi = predict_trench(site, centre, "levelset", quick=True, k_mix=1.0)
     lo = predict_trench(site, centre, "levelset", quick=True, k_mix=0.0)
@@ -178,8 +183,9 @@ def test_kmix_switch_changes_levelset_flow_ignores_it(centre):
     assert f0["floor_um"] == pytest.approx(f1["floor_um"])
 
 
-def test_evaluate_grid_threads_resolution(monkeypatch):
+def test_evaluate_grid_threads_resolution(monkeypatch, require_data):
     """evaluate_grid(resolution=...) reaches site_conditions (recorded, no solve)."""
+    require_data("trench_sem.json")
     import platesim.multiscale.validate as V
 
     seen: list[str] = []

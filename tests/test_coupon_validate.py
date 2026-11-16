@@ -138,7 +138,8 @@ def test_trench_prediction_smoke():
 
 @pytest.mark.skipif(not SLOW, reason="slow: one LOO refit + 8 full-fit predictions; "
                                      "set PLATESIM_SLOW=1")
-def test_leave_one_out_smoke_single_run():
+def test_leave_one_out_smoke_single_run(require_data):
+    require_data("planar_doe.json", "sem_measurements.json")
     res = leave_one_out(ids=[3], max_nfev=2, time_budget_s=90.0, resolution="coarse")
     assert len(res["rows"]) == 1
     row = res["rows"][0]

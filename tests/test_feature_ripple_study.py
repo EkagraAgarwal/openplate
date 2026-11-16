@@ -138,7 +138,8 @@ def test_ripple_of_a_flat_field_is_nan():
 
 
 # ------------------------------------------------------------------ case list and CLI
-def test_build_cases_names_are_unique_and_cover_every_group():
+def test_build_cases_names_are_unique_and_cover_every_group(require_data):
+    require_data('trench_sem.json')
     cases = rs.build_cases(False)
     names = [c["name"] for c in cases]
     assert len(names) == len(set(names))
@@ -154,7 +155,8 @@ def test_build_cases_names_are_unique_and_cover_every_group():
             assert c["params"]["adv_form"] == "divergence"
 
 
-def test_quick_cases_are_the_narrow_dx8_subset():
+def test_quick_cases_are_the_narrow_dx8_subset(require_data):
+    require_data('trench_sem.json')
     full, quick = rs.build_cases(False), rs.build_cases(True)
     assert quick and {c["name"] for c in quick} < {c["name"] for c in full}
     for c in quick:
@@ -166,7 +168,8 @@ def test_quick_cases_are_the_narrow_dx8_subset():
             assert c["hours"] == rs.QUICK_HOURS
 
 
-def test_list_prints_the_case_names(capsys):
+def test_list_prints_the_case_names(capsys, require_data):
+    require_data('trench_sem.json')
     cases = rs.main(["--list"])
     text = capsys.readouterr().out.strip().splitlines()
     assert len(text) == len(cases)
@@ -188,7 +191,8 @@ def test_summary_table_has_one_row_per_case():
 
 
 # ------------------------------------------------------------------ one real short run
-def test_smoke_run_one_returns_a_finite_field():
+def test_smoke_run_one_returns_a_finite_field(require_data):
+    require_data('trench_sem.json')
     case = dict(name="smoke_narrow", site="narrow", group="base", hours=0.05, j=15.0, f_open=0.2,
                 params={"dx_um": 8.0, "flow_shear_s": 0.0})
     r = rs.run_one(case)

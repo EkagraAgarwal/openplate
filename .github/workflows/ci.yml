@@ -1,0 +1,36 @@
+name: CI
+
+on: [push, pull_request]
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: '3.12'
+      - name: System libraries for gmsh and offscreen rendering
+        run: sudo apt-get update && sudo apt-get install -y libglu1-mesa libgl1 libxrender1 libxext6
+      - name: Python tests
+        env:
+          PYTHONPATH: .
+          NUMBA_NUM_THREADS: '4'
+          MPLBACKEND: Agg
+          PYVISTA_OFF_SCREEN: 'true'
+        run: uv run --project . --extra fast --extra ref --extra layout --extra viz --extra spec --with pytest --with httpx python -m pytest -p no:cacheprovider -m "not slow and not gpu" --durations=10 -ra
+  app:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - run: npx tsc --noEmit -p .
