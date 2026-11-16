@@ -10,11 +10,13 @@ interface PlotElement extends HTMLDivElement {
 export function Plot3D({
   data,
   title,
+  revision = title,
   layout = {},
   onClick
 }: {
   data: unknown[]
   title: string
+  revision?: string
   layout?: Record<string, unknown>
   onClick?: (x: number, y: number) => void
 }) {
@@ -31,6 +33,7 @@ export function Plot3D({
       data,
       {
         title: { text: title },
+        uirevision: revision,
         autosize: true,
         height: 360,
         paper_bgcolor: css.getPropertyValue('--bg-elev').trim(),
@@ -67,9 +70,13 @@ export function Plot3D({
       alive = false
       observer.disconnect()
       el.removeAllListeners?.('plotly_click')
-      Plotly.purge(el)
     }
-  }, [data, title, layout, onClick, theme])
+  }, [data, title, layout, onClick, theme, revision])
+  // Purging on updates discards the camera/zoom even with uirevision set.
+  useEffect(() => {
+    const el = ref.current
+    return () => { if (el) Plotly.purge(el) }
+  }, [])
   return (
     <figure className="sample3d-plot card">
       <div ref={ref} aria-label={title} style={{ height: 360 }} />

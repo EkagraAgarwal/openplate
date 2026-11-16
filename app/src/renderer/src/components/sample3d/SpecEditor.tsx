@@ -22,12 +22,14 @@ export function SpecEditor({
   onChange,
   errors,
   onValid,
+  estimateText = 'Estimate unavailable',
   tiles = []
 }: {
   spec: SampleSpec3D
   onChange: (s: SampleSpec3D) => void
   errors: FieldIssue[]
   onValid: (valid: boolean) => void
+  estimateText?: string
   tiles?: Plan3D['tiles']
 }) {
   const [tab, setTab] = useState('form')
@@ -104,6 +106,7 @@ export function SpecEditor({
     <section className="card">
       <div className="row gap">
         <h3>Sample specification</h3>
+        <p className="muted small" role="status">{estimateText}. Planning only; runtime varies by hardware and physics.</p>
         {['form', 'JSON'].map((t) => (
           <button
             type="button"

@@ -87,7 +87,6 @@ export function Results3D({
     if (!tile) return
     let alive = true
     setBusy(true)
-    setHeight(null)
     void api
       .height(id, tile, frame)
       .then((h) => {
@@ -111,8 +110,6 @@ export function Results3D({
     }
     let alive = true
     setCutBusy(true)
-    setSection(null)
-    setInitial(null)
     void Promise.all([api.section(id, points, tile, frame), api.section(id, points, tile, 0)])
       .then(([s, first]) => {
         if (alive) {
@@ -168,6 +165,11 @@ export function Results3D({
           {times[frame < 0 ? times.length - 1 : frame] ?? '—'} s
         </label>
       </div>
+      {tiles.find((t) => t.tile_id === tile)?.mirror_axes?.length ? (
+        <p className="muted small">Reduced tile ({tiles.find((t) => t.tile_id === tile)!.mirror_axes!.join(', ')} axes).
+          Pipeline surface artifacts are mirrored/reconstructed; interactive height, surface and section
+          views currently show only the reduced tile, not the reconstructed extent.</p>
+      ) : null}
       {busy && (
         <div className="sample3d-loading" role="status">
           Loading height map…
@@ -180,6 +182,7 @@ export function Results3D({
       <div className="sample3d-plots">
         {grid && (
           <Plot3D
+            revision={`${id}:${tile}`}
             title="Height (µm)"
             data={[
               { type: 'heatmap', ...grid, colorbar: { title: 'Height (µm)' } },
@@ -197,6 +200,7 @@ export function Results3D({
         )}
         {section && (
           <Plot3D
+            revision={`${id}:${tile}`}
             title="Cu / Si section"
             data={[
               ...depositFill(section.cu_outline, section.si_outline),
@@ -230,6 +234,7 @@ export function Results3D({
       <div className="sample3d-plots">
         {grid && (
           <Plot3D
+            revision={`${id}:${tile}`}
             title="Height surface"
             data={[{ type: 'surface', ...grid, colorbar: { title: 'Height (µm)' } }]}
             layout={{
@@ -247,6 +252,7 @@ export function Results3D({
         )}
         {series && !series.V.some((v) => v != null) && (
           <Plot3D
+            revision={`${id}:${tile}`}
             title="Deposited Cu vs Faraday"
             data={[
               {
@@ -273,6 +279,7 @@ export function Results3D({
         )}
         {series && series.V.some((v) => v != null) && (
           <Plot3D
+            revision={`${id}:${tile}`}
             title="Time series"
             data={[
               { type: 'scatter', mode: 'lines', name: 'V', x: series.t_s, y: series.V },

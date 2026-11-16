@@ -71,6 +71,7 @@ export interface Validation3D {
   errors: FieldIssue[]
 }
 export interface Tile3D {
+  mirror_axes?: string[]
   tile_id: string
   kind: string
   feature_ids: string[]
