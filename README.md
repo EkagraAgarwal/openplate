@@ -58,9 +58,11 @@ What it does:
   enter through their net current.
 - **Cycle-resolved pulse-reverse (opt-in).** `numerics.pulse_model: "resolved"` (or `run_tile(pulse=...)`)
   solves the forward (cathodic), reverse (anodic) and off phases on the frozen surface, with a per-cell
-  pulsating diffusion layer and optional double-layer charging (`Params.C_dl_F_cm2`). Without additives this
-  changes trench shapes by about 0.01 in floor/field and does not level micron-scale roughness: PR smoothing
-  observed in practice comes from additives and nucleation, which are outside the continuum model.
+  pulsating diffusion layer and optional double-layer charging (`Params.C_dl_F_cm2`). In a study with a
+  9/0.5/0.5 ms waveform at 15 mA/cm2 and no additives (`tools/pulse_roughness.py`), the model shows no
+  leveling of 3-48 um surface waviness and changes trench floor/field by about 0.01. Effects outside the
+  model (additive kinetics, nucleation and grain refinement) are the candidates for the smoothing seen in
+  practice; other waveforms and currents near the limiting current are not yet tested.
 - **Coupon position (optional).** `setup.coupon_position_cm` takes the local current, Nernst layer and
   efficiency from the calibrated coupon model instead of the coupon mean.
 - **Optional resolved stirring (experimental).** `setup.stir_shear_1_s` adds a Stokes shear flow over the
