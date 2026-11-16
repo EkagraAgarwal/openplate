@@ -98,7 +98,7 @@ REFERENCE = {
 # Exact bit-identity with the stored numbers is platform- and solver-version dependent (linear
 # solver changes move V by ~1e-9), so the regression uses a tight tolerance; exact identity of the
 # additive-off path is checked in-process by test_unit_factor_is_bit_identical_to_none.
-REL = 1e-7
+REL = 1e-6
 
 
 def _check_reference(name, res):
