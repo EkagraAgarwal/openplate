@@ -1,4 +1,5 @@
-"""Quasi-steady field solve of one 3-D tile, physics level L1 (no flow, no additives).
+"""Quasi-steady field solve of one 3-D tile, physics level L1 (no flow) plus optional cell-local
+additive coverage (Phase 1 of research/sims_3d/additives_3d_plan.md).
 
 Same model as the 2-D engine's additive-free 'enhanced' path (platesim/feature/engine/fields.py,
 StepGeom 'diffuse' + newton_potential), written per unit volume on a uniform grid:
@@ -9,7 +10,14 @@ StepGeom 'diffuse' + newton_potential), written per unit volume on a uniform gri
 
   Hs = max(0.5 (1 + tanh(psi / eps)), 1e-6),  eps = eps_fac * dx      (smoothed electrolyte indicator)
   w  = |grad Hs|  [1/cm]                                              (interface area per unit volume)
-  ci = i0_u exp(-alpha_u f eta)  [A/cm2]                              (cathodic, unsuppressed)
+  ci = i0_cell exp(-alpha_u f eta)  [A/cm2]                          (cathodic exchange current)
+
+  i0_cell = i0_u * Fcell(z) * Fcov(theta_s, theta_cl)                 (default: the scalar i0_u)
+
+Fcell is an optional prescribed per-cell multiplier (``kinetics_factor``) and Fcov the Cl-gated
+suppressor factor of :mod:`platesim.tile3d.additives3d` (``cov``); both are applied to the cathodic
+kinetics, the galvanostatic V root-find, the multigrid shape term and the pulse phase solves.  With
+both ``None`` every expression is the original scalar one (bit-identical).
 
 Boundary conditions: ct = 1 and phi = 0 on the bulk plane z = z_plane (at a distance d_top in
 [0.5, 1.5) dx above the last solved cell layer, as in 2-D); no flux through the bottom; lateral sides
@@ -23,7 +31,7 @@ from scipy.sparse.linalg import cg, splu
 
 from ..core.constants import F
 from ..feature.engine.params import Params, derive
-from . import operators
+from . import additives3d, operators
 from .backend import ls_numpy
 
 DIRECT_MAX = 40000      # unknowns up to which a sparse LU is used; above it AMG-preconditioned CG
@@ -298,6 +306,31 @@ def _faces(H, periodic, top_scale=None):
     return out
 
 
+def _broadcast_factor(value, shape, nz, band):
+    """Per-cell prescribed kinetics factor on the solved block.
+
+    ``value`` is broadcastable to ``shape = (nx, ny, kt + 1)``.  A 1-D array of length ``nz``
+    (the full-grid z centres) or a full ``(nx, ny, nz)`` array is trimmed to the solved block, so a
+    caller may build the factor from ``Grid3D.centers()[2]`` without knowing ``kt``.  Values outside
+    the interface band ``band`` (``w > 0``) are set to 1: they multiply ``w = 0`` anyway, but the
+    diagnostics stay well defined.  Returns a float64 array on the solved block.
+    """
+    a = np.asarray(value, dtype=np.float64)
+    if a.ndim == 1 and a.shape[0] == nz:
+        a = a[:shape[2]]
+    elif a.ndim == 3 and a.shape[2] == nz:
+        a = a[:, :, :shape[2]]
+    try:
+        a = np.broadcast_to(a, shape)
+    except ValueError as exc:
+        raise ValueError(f"kinetics_factor must broadcast to the solved block {shape}, got {a.shape}") from exc
+    if not np.all(np.isfinite(a)):
+        raise ValueError("kinetics_factor must be finite")
+    if np.any(a <= 0.0):
+        raise ValueError("kinetics_factor must be positive (it multiplies the exchange current)")
+    return np.where(band, a, 1.0)
+
+
 class FieldSolver:
     """L1 field solve.  Construct once per run, call solve() once per front position."""
 
@@ -321,18 +354,29 @@ class FieldSolver:
             raise ValueError('pulse_alpha_a must be finite and positive')
 
     def solve(self, psi, dx, z0, z_plane, j_net_A_cm2, periodic=(True, True, False), state=None,
-              tol=2e-4, maxit=30, flow_faces=None):
+              tol=2e-4, maxit=30, flow_faces=None, kinetics_factor=None, cov=None):
         """psi: (nx, ny, nz) level set in cm (positive in electrolyte); z0: z of the low domain face;
         z_plane: height of the bulk plane (cm); j_net_A_cm2: net current per projected area.
         state: dict returned by a previous call (warm start) or None.
         flow_faces: optional (ux, uy, uz) MAC face velocities on the full grid, cm/s, shaped (nx+1, ny, nz),
         (nx, ny+1, nz), (nx, ny, nz+1) (platesim.flow3d.solve_stokes3d(...)["faces"]); they advect Cu2+.
-        Returns dict(ct, phi, i, speed, V, w, active, kt, info) on the full grid; i is the interface
-        current density (A/cm2) of each cell, speed = Mfac * i (cm/s).
+        kinetics_factor: optional prescribed multiplier on ``i0_u`` per cell, broadcastable to the
+        solved (nx, ny, kt + 1) block or given on the full (nx, ny, nz) grid (see
+        :func:`_broadcast_factor`).  It is an *effective suppression map* (uncalibrated): 0.85 below
+        a depth stands in for a floor-depleted accelerator, for example.  None -> the legacy scalar.
+        cov: optional coverage state (:func:`platesim.tile3d.additives3d.coverage_init`), updated
+        in place with the quasi-steady Phase-1 theta_cl/theta_s of every interface cell; its
+        suppressor factor multiplies the prescribed one.  None -> no additives.  ``additives='full'``
+        (bulk transport, CEAC accelerator, leveller: plan phases 2-3) raises NotImplementedError.
+        Returns dict(ct, phi, i, speed, V, w, active, kt, info, state, i0_factor) on the full grid;
+        i is the interface current density (A/cm2) of each cell, speed = Mfac * i, and i0_factor is
+        the effective exchange-current multiplier actually used (1 everywhere in the legacy path).
         In resolved mode i/speed/phi are cycle means; ct is the outer mean.
         info['pulse'] reports phase voltages, currents, diffusion length, charging
         times and cycle Faraday error. Off-time C*|delta eta|/j is undefined for
         applied j=0; differential RC relaxation time is reported separately.
+        info['additives'] (cov only) reports theta ranges at the front, the coverage change of the
+        last pass and the NDR/hysteresis flag.
         Charging is an area-mean periodic RC/BV circuit, not a full spatial
         transient potential solve. Its phase Faradaic charges feed the 3-D
         phase distributions, using BV for off-time relaxation near equilibrium.
@@ -381,11 +425,47 @@ class FieldSolver:
         af = p.alpha_u * ph.f_RT
         sink = p.efficiency / (2.0 * F * p.c_bulk)
 
+        # ---- per-cell exchange-current factor (additives_3d_plan.md Phase 1) -------------------
+        # i0v[0] is the current per-cell i0 on the solved block, or None for the legacy scalar
+        # ph.i0_u.  The None branch keeps every arithmetic expression below identical.
+        fac = None if kinetics_factor is None else _broadcast_factor(kinetics_factor, shape, nz, w > 0)
+        if cov is not None:
+            if p.additives == "full":
+                raise NotImplementedError(
+                    "additives='full' has no 3-D implementation: bulk suppressor/leveller transport, "
+                    "the CEAC accelerator and surface coverage transport are phases 2-3 of "
+                    "research/sims_3d/additives_3d_plan.md.  Use additives='cl_ndr' (Phase 1).")
+            if p.alpha_s != p.alpha_u:
+                raise NotImplementedError(
+                    "the 3-D additive coupling factorises i0 with one Tafel slope: alpha_s must equal "
+                    f"alpha_u (got alpha_s={p.alpha_s}, alpha_u={p.alpha_u})")
+            if not isinstance(cov, dict) or set(additives3d.COV_KEYS) - set(cov):
+                raise ValueError(f"cov must be a dict with the keys {additives3d.COV_KEYS}")
+            if np.shape(cov["theta_s"]) != psi.shape:
+                raise ValueError(f"coverage arrays must have the psi shape {psi.shape}, "
+                                 f"got {np.shape(cov['theta_s'])}")
+            if p.additives == "legacy":
+                raise ValueError("cov was supplied with additives='legacy'; set additives='cl_ndr' "
+                                 "or pass cov=None")
+        i0v = [None]
+
+        def i0_cell_factor():
+            """Fcov * Fac on the solved block (1 outside the interface band), raveled."""
+            value = 1.0 if fac is None else fac
+            if cov is not None:
+                value = additives3d.coverage_factor(cov["theta_s"][sl], p) * value
+            return np.where(active, value, 1.0).ravel()
+
+        if fac is not None or cov is not None:
+            i0v[0] = ph.i0_u * i0_cell_factor()
+
         def ci_of(eta):
-            return ph.i0_u * np.exp(np.clip(-af * eta, -60, 60))
+            b = ph.i0_u if i0v[0] is None else i0v[0]
+            return b * np.exp(np.clip(-af * eta, -60, 60))
 
         def V_fixed_phi(ct, phi):
-            s = np.dot(wf * ct, ph.i0_u * np.exp(np.clip(af * phi, -60, 60)))
+            b = ph.i0_u if i0v[0] is None else i0v[0]
+            s = np.dot(wf * ct, b * np.exp(np.clip(af * phi, -60, 60)))
             return -np.log(It / (s + 1e-300)) / af
 
         n = wf.size
@@ -438,6 +518,11 @@ class FieldSolver:
             F_top = None
         relax = 1.0
         last_change = np.inf
+        cov_change = np.inf                    # Phase-1 coverage change of the last outer pass
+        last_cov_change = np.inf
+        cov_beta = p.cov_relax
+        if cov is not None:
+            maxit = max(int(maxit), 40)        # theta_s needs the extra passes (plan 2.3)
         for outer in range(maxit):
             # ---- potential and electrode potential V for fixed ct (bordered Newton, as in 2-D)
             for _ in range(14):
@@ -462,7 +547,8 @@ class FieldSolver:
             # sink), and the total current is a monotone function of u = -af V, so V is found by a scalar
             # root-find with one linear solve per evaluation.  This stays stable up to the limiting current,
             # where alternating "ct at fixed eta" / "V at fixed ct" oscillates.
-            shape_k = wf * ph.i0_u * np.exp(np.clip(af * phi, -60, 60))     # w * ci / exp(u)
+            b_i0 = ph.i0_u if i0v[0] is None else i0v[0]
+            shape_k = wf * b_i0 * np.exp(np.clip(af * phi, -60, 60))     # w * ci / exp(u)
             guess = [ct]
 
             def total(u):
@@ -488,15 +574,56 @@ class FieldSolver:
                 f1, new = total(u1)
             V = -u1 / af
             info["limited"] = bool(abs(f1) > 1e-6)       # set current above the transport limit
-            change = float(np.max(np.abs(new - ct)))
+            ct_change = float(np.max(np.abs(new - ct)))
+            change = ct_change
             last_change = change
             ct = new
+            if cov is not None:
+                # ---- Phase-1 quasi-steady coverages of the current iterate (plan 2.2-2.3) -----
+                # v = Mfac * i_local, cathodic positive (cycle mean in a resolved pulse).  Only the
+                # front band is updated: theta lives on the interface, everything else keeps theta0.
+                i_loc = ct * ci_of(V - phi)
+                th_cl_ss, th_s_ss = additives3d.steady_state(np.maximum(i_loc, 0.0), p, ph.Mfac)
+                front = wf > 0.0
+                # Convergence is measured where the interface area actually is: the tanh band's
+                # outer tails carry < 1e-3 of w and < 0.1 % of the current, but their theta creeps
+                # towards 1 on the slow (burial-free) branch and would otherwise mask convergence.
+                crit = wf > 1e-3 * wf.max()
+                th_cl_old = cov["theta_cl"][sl].ravel()
+                th_s_old = cov["theta_s"][sl].ravel()
+                th_cl_new = np.where(front, th_cl_old + cov_beta * (th_cl_ss - th_cl_old), th_cl_old)
+                th_s_new = np.where(front, th_s_old + cov_beta * (th_s_ss - th_s_old), th_s_old)
+                cov_change = float(max(np.max(np.abs((th_cl_new - th_cl_old)[crit])),
+                                       np.max(np.abs((th_s_new - th_s_old)[crit]))))
+                cov["theta_cl"][sl] = th_cl_new.reshape(shape)
+                cov["theta_s"][sl] = th_s_new.reshape(shape)
+                if cov_change > last_cov_change * 1.2:      # pulse-branch heuristic (TP/fields.py:528)
+                    cov_beta = max(0.2, cov_beta * 0.5)
+                last_cov_change = cov_change
+                i0v[0] = ph.i0_u * i0_cell_factor()
+                change = max(change, cov_change)
             info["outer"] = outer + 1
             if change < tol:
                 break
         info["amg_builds"] = pc_p.builds + pc_c.builds
         info["converged"] = bool(change < tol)
-        info["ct_change"] = change
+        info["ct_change"] = ct_change
+        if cov is not None:
+            front_info = wf > 1e-3 * wf.max()               # same measure as the convergence test
+            th_s = cov["theta_s"][sl].ravel()[front_info]
+            th_cl = cov["theta_cl"][sl].ravel()[front_info]
+            info["additives"] = dict(
+                model="cl_ndr Phase 1: quasi-steady theta_cl/theta_s, no bulk additive transport",
+                cov_change=float(cov_change), relax=float(cov_beta),
+                converged=bool(cov_change < tol),
+                # A limit cycle of the S-NDR Picard map is reported, not hidden (plan 2.3 keeps the
+                # monotone-from-below branch; no separate bistability search is performed).
+                ndr_hysteresis=bool(cov_change >= tol),
+                theta_s=(float(np.min(th_s)), float(np.max(th_s)), float(np.mean(th_s))) if th_s.size else None,
+                theta_cl=(float(np.min(th_cl)), float(np.max(th_cl)), float(np.mean(th_cl)))
+                if th_cl.size else None,
+                uncalibrated=True,
+                note="effective suppression map; constants are the 2-D engine defaults [J]")
         I = ct * ci_of(V - phi)
         if resolved:
             # The outer Cu solve sees the cycle-mean sink, never the instantaneous
@@ -522,13 +649,16 @@ class FieldSolver:
                 a = (p.alpha_u if sign > 0 else p.pulse_alpha_a) * ph.f_RT
                 # Shared exchange current; anodic Cu activity is one (solid Cu),
                 # not the electrolyte Cu2+ concentration used by the cathodic branch.
-                pref = ph.i0_u * (concentration if sign > 0 else np.ones(n))
+                # The per-cell additive/prescribed factor multiplies both branches (the same
+                # surface sites gate the cathodic and the anodic exchange).
+                b0 = ph.i0_u if i0v[0] is None else i0v[0]
+                pref = b0 * (concentration if sign > 0 else np.ones(n))
                 pref = np.where(act, pref, 0.)
                 def kinetics(eta):
                     if bv:
-                        cath = ph.i0_u * concentration * np.exp(np.clip(-af * eta, -60, 60))
+                        cath = b0 * concentration * np.exp(np.clip(-af * eta, -60, 60))
                         aa = p.pulse_alpha_a * ph.f_RT
-                        anod = ph.i0_u * np.exp(np.clip(aa * eta, -60, 60))
+                        anod = b0 * np.exp(np.clip(aa * eta, -60, 60))
                         return np.where(act, cath - anod, 0.), np.where(act, af*cath + aa*anod, 0.)
                     current = sign * pref * np.exp(np.clip(-sign * a * eta, -60, 60))
                     return current, a * np.abs(current)
@@ -560,6 +690,15 @@ class FieldSolver:
                 current = kinetics(phase_V - phase_phi)[0]
                 return current, float(phase_V), float(np.dot(wf, phase_V - phase_phi) / wf.sum())
 
+            def i0_area():
+                """Area-mean exchange current of the front, for the lumped RC circuit (it is scalar).
+
+                Exactly ``ph.i0_u`` in the legacy path so the arithmetic there is unchanged.
+                """
+                if i0v[0] is None:
+                    return ph.i0_u
+                return float(np.dot(wf, i0v[0]) / wf.sum())
+
             for coupling in range(40):
                 cs = surface_concentration(ct, phase_i, wave.durations, ph.D_c, p.c_bulk, p.efficiency)
                 front = wf > 1e-6 * wf.max()
@@ -572,7 +711,7 @@ class FieldSolver:
                 effective = targets.copy()
                 if p.C_dl_F_cm2:
                     effective_j, charging = capacitive_cycle(wave.durations, wave.currents,
-                        p.C_dl_F_cm2, ph.i0_u, af, p.pulse_alpha_a * ph.f_RT,
+                        p.C_dl_F_cm2, i0_area(), af, p.pulse_alpha_a * ph.f_RT,
                         cs @ wf / wf.sum(), area_ratio)
                     effective = effective_j * nx * ny / dx
                 for k, dt_phase in enumerate(wave.durations):
@@ -599,7 +738,7 @@ class FieldSolver:
             phi, V = mean_phi, float(np.dot(weights, volts))
             if not p.C_dl_F_cm2:
                 _, charging = capacitive_cycle(wave.durations, wave.currents, 0.,
-                    ph.i0_u, af, p.pulse_alpha_a * ph.f_RT, cs @ wf / wf.sum(), area_ratio)
+                    i0_area(), af, p.pulse_alpha_a * ph.f_RT, cs @ wf / wf.sum(), area_ratio)
             info['pulse'] = dict(model='resolved', coupling_iterations=coupling + 1,
                 converged=bool(pulse_change < min(tol, 2e-5)), change=pulse_change,
                 phase_V=volts.tolist(), phase_eta_V=eta_mean.tolist(),
@@ -643,6 +782,10 @@ class FieldSolver:
             return out
 
         i_full = full(np.where(act, I, 0.0), 0.0)
+        # Effective exchange-current map actually used: Fcov * prescribed factor, 1 in the bulk and
+        # outside the front band.  Exactly 1 everywhere in the legacy path.
+        i0_factor = full(np.ones(n) if i0v[0] is None else i0v[0] / ph.i0_u, 1.0)
         return dict(ct=full(np.where(act, ct, 0.0), 1.0), phi=full(phi, 0.0), i=i_full,
                     speed=ph.Mfac * i_full, V=float(V), w=full(wf, 0.0), active=full(act, False).astype(bool),
-                    kt=kt, info=info, state=dict(shape=shape, ct=ct, phi=phi))
+                    kt=kt, info=info, state=dict(shape=shape, ct=ct, phi=phi),
+                    i0_factor=i0_factor)

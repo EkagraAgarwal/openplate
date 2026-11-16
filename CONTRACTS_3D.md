@@ -250,11 +250,48 @@ Camera presets are fixed so repeated calls are comparable.
 def top_height(psi, grid) -> np.ndarray            # cm, (nx, ny), first front crossing from the top
 def run_tile(psi_si, grid, j_net_mA_cm2, duration_s, delta_um=64.0, params=None, T_C=22.0,
              run_dir=None, n_frames=10, dt_max=120.0, cfl=0.3, reinit_every=4, scheme="weno5",
-             backend="auto", field_mask=None, progress=None, meta=None, volume_correct=False)
+             backend="auto", field_mask=None, progress=None, meta=None, volume_correct=False,
+             flow=None, linear="auto", pulse=None, frame_callback=None, kinetics_factor=None)
     # -> TileResult when run_dir is given, else dict(psi, series, summary, grid)
-    # params: platesim.feature.engine.params.Params (default Params(suppressor=False)); physics L1 only.
+    # params: platesim.feature.engine.params.Params (default Params(suppressor=False)); physics L1,
+    #         plus the optional cell-local additive coverages of section 10a-1 (off by default).
     # The grid must reach z_plane = mean field height + delta_um (+ growth) + 2 cells, or it raises.
 ```
+
+### 10a-1. Phase-1 additives and the prescribed kinetics factor
+
+`Params.additives` selects the additive model. `'legacy'` (default) = no additives, bit-identical
+to the pre-additive engine. `'cl_ndr'` switches on the cell-local Cl-/suppressor coverages of
+`tile3d/additives3d.py` (Phase 1 of `research/sims_3d/additives_3d_plan.md`); `'full'` raises
+`NotImplementedError` (bulk additive transport, CEAC accelerator and leveller are phases 2-3).
+
+Per interface cell, the quasi-steady 2-D balances are
+
+```
+v = Mfac i_local                                  # cm/s, cathodic (cycle mean in a resolved pulse)
+theta_cl = a_cl / (a_cl + k_des_cl + k_inc_cl v)  # a_cl = k_cl c_cl_bulk / Gamma_cl
+theta_s  = a_s  / (a_s  + k_minus v + k_des_s)    # a_s  = k_plus s_bulk theta_cl**n_cl
+Fcov     = 1 - min(theta_s, 1 - theta_a) (1 - i0_s/i0_u),  theta_a = 0 in Phase 1
+i0_cell  = i0_u Fcov Fprescribed
+```
+
+`Fcov` multiplies `i0_u` in the cathodic kinetics, the galvanostatic V root-find, the multigrid
+shape term, the returned current and the pulse phase solves (forward and reverse). It is relaxed in
+the outer fixed-point loop (`Params.cov_relax`, halved on a rising change) and `theta_change` joins
+the convergence test; `info['additives']` reports ranges, the relaxation factor, the change and an
+`ndr_hysteresis` flag, and `solve(...)` returns `i0_factor` (the effective multiplier map).
+Phase-1 coverages are `theta_cl`, `theta_s` only; `s_bulk`, `Gamma`, `k_plus`, `k_minus`, `i0_u`,
+`i0_s` come from `Params` and the Cl- constants from the new `Params` fields — all at the 2-D
+engine's `[J]` defaults, none calibrated. Frames carry `theta_s`/`theta_cl` and the series adds
+`theta_{s,cl}_{floor,field}`; `summary['additives']['uncalibrated']` is `True`.
+
+`kinetics_factor` is an independent, prescribed per-cell multiplier on `i0_u`:
+`callable(z_cm (nz,), z_plane_cm, field_top_cm) -> array broadcastable to the active
+(nx, ny, kt+1) block` (a full `(nx, ny, nz)` array is trimmed). It is an *effective suppression map*
+(uncalibrated), e.g. `0.85` below `field_top - 25 um` stands in for a floor-depleted accelerator;
+`tools/i0_factor_probe.py` is the public Step-0 probe built on it. With `Params.additives='cl_ndr'`
+the two factors multiply. Both paths are numerically identical to the legacy one when the factor is
+1 / the coverages are 0 (`np.array_equal` on psi/V/series in `tests/test_tile3d_additives.py`).
 
 Performance note: `fields.py` rebuilds the LU/AMG setup on every inner iteration. Keep tiles at
 most about 40 000 cells (e.g. 48 x 16 x 48) in tests and examples. Do not change `fields.py` or
@@ -273,7 +310,8 @@ def run_sample(spec: SampleSpec | dict | str, out_dir, progress=None) -> dict
     # -> analysis3d (height_map, feature_report, void_report, 1 default cross-section through the
     # first feature centre along x) -> render3d (surface iso PNG, height map PNG, cross-section PNG)
     # -> manifest.json (spec3d.Manifest) in out_dir; returns the manifest as a dict.
-    # All quantities flagged "uncalibrated" (L1 has no additives); checks include faraday_error_rel
+    # All quantities flagged "uncalibrated" (L1 has no additives by default, see 10a-1); checks
+    # include faraday_error_rel
     # (limit 0.05) and cu_balance_rel (limit 0.01).
 ```
 
@@ -377,7 +415,8 @@ default `preview`); Validate (field/message/fix list), Plan (tile table, cells, 
 Run with live progress and Cancel; runs list; results: Plotly height heatmap (click two points
 -> section plot of Cu and Si outlines, initial vs final), 3-D Plotly surface, frame slider,
 manifest quantities and checks tables, server-rendered PNG artifacts, and a fixed
-"Uncalibrated: L1 physics, no additives" banner. No GPU option is shown (CPU only for now).
+"Uncalibrated: L1 physics, no additives" banner (additives are opt-in; section 10a-1). No GPU option
+is shown (CPU only for now).
 Mock mode serves the same endpoints from `app/mock/fixtures3d.json`, generated from a real
 synthetic run by `tools/make_ui_fixtures3d.py`.
 
