@@ -15,7 +15,8 @@ const FIELD_LABELS: Record<string, string> = {
   'layout.die_um.1': 'die height y (µm)',
   'setup.coupon_position_cm': 'coupon position x, y (cm)',
   'setup.stir_pct': 'beaker stir (%)',
-  'numerics.pulse_model': 'pulse model'
+  'numerics.pulse_model': 'pulse model',
+  'numerics.pulse_C_dl_uF_cm2': 'double layer (uF/cm2, resolved only)'
 }
 
 export function SpecEditor({
@@ -376,10 +377,12 @@ export function SpecEditor({
                 'net',
                 'resolved'
               ])}
+              {field('numerics.pulse_C_dl_uF_cm2', (spec.numerics.pulse_C_dl_uF_cm2 as number | undefined) ?? 30)}
             </div>
             <p className="muted">
               Pulse model: net uses the cycle-average current; resolved solves forward, reverse and off phases
-              each cycle (about 3x slower). Without additives the two differ by ~0.01 in floor/field.
+              each cycle (about 3x slower), with double-layer charging set by the capacitance below
+              (0 turns it off). Without additives the two differ by ~0.01 in floor/field at 30 uF/cm2.
             </p>
           </fieldset>
         </>

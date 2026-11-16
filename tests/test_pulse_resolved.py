@@ -184,6 +184,7 @@ def test_pipeline_passes_waveform_and_saves_intermediate_frames(tmp_path, monkey
     monkeypatch.setattr(sim, 'run_tile', capture)
     manifest = run_sample(data, tmp_path / 'recipe', field_margin_um=16.)
     assert captured and all(k['pulse'] == PR for k in captured)
+    assert all(k['params'].C_dl_F_cm2 == pytest.approx(30e-6) for k in captured)  # spec default
     assert all(k['n_frames'] == 4 for k in captured)
     plans = json.loads((tmp_path / 'recipe' / 'tiles.json').read_text())
     for plan in plans:
