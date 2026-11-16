@@ -251,6 +251,7 @@ def _run_one(spec, plan, out_dir, progress=None) -> dict:
             pulse_kwargs['pulse'] = dict(t_f_ms=step.t_forward_ms, t_r_ms=step.t_reverse_ms,
                 t_off_ms=step.t_off_ms, j_f_mA_cm2=step.j_forward_mA_cm2 * scale,
                 j_r_mA_cm2=step.j_reverse_mA_cm2 * scale, model='resolved')
+            step_params = replace(step_params, C_dl_F_cm2=spec.numerics.pulse_C_dl_uF_cm2 * 1e-6)
         def save_intermediate(t_step, front, row):
             if 0 < t_step < duration - 1e-9:
                 writer.add_frame(elapsed + t_step, front, scalars=dict(

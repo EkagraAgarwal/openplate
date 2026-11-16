@@ -123,6 +123,9 @@ class Numerics(StrictModel):
     device: Literal["auto", "cpu"] | Annotated[int, Field(ge=0, strict=True)] = "auto"
     use_surrogate: bool = False
     pulse_model: Literal['net', 'resolved'] = 'net'
+    # Double-layer capacitance used only when pulse_model='resolved' (uF/cm2; 0 = no charging).
+    # Literature range for Cu in acid sulfate is about 25-40 uF/cm2; uncalibrated.
+    pulse_C_dl_uF_cm2: Annotated[float, Field(ge=0, le=500)] = 30.0
     frames_per_step: Annotated[int, Field(ge=2, strict=True)] = 2
 
 

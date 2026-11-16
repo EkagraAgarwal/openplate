@@ -1,4 +1,4 @@
-"""Cell-local additive coverage state of the 3-D tile engine (additives_3d_plan.md, Phases 1-2).
+"""Cell-local additive coverage state of the 3-D tile engine (3-D additives port, Phases 1-2).
 
 Scope: the two coverages the 2-D engine solves *without* any bulk additive transport -- the Cl- adlayer
 ``theta_cl`` and the Cl-gated suppressor ``theta_s`` (``platesim.feature.engine.additives``, wired in 2-D

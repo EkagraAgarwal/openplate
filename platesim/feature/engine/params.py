@@ -112,7 +112,7 @@ class Params:
     c_acc: float = 5e-9                        # mol/cm3
     k_acc: float = 1.76e6                      # cm3/(mol s)
     b_acc: float = 4.5e-3 / 2.6e-5             # i0 multiplier slope: i0 *= (1 + b_acc*theta_a)
-    # ---- transported accelerator (additives_3d_plan.md Phase 2; tile3d/additives3d.py).
+    # ---- transported accelerator (3-D additives port phase 2; tile3d/additives3d.py).
     # The 2-D engine never transports the accelerator (it uses the bulk c_acc at the front), so these
     # constants are NEW here and every one of them is a judgement value [J], not a measurement:
     #   D_acc25   SPS/MPS-class molecule in the 64 um Nernst layer; 1e-6 cm2/s is the same order as the

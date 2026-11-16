@@ -67,7 +67,10 @@ What it does:
   efficiency from the calibrated coupon model instead of the coupon mean.
 - **Optional resolved stirring (experimental).** `setup.stir_shear_1_s` adds a Stokes shear flow over the
   feature; it uses full periodic tiles and runs about 20× slower.
-- **Not modelled yet.** Additives and chloride (3-D port in progress), seed thinning, buoyancy, die-edge effects. These spec fields are
+- **Additives (engine API only, uncalibrated).** `run_tile` supports `Params.additives='cl_ndr'` (chloride and
+  suppressor coverage), `'acc'` (plus a transported accelerator) and `kinetics_factor=` (a prescribed
+  exchange-current map); the sample spec and UI do not expose them yet.
+- **Not modelled yet.** CEAC curvature effects, seed thinning, buoyancy in sample runs, die-edge effects. These spec fields are
   accepted, marked in the UI, and ignored.
 
 The Quick Trench example (60 × 120 µm, 40 µm deep, 20 mA/cm² for 1 h) runs in about a minute on a laptop CPU at

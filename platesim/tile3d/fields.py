@@ -447,7 +447,7 @@ class FieldSolver:
         af = p.alpha_u * ph.f_RT
         sink = p.efficiency / (2.0 * F * p.c_bulk)
 
-        # ---- per-cell exchange-current factor (additives_3d_plan.md Phase 1) -------------------
+        # ---- per-cell exchange-current factor (3-D additives port, Phase 1) -------------------
         # i0v[0] is the current per-cell i0 on the solved block, or None for the legacy scalar
         # ph.i0_u.  The None branch keeps every arithmetic expression below identical.
         fac = None if kinetics_factor is None else _broadcast_factor(kinetics_factor, shape, nz, w > 0)
