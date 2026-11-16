@@ -18,35 +18,64 @@ def _index(i, n, periodic):
     return min(max(i, 0), n-1)
 
 
+@njit(inline="always")
+def _axis_weno(p0, p1, p2, p3, p4, p5, p6, inv_dx, high_order, gp, gn):
+    """Accumulate the up/down-wind gradient squares of one axis from seven nodes."""
+    if high_order:
+        d0 = (p1-p0)*inv_dx
+        d1 = (p2-p1)*inv_dx
+        d2 = (p3-p2)*inv_dx
+        d3 = (p4-p3)*inv_dx
+        d4 = (p5-p4)*inv_dx
+        d5 = (p6-p5)*inv_dx
+        dm = _left(d0, d1, d2, d3, d4)
+        dp = -_left(-d5, -d4, -d3, -d2, -d1)
+    else:
+        dm = (p3-p2)*inv_dx
+        dp = (p4-p3)*inv_dx
+    return gp + max(dm, 0.0)**2 + min(dp, 0.0)**2, gn + min(dm, 0.0)**2 + max(dp, 0.0)**2
+
+
 @njit(parallel=True)
 def rhs(psi, speed, dx, periodic, high_order):
+    # Seven explicit scalars per axis: allocating a 7-node workspace inside the
+    # cell loop costs more than the whole WENO stencil on thin tiles.
     nx, ny, nz = psi.shape
+    inv_dx = 1.0/dx
     out = np.empty_like(psi)
     for flat in prange(nx*ny*nz):
         i, j, k = flat//(ny*nz), (flat//nz) % ny, flat % nz
         gp, gn = 0.0, 0.0
-        for axis in range(3):
-            nodes = np.empty(7, dtype=np.float64)
-            for q in range(7):
-                o = q-3
-                ii = _index(i+o, nx, periodic[0]) if axis == 0 else i
-                jj = _index(j+o, ny, periodic[1]) if axis == 1 else j
-                kk = _index(k+o, nz, periodic[2]) if axis == 2 else k
-                nodes[q] = psi[ii, jj, kk]
-            if high_order:
-                d0 = (nodes[1]-nodes[0])/dx
-                d1 = (nodes[2]-nodes[1])/dx
-                d2 = (nodes[3]-nodes[2])/dx
-                d3 = (nodes[4]-nodes[3])/dx
-                d4 = (nodes[5]-nodes[4])/dx
-                d5 = (nodes[6]-nodes[5])/dx
-                dm = _left(d0, d1, d2, d3, d4)
-                dp = -_left(-d5, -d4, -d3, -d2, -d1)
-            else:
-                dm = (nodes[3]-nodes[2])/dx
-                dp = (nodes[4]-nodes[3])/dx
-            gp += max(dm, 0.0)**2 + min(dp, 0.0)**2
-            gn += min(dm, 0.0)**2 + max(dp, 0.0)**2
+        if periodic[0]:
+            i0, i1, i2, i3, i4, i5, i6 = (_index(i-3, nx, True), _index(i-2, nx, True),
+                                          _index(i-1, nx, True), i, _index(i+1, nx, True),
+                                          _index(i+2, nx, True), _index(i+3, nx, True))
+        else:
+            i0, i1, i2, i3, i4, i5, i6 = (_index(i-3, nx, False), _index(i-2, nx, False),
+                                          _index(i-1, nx, False), i, _index(i+1, nx, False),
+                                          _index(i+2, nx, False), _index(i+3, nx, False))
+        gp, gn = _axis_weno(psi[i0, j, k], psi[i1, j, k], psi[i2, j, k], psi[i3, j, k],
+                            psi[i4, j, k], psi[i5, j, k], psi[i6, j, k], inv_dx, high_order, gp, gn)
+        if periodic[1]:
+            j0, j1, j2, j3, j4, j5, j6 = (_index(j-3, ny, True), _index(j-2, ny, True),
+                                          _index(j-1, ny, True), j, _index(j+1, ny, True),
+                                          _index(j+2, ny, True), _index(j+3, ny, True))
+        else:
+            j0, j1, j2, j3, j4, j5, j6 = (_index(j-3, ny, False), _index(j-2, ny, False),
+                                          _index(j-1, ny, False), j, _index(j+1, ny, False),
+                                          _index(j+2, ny, False), _index(j+3, ny, False))
+        gp, gn = _axis_weno(psi[i, j0, k], psi[i, j1, k], psi[i, j2, k], psi[i, j3, k],
+                            psi[i, j4, k], psi[i, j5, k], psi[i, j6, k], inv_dx, high_order, gp, gn)
+        if periodic[2]:
+            k0, k1, k2, k3, k4, k5, k6 = (_index(k-3, nz, True), _index(k-2, nz, True),
+                                          _index(k-1, nz, True), k, _index(k+1, nz, True),
+                                          _index(k+2, nz, True), _index(k+3, nz, True))
+        else:
+            k0, k1, k2, k3, k4, k5, k6 = (_index(k-3, nz, False), _index(k-2, nz, False),
+                                          _index(k-1, nz, False), k, _index(k+1, nz, False),
+                                          _index(k+2, nz, False), _index(k+3, nz, False))
+        gp, gn = _axis_weno(psi[i, j, k0], psi[i, j, k1], psi[i, j, k2], psi[i, j, k3],
+                            psi[i, j, k4], psi[i, j, k5], psi[i, j, k6], inv_dx, high_order, gp, gn)
         v = speed[i, j, k]
         out[i, j, k] = max(v, 0.0)*np.sqrt(gp) + min(v, 0.0)*np.sqrt(gn)
     return out
