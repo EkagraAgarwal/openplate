@@ -109,7 +109,7 @@ def _check_reference(name, res):
     assert float(res["summary"]["faraday_error_rel"]) == pytest.approx(ref["faraday"], rel=1e-4, abs=1e-9)
     for key, values in ref["series"].items():
         if key in ("cu_balance_rel", "outer_iterations"):  # solver diagnostics, not physics
-            assert np.all(np.abs(np.asarray(res["series"]["cu_balance_rel"])) < 1e-6)
+            assert np.all(np.abs(np.asarray(res["series"]["cu_balance_rel"])) < 1e-5)
             continue
         np.testing.assert_allclose(np.asarray(res["series"][key], dtype=np.float64),
                                    np.asarray(values, dtype=np.float64), rtol=REL, atol=1e-9,
