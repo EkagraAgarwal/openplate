@@ -35,6 +35,17 @@ def _restore(a, original):
     return np.asarray(a, dtype=dtype if dtype.kind == "f" else np.float64)
 
 
+def _kernels(backend):
+    if backend not in ("numpy", "numba", "auto"):
+        raise ValueError("backend must be 'numpy', 'numba' or 'auto'")
+    if backend != "numpy":
+        try:
+            return importlib.import_module(".backend.ls_numba", __package__)
+        except ImportError:
+            pass
+    return ls_numpy
+
+
 def advect(psi, speed, dt, dx, periodic=DEFAULT_PERIODIC, scheme="weno5",
            band_cells=None, backend="auto"):
     """Advance psi_t + speed*|grad psi| = 0; positive speed grows solid.
@@ -59,29 +70,29 @@ def advect(psi, speed, dt, dx, periodic=DEFAULT_PERIODIC, scheme="weno5",
         raise ValueError("speed must be finite (cm/s)")
     if dt == 0 or not np.any(v):
         return _restore(a.copy(), psi)
-    kernels = ls_numpy
-    if backend != "numpy":
-        try:
-            kernels = importlib.import_module(".backend.ls_numba", __package__)
-        except ImportError:
-            pass
+    kernels = _kernels(backend)
     fn = getattr(kernels, "advect_" + scheme)
     return _restore(fn(a, v, dt, dx, per, band_cells), psi)
 
 
-def reinit(psi, dx, periodic=DEFAULT_PERIODIC, narrow_cells=None):
+def reinit(psi, dx, periodic=DEFAULT_PERIODIC, narrow_cells=None, backend="auto"):
     """Second-order scikit-fmm distance; masked cells retain input values.
 
-    A field with no zero contour is returned unchanged. A narrow FMM band
+    The relaxation RHS uses the same optional backend as advection; NumPy
+    remains available as a reference. A field with no zero contour is
+    returned unchanged. A narrow FMM band
     is measured by computed distance, not by the distorted input field.
     """
     import skfmm
     a = _array(psi, dx)
     per = _periodic(periodic)
+    if backend not in ("numpy", "numba", "auto"):
+        raise ValueError("backend must be 'numpy', 'numba' or 'auto'")
     if narrow_cells is not None and (not np.isfinite(narrow_cells) or narrow_cells <= 0):
         raise ValueError("narrow_cells must be finite and positive")
     if not (np.min(a) <= 0 <= np.max(a)) or np.all(a == 0):
         return _restore(a.copy(), psi)
+    kernels = _kernels(backend)
     # Six extra cells isolate the returned narrow band from relaxation's
     # artificial outer edge (four cells pseudo-time plus stencil margin).
     distance = skfmm.distance(a, dx=dx, order=2, periodic=per,
@@ -97,7 +108,7 @@ def reinit(psi, dx, periodic=DEFAULT_PERIODIC, narrow_cells=None):
     step = 0.2*dx
 
     def residual(u):
-        return ls_numpy.rhs(u, sign, dx, per, True)-sign
+        return kernels.rhs(u, sign, dx, per, True)-sign
 
     for _ in range(20):
         u1 = out-step*residual(out)
