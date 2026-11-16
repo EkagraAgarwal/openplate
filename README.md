@@ -54,11 +54,18 @@ What it does:
   compact features use a quarter tile. Each plan lists its tiles, cell counts and a time estimate before you run.
 - **Physics (L1).** Quasi-steady Cu²⁺ diffusion (with an acid-migration enhancement factor) and electrolyte
   potential below a Nernst-layer bulk plane, cathodic Tafel kinetics under a galvanostatic constraint, and a
-  level-set growth front on a cell-centred grid with multigrid/AMG solvers. Pulse-reverse recipes enter only
-  through their net current.
+  level-set growth front on a cell-centred grid with multigrid/AMG solvers. By default pulse-reverse recipes
+  enter through their net current.
+- **Cycle-resolved pulse-reverse (opt-in).** `numerics.pulse_model: "resolved"` (or `run_tile(pulse=...)`)
+  solves the forward (cathodic), reverse (anodic) and off phases on the frozen surface, with a per-cell
+  pulsating diffusion layer and optional double-layer charging (`Params.C_dl_F_cm2`). Without additives this
+  changes trench shapes by about 0.01 in floor/field and does not level micron-scale roughness: PR smoothing
+  observed in practice comes from additives and nucleation, which are outside the continuum model.
+- **Coupon position (optional).** `setup.coupon_position_cm` takes the local current, Nernst layer and
+  efficiency from the calibrated coupon model instead of the coupon mean.
 - **Optional resolved stirring (experimental).** `setup.stir_shear_1_s` adds a Stokes shear flow over the
   feature; it uses full periodic tiles and runs about 20× slower.
-- **Not modelled yet.** Additives and chloride, seed thinning, buoyancy, die-edge effects. These spec fields are
+- **Not modelled yet.** Additives and chloride (3-D port in progress), seed thinning, buoyancy, die-edge effects. These spec fields are
   accepted, marked in the UI, and ignored.
 
 The Quick Trench example (60 × 120 µm, 40 µm deep, 20 mA/cm² for 1 h) runs in about a minute on a laptop CPU at
@@ -85,6 +92,9 @@ and the CLI is `python -m platesim.sample3d plan|run spec.json` (see
 | `platesim.mcp3d` | agent interface (MCP server) for isolated runs |
 
 Faraday and Cu-balance checks are reported with every run. Cross-checks against the 2-D engine are in `tools/`.
+Solver performance: LU factors are reused as Krylov preconditioners across outer iterations and the level-set
+WENO kernels run in numba (`tools/bench_tile3d.py` benchmarks both; sheared trench tiles are about 3x faster
+than before). A Rust/PyO3 kernel spike (branch `spike/rust-kernels`) found no worthwhile gain over parallel numba.
 
 ### Beaker, coupon and feature models
 
