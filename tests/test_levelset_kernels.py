@@ -261,6 +261,7 @@ def test_volume_correct_hits_the_target_inside_the_band():
 
 
 # --------------------------------------------------------------------------------- (g) timing report
+@pytest.mark.slow  # wall-clock assertion: flaky on shared CI runners, run locally
 def test_timing_report_300x150():
     """Per-call cost on a 300 x 150 grid (z by r): full grid vs narrow band, numpy vs numba."""
     nr, nz, dx = 150, 300, 2e-4
