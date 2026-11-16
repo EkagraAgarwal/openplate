@@ -230,6 +230,7 @@ def _run_one(spec, plan, out_dir, progress=None) -> dict:
     durations = [_duration(s) for s in spec.recipe.steps]
     total_duration = sum(durations)
     local_conditions = []
+    pulse_reports = []
     for index, (step, duration) in enumerate(zip(spec.recipe.steps, durations)):
         def report(fraction, message):
             if progress is not None:
@@ -244,11 +245,28 @@ def _run_one(spec, plan, out_dir, progress=None) -> dict:
             j_local, delta_um = conditions['j_local_mA_cm2'], conditions['delta_um']
             step_params = replace(params, efficiency=conditions['efficiency'])
             local_conditions.append(conditions)
+        pulse_kwargs = {}
+        if spec.numerics.pulse_model == 'resolved':
+            scale = j_local / step.j_net_mA_cm2
+            pulse_kwargs['pulse'] = dict(t_f_ms=step.t_forward_ms, t_r_ms=step.t_reverse_ms,
+                t_off_ms=step.t_off_ms, j_f_mA_cm2=step.j_forward_mA_cm2 * scale,
+                j_r_mA_cm2=step.j_reverse_mA_cm2 * scale, model='resolved')
+        def save_intermediate(t_step, front, row):
+            if 0 < t_step < duration - 1e-9:
+                writer.add_frame(elapsed + t_step, front, scalars=dict(
+                    charge_C_cm2=charge + row['charge_C_cm2'],
+                    solid_volume_cm3=ls.solid_volume(front, grid.dx) - initial,
+                    faraday_volume_cm3=expected + row['faraday_volume_cm3'],
+                    cu_balance_rel=row['cu_balance_rel']))
+        if spec.numerics.frames_per_step > 2:
+            pulse_kwargs['frame_callback'] = save_intermediate
         step_result = run_tile(psi, grid, j_local, duration,
                           delta_um=delta_um, params=step_params, T_C=spec.bath.temperature_C,
-                           n_frames=2, backend='numpy', field_mask=field_mask, progress=report,
-                           **flow_kwargs)
+                            n_frames=spec.numerics.frames_per_step, backend='numpy', field_mask=field_mask, progress=report,
+                            **flow_kwargs, **pulse_kwargs)
         psi = step_result['psi']
+        if 'pulse' in step_result.get('summary', {}):
+            pulse_reports.append((index + 1, step_result['summary']['pulse']))
         elapsed += duration
         step_charge = j_local * 1e-3 * duration
         charge += step_charge  # applied tile charge, before efficiency
@@ -283,6 +301,16 @@ def _run_one(spec, plan, out_dir, progress=None) -> dict:
         for name, unit in [('j_local_mA_cm2', 'mA/cm2'), ('delta_um', 'um'),
                            ('efficiency', '1'), ('scale', '1')]:
             quantity(f'step_{index}.{name}', conditions[name], unit)
+    for index, pulse_report in pulse_reports:
+        quantity(f'step_{index}.pulse_faraday_error_rel', pulse_report['faraday_error_rel'], '1')
+        quantity(f'step_{index}.pulse_alpha_a', pulse_report['alpha_a'], '1')
+        for phase, tau in zip(('forward', 'reverse', 'off'), pulse_report['tau_s']):
+            quantity(f'step_{index}.tau_{phase}_s', tau, 's')
+        for phase, tau in zip(('forward', 'reverse', 'off'), pulse_report.get('differential_tau_s', [])):
+            quantity(f'step_{index}.differential_tau_{phase}_s', tau, 's')
+        for name in ('C_dl_F_cm2', 'reverse_capacitive_fraction', 'diagnostic_reverse_capacitive_fraction'):
+            if name in pulse_report:
+                quantity(f'step_{index}.{name}', pulse_report[name], 'F/cm2' if name == 'C_dl_F_cm2' else '1')
     for name in ('field_um', 'floor_um', 'wall_um', 'overburden_um'):
         quantity(name, features.get(name), 'um')
     quantity('floor_over_field', features.get('floor_over_field'), '1')
@@ -306,8 +334,11 @@ def _run_one(spec, plan, out_dir, progress=None) -> dict:
         device='cpu', dx_um=grid.dx * 1e4, physics='L1', created_utc=datetime.now(timezone.utc),
         quantities=quantities, checks=[Check(name='faraday_error_rel', value=error, limit=.05, passed=error <= .05),
         Check(name='cu_balance_rel', value=worst_balance, limit=.01, passed=worst_balance <= .01)],
-        waveform_sensitivity='L1 uses only the net current; pulse timing and reverse-current effects '
-                             'beyond the cycle average are not resolved.',
+        waveform_sensitivity=('Frozen-front cycle-resolved Tafel kinetics and periodic sub-grid diffusion; '
+                             'uncalibrated anodic kinetics; grain refinement/nucleation not modelled.'
+                             if spec.numerics.pulse_model == 'resolved' else
+                             'L1 uses only the net current; pulse timing and reverse-current effects '
+                             'beyond the cycle average are not resolved.'),
         artifacts=artifacts, summary_text=('Uncalibrated L1, CPU, no additives or resolved flow. '
         if not spec.setup.stir_shear_1_s else 'Uncalibrated L1, CPU, no additives. '
         + _shear_assumption(spec) + ' ') +

@@ -237,9 +237,12 @@ def _faces(H, periodic, top_scale=None):
 class FieldSolver:
     """L1 field solve.  Construct once per run, call solve() once per front position."""
 
-    def __init__(self, params: Params | None = None, T_C: float = 22.0, linear: str = "auto"):
+    def __init__(self, params: Params | None = None, T_C: float = 22.0, linear: str = "auto", pulse=None):
         """linear: "auto" (sparse LU up to DIRECT_MAX unknowns, else matrix-free multigrid CG when numba
-        is available, else AMG-preconditioned CG), "direct", "amg" or "mg"."""
+        is available, else AMG-preconditioned CG), "direct", "amg" or "mg".
+        pulse: optional run_tile waveform dict. Resolved pulses use pulse_alpha_a
+        (not the legacy 2-D alpha_a), shared i0, and optional C_dl_F_cm2.
+        """
         if linear not in ("auto", "direct", "amg", "mg"):
             raise ValueError("linear must be auto, direct, amg or mg")
         self.p = Params(suppressor=False) if params is None else params
@@ -247,6 +250,11 @@ class FieldSolver:
         self.T_C = T_C
         self.linear = linear
         self._cu_fallback = None   # "ilu" / "lu" once a high-Peclet Cu system needed it (sticky)
+        self.pulse = pulse
+        if not np.isfinite(self.p.C_dl_F_cm2) or self.p.C_dl_F_cm2 < 0:
+            raise ValueError('C_dl_F_cm2 must be finite and nonnegative')
+        if not np.isfinite(self.p.pulse_alpha_a) or self.p.pulse_alpha_a <= 0:
+            raise ValueError('pulse_alpha_a must be finite and positive')
 
     def solve(self, psi, dx, z0, z_plane, j_net_A_cm2, periodic=(True, True, False), state=None,
               tol=2e-4, maxit=30, flow_faces=None):
@@ -256,8 +264,20 @@ class FieldSolver:
         flow_faces: optional (ux, uy, uz) MAC face velocities on the full grid, cm/s, shaped (nx+1, ny, nz),
         (nx, ny+1, nz), (nx, ny, nz+1) (platesim.flow3d.solve_stokes3d(...)["faces"]); they advect Cu2+.
         Returns dict(ct, phi, i, speed, V, w, active, kt, info) on the full grid; i is the interface
-        current density (A/cm2) of each cell, speed = Mfac * i (cm/s)."""
+        current density (A/cm2) of each cell, speed = Mfac * i (cm/s).
+        In resolved mode i/speed/phi are cycle means; ct is the outer mean.
+        info['pulse'] reports phase voltages, currents, diffusion length, charging
+        times and cycle Faraday error. Off-time C*|delta eta|/j is undefined for
+        applied j=0; differential RC relaxation time is reported separately.
+        Charging is an area-mean periodic RC/BV circuit, not a full spatial
+        transient potential solve. Its phase Faradaic charges feed the 3-D
+        phase distributions, using BV for off-time relaxation near equilibrium.
+        """
         p, ph = self.p, self.ph
+        from .pulse import Waveform, surface_concentration, capacitive_cycle
+        wave = (None if self.pulse is None or self.pulse.get('model') == 'net'
+                else Waveform.parse(self.pulse, j_net_A_cm2))
+        resolved = wave is not None and wave.model == 'resolved' and not wave.dc
         psi = np.asarray(psi, dtype=np.float64)
         nx, ny, nz = psi.shape
         zc = z0 + (np.arange(nz) + 0.5) * dx
@@ -413,6 +433,133 @@ class FieldSolver:
         info["converged"] = bool(change < tol)
         info["ct_change"] = change
         I = ct * ci_of(V - phi)
+        if resolved:
+            # The outer Cu solve sees the cycle-mean sink, never the instantaneous
+            # forward current. Its fixed point is coupled to three frozen-front
+            # potential distributions and a periodic, independent-normal diffusion layer.
+            weights = wave.weights
+            targets = np.array(wave.currents) * nx * ny / dx
+            phase_i = np.array([I * v / j_net_A_cm2 for v in wave.currents])
+            phase_i[weights == 0] = 0.
+            phase_phi, phase_V = phi.copy(), V
+            eta_mean = np.zeros(3)
+            area_ratio = wf.sum() * dx / (nx * ny)
+            pulse_change = np.inf
+            pulse_relax = 1.
+
+            def phase_solve(concentration, target, relaxation=False):
+                nonlocal phase_phi, phase_V
+                bv = relaxation and p.C_dl_F_cm2 > 0
+                if abs(target) < 1e-30 and not bv:
+                    phase_phi, phase_V = np.zeros(n), 0.
+                    return np.zeros(n), 0., 0.
+                sign = float(np.sign(target))
+                a = (p.alpha_u if sign > 0 else p.pulse_alpha_a) * ph.f_RT
+                # Shared exchange current; anodic Cu activity is one (solid Cu),
+                # not the electrolyte Cu2+ concentration used by the cathodic branch.
+                pref = ph.i0_u * (concentration if sign > 0 else np.ones(n))
+                pref = np.where(act, pref, 0.)
+                def kinetics(eta):
+                    if bv:
+                        cath = ph.i0_u * concentration * np.exp(np.clip(-af * eta, -60, 60))
+                        aa = p.pulse_alpha_a * ph.f_RT
+                        anod = ph.i0_u * np.exp(np.clip(aa * eta, -60, 60))
+                        return np.where(act, cath - anod, 0.), np.where(act, af*cath + aa*anod, 0.)
+                    current = sign * pref * np.exp(np.clip(-sign * a * eta, -60, 60))
+                    return current, a * np.abs(current)
+                if bv:
+                    from scipy.optimize import brentq
+                    phase_V = brentq(lambda v: np.dot(wf, kinetics(v - phase_phi)[0]) - target, -3., 3.)
+                else:
+                    phase_V = -sign / a * np.log(abs(target) / max(
+                        np.dot(wf, pref * np.exp(np.clip(sign * a * phase_phi, -60, 60))), 1e-300))
+                for iteration in range(60):
+                    current, derivative = kinetics(phase_V - phase_phi)
+                    q = wf * derivative
+                    R = A_p @ phase_phi + wf * current
+                    g = np.dot(wf, current) - target
+                    lin = lin_p(q)
+                    x1, x2 = lin.solve(-R), lin.solve(q)
+                    info['cg'] += lin.iterations
+                    dV = (g + np.dot(q, x1)) / (q.sum() - np.dot(q, x2) + 1e-300)
+                    dphi = x1 + x2 * dV
+                    m = float(np.max(np.abs(dV - dphi)))
+                    lam = min(1., .15 / (m + 1e-300))
+                    phase_phi += lam * dphi
+                    phase_V += lam * dV
+                    info['newton'] += 1
+                    if m < 2e-8:
+                        break
+                else:
+                    raise RuntimeError('pulse potential Newton iteration did not converge')
+                current = kinetics(phase_V - phase_phi)[0]
+                return current, float(phase_V), float(np.dot(wf, phase_V - phase_phi) / wf.sum())
+
+            for coupling in range(40):
+                cs = surface_concentration(ct, phase_i, wave.durations, ph.D_c, p.c_bulk, p.efficiency)
+                front = wf > 1e-6 * wf.max()
+                if np.min(cs[:, front][weights > 0]) <= 0:
+                    raise ValueError('pulse diffusion layer depleted: reduce phase current or period')
+                cs = np.maximum(cs, 1e-12)
+                old_i = phase_i.copy()
+                volts = np.zeros(3)
+                mean_phi = np.zeros(n)
+                effective = targets.copy()
+                if p.C_dl_F_cm2:
+                    effective_j, charging = capacitive_cycle(wave.durations, wave.currents,
+                        p.C_dl_F_cm2, ph.i0_u, af, p.pulse_alpha_a * ph.f_RT,
+                        cs @ wf / wf.sum(), area_ratio)
+                    effective = effective_j * nx * ny / dx
+                for k, dt_phase in enumerate(wave.durations):
+                    if dt_phase == 0:
+                        continue
+                    phase_i[k], volts[k], eta_mean[k] = phase_solve(cs[k], effective[k], relaxation=k == 2)
+                    mean_phi += weights[k] * phase_phi
+                Iavg = weights @ phase_i
+                # Implicit positive sink, explicit local dissolution source.
+                q_c = sink * wf * np.maximum(Iavg, 0.) / np.maximum(ct, 1e-12)
+                lin = lin_c_of(q_c)
+                new_ct = lin.solve(b_c - sink * wf * np.minimum(Iavg, 0.), x0=ct)
+                info['cg'] += lin.iterations
+                new_ct = np.where(act, new_ct, 0.)
+                previous_change = pulse_change
+                pulse_change = max(float(np.max(np.abs(new_ct - ct))),
+                    float(np.max(np.abs(phase_i - old_i))) / max(np.max(np.abs(phase_i)), 1e-12))
+                if pulse_change > previous_change * 1.2:
+                    pulse_relax = max(.2, pulse_relax * .5)
+                ct += pulse_relax * (new_ct - ct)
+                if pulse_change < min(tol, 2e-5):
+                    break
+            I = weights @ phase_i
+            phi, V = mean_phi, float(np.dot(weights, volts))
+            if not p.C_dl_F_cm2:
+                _, charging = capacitive_cycle(wave.durations, wave.currents, 0.,
+                    ph.i0_u, af, p.pulse_alpha_a * ph.f_RT, cs @ wf / wf.sum(), area_ratio)
+            info['pulse'] = dict(model='resolved', coupling_iterations=coupling + 1,
+                converged=bool(pulse_change < min(tol, 2e-5)), change=pulse_change,
+                phase_V=volts.tolist(), phase_eta_V=eta_mean.tolist(),
+                phase_current_A_cm2=(phase_i @ wf * dx / (nx * ny)).tolist(),
+                diffusion_length_um=float(np.sqrt(ph.D_c * sum(wave.durations)) * 1e4),
+                faraday_error_rel=float(np.dot(wf, I) / It - 1.),
+                alpha_a=p.pulse_alpha_a, kinetics='cathodic/anodic Tafel; i0 shared; uncalibrated',
+                alpha_a_reference='pulse_reverse_literature.md section 6: fitting range 1.0-1.5; uncalibrated')
+            info['pulse'].update(charging)
+            if p.C_dl_F_cm2:
+                info['pulse']['kinetics'] = 'Tafel forward/reverse; BV lumped RC and off-time relaxation; i0 shared'
+            info['pulse']['tau_off_note'] = 'No finite C*|delta eta|/j when applied j=0; null denotes undefined.'
+            info['pulse']['phase_surface_ct_min'] = [float(np.min(cs[k, front]))
+                if weights[k] else None for k in range(3)]
+            info['converged'] = info['pulse']['converged']
+            info['amg_builds'] = pc_p.builds + pc_c.builds
+            info['current_error'] = info['pulse']['faraday_error_rel']
+        elif wave is not None and wave.model == 'resolved':
+            # A periodic DC waveform has no transitions or oscillatory diffusion.
+            # Keep every field bit-identical while still reporting charging data.
+            info['pulse'] = dict(model='resolved', dc_limit=True, converged=info['converged'],
+                phase_current_A_cm2=[j_net_A_cm2, 0., 0.], phase_V=[float(V), None, None],
+                tau_s=[0., None, None], C_dl_report_F_cm2=p.C_dl_F_cm2 or 30e-6,
+                capacitive_charge_C_cm2=[0., 0., 0.],
+                faraday_error_rel=float(np.dot(wf, I) / It - 1.), alpha_a=p.pulse_alpha_a)
         info["current_error"] = float(np.dot(wf, I) / It - 1.0)
         # Cu2+ entering through the bulk plane vs the deposition sink (both mol/s per tile)
         ct3 = ct.reshape(shape)
