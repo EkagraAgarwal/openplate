@@ -7,12 +7,14 @@ import { LayoutPreview } from './LayoutPreview'
 const L1_UNUSED = {
   bath: 'Not used by L1 yet: cl_ppm (no additive/chloride chemistry). Cu and H2SO4 set the bulk Cu2+, H+ and SO4 2- (migration); conductivity is an uncalibrated default.',
   setup:
-    'Not used by L1 yet: orientation, up_edge (no buoyancy), taped, area_cm2. stir_shear_1_s (if set, EXPERIMENTAL) adds resolved shear flow with the lid at the bulk plane; delta_um still sets the bulk plane. stir_angle_deg sets the shear direction in die axes. Sheared runs use full periodic tiles and are ~20x slower (quick_trench: 24 min instead of ~1 min).'
+    'Not used by L1 yet: orientation, up_edge (no buoyancy), taped, area_cm2. Optional coupon position (centred, x across, y up) selects local current, Nernst layer and efficiency from the calibrated DC coupon model; beaker stir (%) is used only by that model (blank uses its default). Without a position, delta_um sets the bulk plane. stir_shear_1_s (if set, EXPERIMENTAL) adds resolved shear flow with the lid at the bulk plane. stir_angle_deg sets the shear direction in die axes. Sheared runs use full periodic tiles and are ~20x slower (quick_trench: 24 min instead of ~1 min).'
 }
 
 const FIELD_LABELS: Record<string, string> = {
   'layout.die_um.0': 'die width x (µm)',
-  'layout.die_um.1': 'die height y (µm)'
+  'layout.die_um.1': 'die height y (µm)',
+  'setup.coupon_position_cm': 'coupon position x, y (cm)',
+  'setup.stir_pct': 'beaker stir (%)'
 }
 
 export function SpecEditor({
@@ -62,6 +64,17 @@ export function SpecEditor({
               <option key={c}>{c}</option>
             ))}
           </select>
+        ) : path === 'setup.coupon_position_cm' ? (
+          <input
+            key={String(value)}
+            aria-label={path}
+            aria-invalid={Boolean(issue)}
+            type="text"
+            placeholder="x, y (blank disables)"
+            defaultValue={value == null ? '' : String(value)}
+            onBlur={(e) => update(path, e.target.value.trim() === '' ? null :
+              e.target.value.split(',').map((v) => v.trim() === '' ? null : Number(v)))}
+          />
         ) : (
           <input
             aria-label={path}
@@ -330,6 +343,8 @@ export function SpecEditor({
               {fields('setup', spec.setup, [
                 'stir_shear_1_s',
                 'stir_angle_deg',
+                'coupon_position_cm',
+                'stir_pct',
                 'delta_um',
                 'area_cm2'
               ])}

@@ -1,6 +1,7 @@
 """CPU L1 pipeline; lengths at public geometry boundaries are explicitly converted."""
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timezone
 import json
 from pathlib import Path
@@ -13,7 +14,7 @@ from platesim.core.constants import F, M_CU, RHO_CU
 from platesim.spec3d import Artifact, Check, Manifest, Quantity, SampleSpec, spec_hash, validate_spec
 from platesim.tile3d.grid import Grid3D
 
-MFAC = M_CU / (2 * F * RHO_CU)  # cm3/C, divalent copper, unity current efficiency
+MFAC = M_CU / (2 * F * RHO_CU)  # cm3 per C of Cu charge (applied charge times efficiency)
 
 
 def _spec(value):
@@ -36,6 +37,14 @@ def _duration(step):
 def _shear_assumption(spec):
     return (f'Resolved Couette shear G={spec.setup.stir_shear_1_s:g} 1/s at angle '
             f'{spec.setup.stir_angle_deg:g} deg (die axes); EXPERIMENTAL: lid at the bulk plane (vs 2-D domain-top lid: +0.03 floor/field at 50/s in T2.5); no buoyancy.')
+
+
+def _coupon_assumption(spec):
+    if spec.setup.coupon_position_cm is None:
+        return ''
+    return (f'Coupon position {spec.setup.coupon_position_cm} cm (centred, x across, y up): '
+            'local current, Nernst layer and efficiency from the DC coupon model '
+            'calibrated to the team planar DOE. ')
 
 
 def _tile_rotation(plan):
@@ -67,6 +76,13 @@ def plan_tile(spec: SampleSpec, *, field_margin_um=None) -> list[dict]:
     from .planner import plan_features
     spec = _spec(spec)
     charge = sum(s.j_net_mA_cm2 * 1e-3 * _duration(s) for s in spec.recipe.steps)
+    if spec.setup.coupon_position_cm is not None:
+        # Size the grid for the LOCAL current (coupon edges carry up to ~1.4x the mean); same cached
+        # coupon solves the run uses. Efficiency <= 1 is ignored here, so the height stays conservative.
+        from platesim.multiscale.bridge import tile3d_conditions
+        charge = sum(tile3d_conditions(s.j_net_mA_cm2, _duration(s), *spec.setup.coupon_position_cm,
+                                       T_C=spec.bath.temperature_C, stir_pct=spec.setup.stir_pct)
+                     ['j_local_mA_cm2'] * 1e-3 * _duration(s) for s in spec.recipe.steps)
     plans = plan_features(spec, charge * MFAC * 1e4,
                           sum(_duration(s) for s in spec.recipe.steps), field_margin_um)
     if spec.setup.stir_shear_1_s:  # 0 and None both mean no resolved shear
@@ -213,19 +229,33 @@ def _run_one(spec, plan, out_dir, progress=None) -> dict:
                                           faraday_volume_cm3=0., cu_balance_rel=0.))
     durations = [_duration(s) for s in spec.recipe.steps]
     total_duration = sum(durations)
+    local_conditions = []
     for index, (step, duration) in enumerate(zip(spec.recipe.steps, durations)):
         def report(fraction, message):
             if progress is not None:
                 progress((elapsed + fraction * duration) / total_duration,
                          f'recipe {index + 1}/{len(durations)}: {message}')
-        step_result = run_tile(psi, grid, step.j_net_mA_cm2, duration,
-                          delta_um=spec.setup.delta_um, params=params, T_C=spec.bath.temperature_C,
+        j_local, delta_um, step_params = step.j_net_mA_cm2, spec.setup.delta_um, params
+        if spec.setup.coupon_position_cm is not None:
+            from platesim.multiscale.bridge import tile3d_conditions
+            conditions = tile3d_conditions(step.j_net_mA_cm2, duration,
+                *spec.setup.coupon_position_cm, T_C=spec.bath.temperature_C,
+                stir_pct=spec.setup.stir_pct)
+            j_local, delta_um = conditions['j_local_mA_cm2'], conditions['delta_um']
+            step_params = replace(params, efficiency=conditions['efficiency'])
+            local_conditions.append(conditions)
+        step_result = run_tile(psi, grid, j_local, duration,
+                          delta_um=delta_um, params=step_params, T_C=spec.bath.temperature_C,
                            n_frames=2, backend='numpy', field_mask=field_mask, progress=report,
                            **flow_kwargs)
         psi = step_result['psi']
         elapsed += duration
-        charge += step.j_net_mA_cm2 * 1e-3 * duration
-        expected = charge * area * MFAC
+        step_charge = j_local * 1e-3 * duration
+        charge += step_charge  # applied tile charge, before efficiency
+        if spec.setup.coupon_position_cm is None:
+            expected = charge * area * MFAC  # retain legacy floating-point ordering
+        else:
+            expected += step_charge * step_params.efficiency * area * MFAC
         deposited = ls.solid_volume(psi, grid.dx) - initial
         worst_balance = max(worst_balance, *(abs(v) for v in step_result['series']['cu_balance_rel']))
         writer.add_frame(elapsed, psi, scalars=dict(charge_C_cm2=charge,
@@ -249,6 +279,10 @@ def _run_one(spec, plan, out_dir, progress=None) -> dict:
             quantities.append(Quantity(name=name, value=float(value), unit=unit,
                 flag='preview' if 'preview' in plan['flags'] else 'uncalibrated',
                 feature_id=plan['feature_ids'][0]))
+    for index, conditions in enumerate(local_conditions, 1):
+        for name, unit in [('j_local_mA_cm2', 'mA/cm2'), ('delta_um', 'um'),
+                           ('efficiency', '1'), ('scale', '1')]:
+            quantity(f'step_{index}.{name}', conditions[name], unit)
     for name in ('field_um', 'floor_um', 'wall_um', 'overburden_um'):
         quantity(name, features.get(name), 'um')
     quantity('floor_over_field', features.get('floor_over_field'), '1')
@@ -279,7 +313,8 @@ def _run_one(spec, plan, out_dir, progress=None) -> dict:
         + _shear_assumption(spec) + ' ') +
         'One result retains original silicon and cumulative step-end frames. '
         'Seed thinning is not modelled; conductivity and kinetics use uncalibrated engine defaults. '
-        'Faraday volume correction is disabled; checks report actual numerical drift.')
+         'Faraday volume correction is disabled; checks report actual numerical drift.'
+         + (' ' + _coupon_assumption(spec) if local_conditions else ''))
     payload = manifest.model_dump(mode='json')
     if progress is not None:
         progress(1., 'manifest complete')
@@ -337,7 +372,7 @@ def run_sample(spec: SampleSpec | dict | str, out_dir, progress=None, *, field_m
                       if not spec.setup.stir_shear_1_s else
                       'No additives or seed thinning; conductivity/kinetics are uncalibrated defaults. '
                       + _shear_assumption(spec) + ' ')
-                   + ' | '.join(descriptions))
+                    + _coupon_assumption(spec) + ' | '.join(descriptions))
     payload = Manifest.model_validate(payload).model_dump(mode='json')
     temporary = out / 'manifest.json.tmp'
     temporary.write_text(json.dumps(payload, indent=2, allow_nan=False), encoding='utf-8')

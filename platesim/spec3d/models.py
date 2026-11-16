@@ -109,6 +109,8 @@ class Setup(StrictModel):
     up_edge: Literal["+x", "-x", "+y", "-y"] = "+y"
     stir_shear_1_s: Nonnegative | None = None
     stir_angle_deg: float = 0
+    coupon_position_cm: tuple[float, float] | None = None  # centred coupon: x across, y up
+    stir_pct: Nonnegative | None = None  # coupon model only; None uses bridge default
     delta_um: Positive = 64
     taped: bool
     area_cm2: Positive

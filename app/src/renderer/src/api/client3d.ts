@@ -40,6 +40,8 @@ export interface SampleSpec3D {
     up_edge?: string
     stir_shear_1_s?: number | null
     stir_angle_deg?: number
+    coupon_position_cm?: [number, number] | null
+    stir_pct?: number | null
     delta_um?: number
     area_cm2?: number
     taped?: boolean
