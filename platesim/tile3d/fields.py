@@ -38,8 +38,9 @@ class _Precond:
     needs more than `grow` times the iterations of the first solve after the last rebuild (the
     diagonal has drifted far, e.g. the Cu sink near the limiting current)."""
 
-    def __init__(self, grow=2.5, floor=25):
+    def __init__(self, grow=2.5, floor=25, info=None):
         self.M, self.base, self.grow, self.floor, self.builds = None, None, grow, floor, 0
+        self.lu, self.info = None, info
 
     def get(self, A):
         if self.M is None:
@@ -62,7 +63,10 @@ class _MGFamily:
     def __init__(self, faces, dx, active, dirichlet, periodic, tol=1e-8):
         from .backend.mgcg_numba import MGCG
         self.shape, self.tol, self.iterations = active.shape, tol, 0
-        self.mg = MGCG(*faces, dx, reaction=None, active=active, dirichlet=dirichlet, periodic=periodic)
+        # A little more smoothing saves expensive Krylov/transfer work on thin
+        # trench tiles (tools/bench_tile3d.py --field-micro).
+        self.mg = MGCG(*faces, dx, reaction=None, active=active, dirichlet=dirichlet,
+                       periodic=periodic, pre=3, post=3)
         self.coarsest = int(np.prod(self.mg.hierarchy[-1].mask.shape))
 
     def system(self, q):
@@ -79,7 +83,10 @@ class _MGFamily:
 
 
 class _AdvLinear:
-    """Non-symmetric Cu2+ system with advection.  direct: sparse LU.  Otherwise GMRES preconditioned by
+    """Non-symmetric Cu2+ system with advection. Direct with a shared cache:
+    factor the first system, then use that LU as a GMRES preconditioner for
+    changing sink diagonals. Without a cache, direct remains exact sparse LU.
+    Otherwise GMRES preconditioned by
     the symmetric part (same faces and sink, no advection): one MGCG V-cycle (fam: _MGFamily) or the
     reused AMG hierarchy of A_sym + diag(q).  Fine while the cell Peclet number is O(1)."""
 
@@ -90,6 +97,7 @@ class _AdvLinear:
     # its iteration count grows.  Exact LU is the last resort.
     MG_RESTARTS = 4        # budget of the symmetric-preconditioned first attempt (x 60 iterations)
     SLOW_ITS = 150         # converged but slower than this -> later systems start with ILU
+    LU_REFRESH_ITS = 20    # refresh a drifted exact factor; one restart bounds a stale attempt
 
     def __init__(self, A, q, direct, fam=None, A_sym=None, pc=None, tol=1e-8, start=None, ilu_cache=None):
         # start: None, "ilu" or "lu" - begin with a fallback that an earlier system already needed
@@ -98,8 +106,16 @@ class _AdvLinear:
         self._cache = ilu_cache if ilu_cache is not None else {}
         if start == "lu" and not direct:
             direct, self.fallback = True, "lu"
-        self._lu = splu(A.tocsc()) if direct else None
+        self._reuse_lu = direct and ilu_cache is not None
+        self._lu = None
         self._M = None
+        if self._reuse_lu:
+            if "lu" not in self._cache:
+                self._factor_lu()
+            else:
+                self._M = LinearOperator(A.shape, matvec=self._cache["lu"].solve, dtype=np.float64)
+        elif direct:
+            self._lu = splu(A.tocsc(), permc_spec="MMD_AT_PLUS_A")
         if not direct and start == "ilu":
             self.fallback = "ilu"
         elif not direct:
@@ -110,6 +126,26 @@ class _AdvLinear:
             else:
                 S = A_sym + sparse.diags(q)
                 self._M = pc.get(S)
+
+    def _factor_lu(self):
+        if self.A.shape[0] > LU_FALLBACK_MAX:
+            raise RuntimeError(f"Cu advection cached LU exceeds fallback limit (n={self.A.shape[0]})")
+        self._lu = splu(self.A.tocsc(), permc_spec="MMD_AT_PLUS_A")
+        self._cache["lu"] = self._lu
+        self._cache["lu_builds"] = self._cache.get("lu_builds", 0) + 1
+
+    def _solve_lu(self, b, x0):
+        x, info, its = self._gmres(b, x0, self._M, 1)
+        # SciPy checks the true residual too; keep an explicit gate here so
+        # no stale-factor solve can weaken the requested inner tolerance.
+        valid = np.isfinite(x).all() and np.linalg.norm(b-self.A@x) <= self.tol*np.linalg.norm(b)
+        if info != 0 or not valid:
+            # The original high-Peclet escape hatch remains exact LU of A.
+            self._factor_lu()
+            return self._lu.solve(b)
+        if its > self.LU_REFRESH_ITS:
+            self._cache.pop("lu", None)
+        return x
 
     def _ilu(self, rebuild=False):
         from scipy.sparse.linalg import LinearOperator, spilu
@@ -132,7 +168,7 @@ class _AdvLinear:
         if self.A.shape[0] > LU_FALLBACK_MAX:
             raise RuntimeError(f"Cu advection solve: {why} (n={self.A.shape[0]}); cell Peclet number too "
                                "high for this grid?")
-        self._lu, self.fallback = splu(self.A.tocsc()), "lu"
+        self._lu, self.fallback = splu(self.A.tocsc(), permc_spec="MMD_AT_PLUS_A"), "lu"
         return self._lu.solve(b)
 
     def _solve_ilu(self, b, x0):
@@ -154,6 +190,8 @@ class _AdvLinear:
     def solve(self, b, x0=None):
         if self._lu is not None:
             return self._lu.solve(b)
+        if self._reuse_lu:
+            return self._solve_lu(b, x0)
         if self.fallback == "ilu":
             return self._solve_ilu(b, x0)
         x, info, its = self._gmres(b, x0, self._M, self.MG_RESTARTS)
@@ -171,6 +209,8 @@ class _Sticky:
 
     def __init__(self, lin, owner, info):
         self.lin, self.owner, self.info = lin, owner, info
+        if lin._reuse_lu and lin.fallback is None:
+            info["linear_cu"] = "gmres+lu"
 
     @property
     def iterations(self):
@@ -194,25 +234,49 @@ def _mg_available():
 
 
 class _Linear:
-    """One SPD matrix, several right-hand sides.  Sparse LU up to DIRECT_MAX unknowns, else CG
-    preconditioned by `precond` (a _Precond reused across the systems of one field solve)."""
+    """SPD family: auto-small reuses one LU as a CG preconditioner across
+    changing diagonals; explicit direct stays exact. Large systems use AMG.
+    A missing shared precond also keeps the original exact-direct behaviour.
+    """
 
     def __init__(self, A, tol=1e-8, precond=None, mode="auto"):
         self.A, self.tol, self.iterations = A, tol, 0
         self._pc = precond if precond is not None else _Precond()
-        if mode == "direct" or (mode != "amg" and A.shape[0] <= DIRECT_MAX):
-            self._lu, self._M = splu(A.tocsc()), None
+        direct = mode == "direct" or (mode != "amg" and A.shape[0] <= DIRECT_MAX)
+        self._cached_direct = direct and mode != "direct" and precond is not None
+        if self._cached_direct and self._pc.lu is not None:
+            from scipy.sparse.linalg import LinearOperator
+            self._lu = None
+            self._M = LinearOperator(A.shape, matvec=self._pc.lu.solve, dtype=np.float64)
+        elif direct:
+            self._factor()
         else:
             self._lu, self._M = None, self._pc.get(A)
+        if self._cached_direct and self._pc.info is not None:
+            self._pc.info["linear"] = "cg+lu"
+
+    def _factor(self):
+        self._lu, self._M = splu(self.A.tocsc(), permc_spec="MMD_AT_PLUS_A"), None
+        if self._cached_direct:
+            self._pc.lu = self._lu
 
     def solve(self, b, x0=None):
         if self._lu is not None:
             return self._lu.solve(b)
         count = [0]
-        x, info = cg(self.A, b, x0=x0, rtol=self.tol, atol=0.0, M=self._M, maxiter=400,
+        x, info = cg(self.A, b, x0=x0, rtol=self.tol, atol=0.0, M=self._M,
+                     maxiter=60 if self._cached_direct else 400,
                      callback=lambda _: count.__setitem__(0, count[0] + 1))
         self.iterations += count[0]
-        self._pc.report(count[0])
+        if self._cached_direct:
+            valid = np.isfinite(x).all() and np.linalg.norm(b-self.A@x) <= self.tol*np.linalg.norm(b)
+            if info != 0 or not valid:
+                self._factor()
+                return self._lu.solve(b)
+            if count[0] > 20:
+                self._pc.lu = None
+        else:
+            self._pc.report(count[0])
         if info != 0:
             raise RuntimeError(f"CG did not converge (info={info})")
         return x
@@ -332,7 +396,7 @@ class FieldSolver:
         ct = np.where(act, np.clip(ct, 1e-6, None), 0.0)
         V = V_fixed_phi(ct, phi)
         info = dict(outer=0, newton=0, cg=0)
-        pc_p, pc_c = _Precond(), _Precond()            # one AMG hierarchy per family, reused
+        pc_p, pc_c = _Precond(info=info), _Precond(info=info)  # one AMG hierarchy per family, reused
         use_mg = self.linear == "mg" or (self.linear == "auto" and n > DIRECT_MAX and _mg_available())
         mode = self.linear if self.linear in ("direct", "amg") else "auto"
         info["linear"] = "mgcg" if use_mg else (
@@ -367,7 +431,8 @@ class FieldSolver:
 
             def lin_c_of(q):
                 lin = _AdvLinear(A_c + sparse.diags(q), q, direct_c, fam_c if use_mg else None,
-                                 A_sym=A_sym_c, pc=pc_c, start=start_c, ilu_cache=ilu_cache)
+                                 A_sym=A_sym_c, pc=pc_c, start=start_c,
+                                 ilu_cache=ilu_cache if self.linear != "direct" else None)
                 return _Sticky(lin, self, info)
         else:
             F_top = None

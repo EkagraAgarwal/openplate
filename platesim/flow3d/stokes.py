@@ -222,6 +222,33 @@ def _solve(a, g, b, solver, pressure_labels):
     return x, iterations, residual
 
 
+def _extruded_stokes(psi, fluid, dx, z0, z_lid, periodic, shear_rate_s, shear_dir,
+                     nu_cm2_s, solver, axial_net_flux_zero):
+    """Exact constant-y mode for an unforced periodic extrusion, or None.
+
+    The sharp-mask operator depends on psi only through its sign and the
+    highest field crossing. Keep that crossing even when signed distances
+    differ between otherwise identical y sections; no approximate symmetry
+    test or geometry averaging is used.
+    """
+    ny = psi.shape[1]
+    if ny == 1 or not periodic[1] or not np.array_equal(
+            fluid, np.broadcast_to(fluid[:, :1, :], fluid.shape)):
+        return None
+    cut = psi[:, :, :fluid.shape[2]]
+    y = max(range(ny), key=lambda j: _field_height(cut[:, j:j+1, :], dx, z0))
+    out = solve_stokes3d(psi[:, y:y+1, :], dx, z0, z_lid, periodic=periodic,
+                        shear_rate_s=shear_rate_s, shear_dir=shear_dir,
+                        nu_cm2_s=nu_cm2_s, solver=solver,
+                        axial_net_flux_zero=axial_net_flux_zero)
+    for name in ("ux", "uy", "uz", "p"):
+        out[name] = np.repeat(out[name], ny, axis=1)
+    out["faces"] = tuple(np.repeat(face[:, :1, :], ny+(axis == 1), axis=1)
+                         for axis, face in enumerate(out["faces"]))
+    out["info"]["extruded_y_cells"] = ny
+    return out
+
+
 def solve_stokes3d(psi, dx, z0, z_lid, periodic=(True, True, False), shear_rate_s=0.0,
                    shear_dir=(1.0, 0.0), body_force=None, nu_cm2_s=0.0114, solver='auto',
                    axial_net_flux_zero: bool | None = None) -> dict:
@@ -243,6 +270,8 @@ def solve_stokes3d(psi, dx, z0, z_lid, periodic=(True, True, False), shear_rate_
     (nx,ny,nz+1), pressure (cm²/s²), and solver diagnostics. Periodic seam
     faces are duplicated exactly. Pressure is zero at one cell per region.
     'auto' uses SuperLU up to 12000 unknowns, block-AMG GMRES above that.
+    Unforced periodic-y extrusions solve their exact constant-y mode and
+    reconstruct the full arrays; info.extruded_y_cells records this reduction.
     axial_net_flux_zero=None constrains each periodic axis with nonzero mean
     fluid body force; True constrains all periodic axes, False preserves the
     unconstrained solve. A uniform kinematic pressure gradient enforces zero
@@ -275,6 +304,12 @@ def solve_stokes3d(psi, dx, z0, z_lid, periodic=(True, True, False), shear_rate_
         raise ValueError('lid is too close to a cell centre (<1e-5 dx); move z_lid to a grid face')
     cut = psi[:, :, :nz]
     fluid = cut > 0
+    if body_force is None:
+        extruded = _extruded_stokes(psi, fluid, dx, z0, z_lid, periodic, shear_rate_s,
+                                    shear_dir, nu_cm2_s, solver, axial_net_flux_zero)
+        if extruded is not None:
+            extruded["info"]["seconds"] = perf_counter()-start
+            return extruded
     field_height = _field_height(cut, dx, z0)
     lid_speed = float(shear_rate_s) * max(z_lid - field_height, 0.)
     lid = np.r_[direction * lid_speed, 0.]

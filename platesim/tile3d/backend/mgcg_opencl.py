@@ -3,8 +3,8 @@
 The CPU hierarchy builder is the single source of conservative singleton
 coarsening, masks, boundary coefficients and transpose transfer tables. Setup
 and set_reaction run on the host; solve transfers b/x0 once, x once on return,
-and only reduction scalars in between. Even the <=512-cell coarse inverse is
-applied on-device. Larger terminal levels use the reference's fixed 200 sweeps.
+and only reduction scalars in between. Even the <=4096-cell coarse inverse is
+applied on-device. Larger terminal levels use the reference's fixed sweeps.
 
 ``mixed`` stores/applies the *same fixed* V-cycle in float32, while the fine
 operator, Krylov vectors, updates and reductions remain float64. This is PCG,
@@ -206,7 +206,6 @@ class MGCG_CL:
             self._upload(a, self._vdtype) for a in weights)
 
     def _update_diagonal(self):
-        from scipy.linalg import cho_solve
         for l, h in zip(self.hierarchy, self._host.hierarchy):
             for name in ("base", "diag"):
                 a = np.asarray(getattr(h, name), dtype=self._vdtype).ravel()
@@ -216,9 +215,9 @@ class MGCG_CL:
                     getattr(l, name).set(a)
                 else:
                     setattr(l, name, self._upload(a, self._vdtype))
-        h, l = self._host.hierarchy[-1], self.hierarchy[-1]
-        l.inverse = None if h.cholesky is None else self._upload(
-            cho_solve(h.cholesky, np.eye(l.size), check_finite=False), self._vdtype)
+        l = self.hierarchy[-1]
+        inverse = self._host._coarse_solve(np.eye(l.size)) if l.size <= 4096 else None
+        l.inverse = None if inverse is None else self._upload(inverse, self._vdtype)
         for name in ("base", "diag"):
             setattr(self._fine, name, self._upload(getattr(self._host.hierarchy[0], name)))
 

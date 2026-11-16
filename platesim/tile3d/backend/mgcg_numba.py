@@ -4,7 +4,9 @@ Faces, diagonals, V-cycle and Krylov workspaces use ``dtype``; all scalar
 reductions accumulate in float64. Native float32 can have a true-residual floor
 above the requested tolerance; nonconvergence is reported, not hidden by a
 recursive residual. No fine-grid sparse matrix is built. Only the final, small
-grid is factored. Dirichlet data affect A, not b:
+grid is factored (dense Cholesky through 512 cells, sparse LU through 4096).
+Stencil arithmetic permits fast-math reassociation; scalar reductions do not.
+Dirichlet data affect A, not b:
 the caller must include the boundary RHS returned by operators.assemble.
 
 Cell-centred linear prolongation and its scaled transpose form a symmetric
@@ -33,7 +35,7 @@ def _dot(a, b):
     return total
 
 
-@njit(parallel=True, cache=True)
+@njit(parallel=True, cache=True, fastmath=True)
 def _kernel(u, b, fx, fy, fz, base, diag, periodic, out, color, omega):
     """Apply, or one simultaneous Jacobi / independent RBGS colour update."""
     nx, ny, nz = u.shape
@@ -193,8 +195,8 @@ class MGCG:
     grids are not bipartite and automatically use two damped Jacobi passes per
     smoothing sweep on that level (the retained axis needs stronger smoothing).
     Equal positive pre/post counts are required for a symmetric preconditioner.
-    ``levels`` caps depth; a large terminal grid uses 200 symmetric smoothing
-    sweeps instead of a direct factorization. solve returns the shape of b.
+    ``levels`` caps depth; terminal grids above 4096 cells use symmetric
+    smoothing instead of a direct factorization. solve returns the shape of b.
     """
 
     def __init__(self, kx, ky, kz, dx, reaction=None, active=None, dirichlet=None,
@@ -308,27 +310,48 @@ class MGCG:
                 raise ValueError("operator has an unanchored isolated cell or storage overflow")
             r = _cell_average(np.where(level.mask, r, 0), level.factors, level.widths)
         last = self.hierarchy[-1]
-        last.cholesky = None
-        if last.x.size <= 512:
-            # At most 512 unknowns, constructed from the seven-point coarse stencil.
+        last.cholesky, last.lu = None, None
+        if last.x.size <= 4096:
+            # Odd periodic axes cannot coarsen, so even a long, thin terminal
+            # grid can exceed the dense threshold. Sparse LU avoids hundreds
+            # of tiny Jacobi launches without a quadratic dense allocation.
             from scipy import sparse
             from scipy.linalg import cho_factor
-            ids = np.arange(last.x.size).reshape(last.x.shape)
-            rows, cols, values = [ids.ravel()], [ids.ravel()], [last.diag.ravel().astype(float)]
-            for axis, face in enumerate(last.faces):
-                v, ix = (np.moveaxis(a, axis, 0) for a in (face, ids))
-                pairs = [(ix[:-1].ravel(), ix[1:].ravel(), v[1:-1].ravel())]
-                if self.periodic[axis] and last.x.shape[axis] > 1:
-                    pairs.append((ix[-1].ravel(), ix[0].ravel(), v[0].ravel()))
-                for i, j, w in pairs:
-                    rows.extend((i, j)); cols.extend((j, i)); values.extend((-w, -w))
-            matrix = sparse.coo_matrix((np.concatenate(values),
-                                       (np.concatenate(rows), np.concatenate(cols))),
-                                      shape=(last.x.size, last.x.size)).toarray()
+            from scipy.sparse.linalg import splu
+            if not hasattr(last, "matrix"):
+                ids = np.arange(last.x.size).reshape(last.x.shape)
+                rows, cols, values = [ids.ravel()], [ids.ravel()], [last.diag.ravel().astype(float)]
+                for axis, face in enumerate(last.faces):
+                    v, ix = (np.moveaxis(a, axis, 0) for a in (face, ids))
+                    pairs = [(ix[:-1].ravel(), ix[1:].ravel(), v[1:-1].ravel())]
+                    if self.periodic[axis] and last.x.shape[axis] > 1:
+                        pairs.append((ix[-1].ravel(), ix[0].ravel(), v[0].ravel()))
+                    for i, j, w in pairs:
+                        rows.extend((i, j)); cols.extend((j, i)); values.extend((-w, -w))
+                last.matrix = sparse.coo_matrix((np.concatenate(values),
+                                                 (np.concatenate(rows), np.concatenate(cols))),
+                                                shape=(last.x.size, last.x.size)).tocsc()
+            else:
+                last.matrix.setdiag(last.diag.ravel())
             try:
-                last.cholesky = cho_factor(matrix, check_finite=False)
-            except np.linalg.LinAlgError as exc:
+                if last.x.size <= 512:
+                    last.cholesky = cho_factor(last.matrix.toarray(), check_finite=False)
+                else:
+                    last.lu = splu(last.matrix, permc_spec="MMD_AT_PLUS_A", diag_pivot_thresh=0.)
+                    if np.any(last.lu.U.diagonal() <= 0):
+                        raise ValueError("nonpositive coarse pivot")
+            except (np.linalg.LinAlgError, RuntimeError, ValueError) as exc:
                 raise ValueError("operator must be SPD: anchor every active component") from exc
+
+    def _coarse_solve(self, rhs):
+        """Shared CPU/OpenCL terminal inverse action; None means smoothing."""
+        last = self.hierarchy[-1]
+        if last.cholesky is not None:
+            from scipy.linalg import cho_solve
+            return cho_solve(last.cholesky, rhs, check_finite=False)
+        if last.lu is not None:
+            return last.lu.solve(rhs)
+        return None
 
     def _apply(self, level, u, out):
         _kernel(u, u, *level.faces, level.base, level.diag, self.periodic, out, -1, 0.0)
@@ -360,10 +383,9 @@ class MGCG:
         level = self.hierarchy[index]
         level.x.fill(0)
         if index == len(self.hierarchy)-1:
-            if level.cholesky is not None:
-                from scipy.linalg import cho_solve
-                level.x[:] = cho_solve(level.cholesky, level.rhs.ravel(),
-                                       check_finite=False).reshape(level.x.shape)
+            solution = self._coarse_solve(level.rhs.ravel())
+            if solution is not None:
+                level.x[:] = solution.reshape(level.x.shape)
             else:
                 self._smooth(level, 100)
                 self._smooth(level, 100, reverse=True)
