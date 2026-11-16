@@ -32,9 +32,15 @@ def top_height(psi, grid: Grid3D):
 def run_tile(psi_si, grid: Grid3D, j_net_mA_cm2, duration_s, delta_um=64.0, params=None, T_C=22.0,
              run_dir=None, n_frames=10, dt_max=120.0, cfl=0.3, reinit_every=4, scheme="weno5",
              backend="auto", field_mask=None, progress=None, meta=None, volume_correct=False, flow=None,
-             linear="auto"):
+             linear="auto", pulse=None, frame_callback=None):
     """Plate the bare geometry psi_si for duration_s at the net current density j_net_mA_cm2.
 
+    pulse: None (legacy) or dict(t_f_ms, t_r_ms, t_off_ms, j_f_mA_cm2,
+    j_r_mA_cm2, model='resolved'|'net'). Reverse j is a positive magnitude;
+    the waveform average must equal j_net_mA_cm2. model='net' ignores timing.
+    frame_callback: optional (time_s, psi, scalars) observer at every saved frame;
+    psi is a borrowed array (copy it if retaining). Resolved summary['pulse']
+    contains the last frozen-front solve's phase/charging diagnostics.
     field_mask: bool (nx, ny) columns that count as "field" for the bulk-plane height; default: columns
     whose bare surface lies within one cell of the highest bare surface.
     flow: None (no convection) or dict with any of shear_rate_s (0), shear_dir ((1, 0), in-plane),
@@ -46,7 +52,8 @@ def run_tile(psi_si, grid: Grid3D, j_net_mA_cm2, duration_s, delta_um=64.0, para
     solve_stokes3d).  Steady Stokes (platesim.flow3d), recomputed every update_every steps from the
     latest Cu2+ field (lagged one solve) and used to advect Cu2+ in the field solve.
     Returns a TileResult when run_dir is given, else a dict with the final psi and the series."""
-    solver = FieldSolver(params, T_C, linear=linear)
+    # None/model='net' retains the exact legacy numerical path.
+    solver = FieldSolver(params, T_C, linear=linear, pulse=pulse)
     fl = None if flow is None else dict(dict(shear_rate_s=0.0, shear_dir=(1.0, 0.0), gravity_dir=None,
                                              beta_L_mol=0.15, nu_cm2_s=0.0114, update_every=5, lid_um=None,
                                              axial_net_flux_zero=None), **flow)
@@ -89,6 +96,8 @@ def run_tile(psi_si, grid: Grid3D, j_net_mA_cm2, duration_s, delta_um=64.0, para
             fields = dict(c_cu=(out["ct"] * p.c_bulk).astype(np.float32), phi=out["phi"].astype(np.float32),
                           speed=out["speed"].astype(np.float32))
             writer.add_frame(t, psi.astype(np.float32), fields=fields, scalars=row)
+        if frame_callback is not None:
+            frame_callback(t, psi, row)
         next_frame += 1
 
     while True:
@@ -136,7 +145,9 @@ def run_tile(psi_si, grid: Grid3D, j_net_mA_cm2, duration_s, delta_um=64.0, para
             progress(min(t / duration_s, 1.0), f"step {step}, t = {t:.0f} s")
     summary = dict(steps=step, wall_s=time.time() - wall0,
                    faraday_error_rel=(series["solid_volume_cm3"][-1] / series["faraday_volume_cm3"][-1] - 1.0
-                                      if series["faraday_volume_cm3"][-1] > 0 else 0.0))
+                                       if series["faraday_volume_cm3"][-1] > 0 else 0.0))
+    if 'pulse' in out['info']:
+        summary['pulse'] = out['info']['pulse']
     if writer is not None:
         writer.close(dict(summary=summary))
         return TileResult(run_dir)

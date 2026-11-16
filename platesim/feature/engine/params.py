@@ -213,6 +213,15 @@ class Params:
     # for the team waveform).  Scales only mechanisms tied to the FARADAIC anodic current (k_rd term);
     # the net deposit is fixed by the galvanostat and is unaffected.  0 = legacy.
     pr_dl_fraction: float = 0.0
+    # 3-D resolved pulses only: areal double-layer capacitance. 0 preserves legacy kinetics.
+    C_dl_F_cm2: float = 0.0
+    # 3-D only, uncalibrated anodic Tafel coefficient in exp(alpha*F*eta/RT).
+    # Literature-review fitting range 1.0-1.5: research/sims_3d/pulse_reverse_literature.md,
+    # section 6; Mattsson & Bockris (1959), doi:10.1039/TF9595501586;
+    # Bockris & Enyo (1962), doi:10.1039/TF9625801187 (mechanistic references).
+    # This is an uncalibrated lumped model value, NOT a measured bath coefficient.
+    # Keep the older 2-D alpha_a=1.5 untouched.
+    pulse_alpha_a: float = 1.5
     # Level-set numerics (plan v2 B4 / C3)
     ls_scheme: str = "godunov1"                # 'godunov1' (legacy first-order) | 'weno5' (WENO5 + TVD-RK3)
     ls_narrow_band: bool = False               # restrict band operations to |psi| < ls_band_cells * dx

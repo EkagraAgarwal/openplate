@@ -122,6 +122,8 @@ class Numerics(StrictModel):
     dx_um: Positive | None = None
     device: Literal["auto", "cpu"] | Annotated[int, Field(ge=0, strict=True)] = "auto"
     use_surrogate: bool = False
+    pulse_model: Literal['net', 'resolved'] = 'net'
+    frames_per_step: Annotated[int, Field(ge=2, strict=True)] = 2
 
 
 class Layout(StrictModel):
