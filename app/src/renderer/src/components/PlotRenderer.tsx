@@ -26,15 +26,18 @@ function useDivPlot(data: unknown[], layout: Record<string, unknown>, deps: unkn
     void Plotly.react(el, data, layout, config()).catch(() => {
       /* first render */
     })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, deps)
+  useEffect(() => {
+    const el = ref.current
     return () => {
       try {
-        Plotly.purge(el)
+        if (el) Plotly.purge(el)
       } catch {
         /* noop */
       }
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, deps)
+  }, [])
   return ref
 }
 
@@ -56,7 +59,7 @@ function ContourPlot({
   }, [playing, frames.length])
 
   const data = contourFrameTraces(plot, Math.min(frame, maxFrame), mirror)
-  const layout: Record<string, unknown> = { ...buildLayout(plot, mirror), height }
+  const layout: Record<string, unknown> = { ...buildLayout(plot, mirror), height, uirevision: plot.title ?? 'contours' }
   const t = frames[Math.min(frame, maxFrame)]?.t
   if (frames.length > 1) {
     layout.annotations = [
@@ -118,7 +121,7 @@ export function PlotRenderer(props: PlotRendererProps) {
   }
 
   const data = tracesFor(plot, mirror)
-  const layout = { ...buildLayout(plot, mirror), height }
+  const layout = { ...buildLayout(plot, mirror), height, uirevision: plot.title ?? plot.kind }
   const ref = useDivPlot(data, layout, [plot, mirror, height])
 
   return <div className="plot-div" ref={ref} style={{ height }} />

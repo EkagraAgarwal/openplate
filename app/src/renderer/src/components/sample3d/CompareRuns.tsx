@@ -11,8 +11,8 @@ export function CompareRuns({ api, id, runs, points, section, frame }: {
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   useEffect(() => {
-    setResult(null); setError(''); setBusy(false)
-    if (!other || !section || points.length < 2) return
+    setError(''); setBusy(false)
+    if (!other || !section || points.length < 2) { setResult(null); return }
     let alive = true
     setBusy(true)
     // Do not send the current tile ID: the other run has its own tile namespace.
@@ -30,7 +30,7 @@ export function CompareRuns({ api, id, runs, points, section, frame }: {
     {other && !section && <p className="muted">Choose a section cut on the height map first.</p>}
     {busy && <p role="status">Loading comparison…</p>}
     {error && <p role="alert" className="field-error">{error}</p>}
-    {section && result && <Plot3D title="Section comparison" data={[
+    {section && result && <Plot3D revision={`${id}:${other}`} title="Section comparison" data={[
       ...outlineTraces(section.cu_outline, `${label(id)} · Cu`, '#b87333'),
       ...outlineTraces(result.cu_outline, `${label(other)} · Cu (comparison)`, '#3276b1', true)
     ]} layout={{ xaxis: { title: 's (µm)' }, yaxis: { title: 'z (µm)', scaleanchor: 'x', scaleratio: 1 } }} />}

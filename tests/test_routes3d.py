@@ -82,6 +82,8 @@ def test_real_run(tmp_path):
         tiles = client.get(f"{base}/tiles").json()["tiles"]
         assert tiles
         for tile in tiles:
+            assert isinstance(tile["mirror_axes"], list)
+            assert set(tile["mirror_axes"]) <= {"x", "y"}
             tid = tile["tile_id"]
             for frame in (0, -1):
                 h = client.get(f"{base}/height", params={"tile_id": tid, "frame": frame, "max_n": 5}).json()
@@ -92,7 +94,9 @@ def test_real_run(tmp_path):
                 if frame == 0:
                     assert h["height_um"] == h["bare_height_um"]
             h = client.get(f"{base}/height", params={"tile_id": tid, "max_n": 400}).json()
-            assert np.asarray(h["height_um"]).shape == tuple(tile["shape"][:2])
+            # mirrored (reduced) tiles are served as the reconstructed full feature
+            full = [n * (2 if a in tile["mirror_axes"] else 1) for n, a in zip(tile["shape"][:2], "xy")]
+            assert np.asarray(h["height_um"]).shape == tuple(full)
             line = [[h["x_um"][0], h["y_um"][len(h["y_um"])//2]],
                     [h["x_um"][-1], h["y_um"][len(h["y_um"])//2]]]
             cut_response = client.post(f"{base}/section", json={"polyline_um": line, "tile_id": tid})
@@ -114,7 +118,7 @@ def test_real_run(tmp_path):
                     assert rows
                     if kind == "height_csv":
                         assert set(rows[0]) == {"x_um", "y_um", "height_um"}
-                        assert len(rows) == tile["shape"][0]*tile["shape"][1]
+                        assert len(rows) == full[0]*full[1]
                         assert float(rows[0]["x_um"]) == h["x_um"][0]
                     else:
                         assert set(rows[0]) == {"contour", "kind", "s_um", "z_um"}
@@ -187,3 +191,23 @@ def test_layout_import_errors(tmp_path):
             response = client.post("/api/3d/layout/import", json=body)
             assert response.status_code == 422, response.text
             assert {"error", "field", "fix"} <= response.json()["detail"].keys()
+
+
+def test_mirrored_tile_result_is_reconstructed(tmp_path):
+    """Reduced tiles (plan mirror_axes) must be served as the reflected full feature."""
+    import numpy as np
+    from platesim.server.routes3d import _Mirrored
+    from platesim.tile3d.grid import Grid3D
+    from platesim.tile3d.result import TileResult, TileResultWriter
+    grid = Grid3D((4, 3, 5), 1e-4)
+    psi = np.arange(60, dtype=np.float32).reshape(grid.shape)
+    writer = TileResultWriter(tmp_path / "t", grid, psi)
+    writer.add_frame(0.0, psi, scalars={})
+    writer.close()
+    raw = TileResult(tmp_path / "t")
+    full = _Mirrored(raw, ["x"])
+    assert full.grid.shape == (8, 3, 5)
+    assert full.psi(-1).shape == (8, 3, 5)
+    assert np.array_equal(full.psi(-1)[:4], np.flip(raw.psi(-1), axis=0))
+    assert full._index(-1) == raw._index(-1)
+    assert list(full.times_s) == list(raw.times_s)

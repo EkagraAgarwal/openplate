@@ -12,6 +12,7 @@ import { defaultSpec3D, formToSpec, specToForm } from '../lib/sample3d'
 import { SpecEditor } from '../components/sample3d/SpecEditor'
 import { Results3D } from '../components/sample3d/Results3D'
 import { LayoutImport } from '../components/sample3d/LayoutImport'
+import { estimateSpec, exampleSpec, roughRuntime } from '../lib/estimates3d'
 
 const terminal = (status: string) =>
   ['done', 'succeeded', 'completed', 'failed', 'error', 'cancelled', 'canceled'].includes(status)
@@ -25,6 +26,9 @@ export function Sample3DPage() {
   )
   const [errors, setErrors] = useState<FieldIssue[]>([])
   const [plan, setPlan] = useState<Plan3D | null>(null)
+  const [estimate, setEstimate] = useState<Plan3D | null>(null)
+  const [estimateState, setEstimateState] = useState('Estimate unavailable')
+  const [exampleEstimates, setExampleEstimates] = useState<Record<string, number>>({})
   const [runs, setRuns] = useState<Run3D[]>([])
   const [run, setRun] = useState<Run3D | null>(null)
   const [label, setLabel] = useState('')
@@ -64,6 +68,37 @@ export function Sample3DPage() {
       alive = false
     }
   }, [api, reportError])
+  useEffect(() => {
+    if (!api) return
+    let alive = true
+    setExampleEstimates({})
+    // Sequential cheap plans avoid flooding the service when the picker loads.
+    void (async () => {
+      for (const example of examples) {
+        if (!alive) break
+        try {
+          const p = await estimateSpec(api, exampleSpec(example.spec))
+          if (alive && p) setExampleEstimates((old) => ({ ...old, [example.name]: p.est_time_s }))
+        } catch { /* The example remains usable if planning is unavailable. */ }
+      }
+    })()
+    return () => { alive = false }
+  }, [api, examples])
+  useEffect(() => {
+    let alive = true
+    setEstimate(null)
+    setEstimateState(validJson && api ? 'Estimating…' : 'Estimate unavailable')
+    if (!api || !validJson) return
+    const timer = setTimeout(() => {
+      void estimateSpec(api, spec).then((p) => {
+        if (alive) {
+          setEstimate(p)
+          setEstimateState(p ? roughRuntime(p.est_time_s) : 'Estimate unavailable: check specification')
+        }
+      }).catch(() => { if (alive) setEstimateState('Estimate unavailable') })
+    }, 400)
+    return () => { alive = false; clearTimeout(timer) }
+  }, [api, spec, validJson])
   const runId = run?.run_id
   useEffect(() => {
     if (!api || !runId) return
@@ -150,10 +185,7 @@ export function Sample3DPage() {
             onChange={(e) => {
               const example = examples.find((x) => x.name === e.target.value)
               if (example) {
-                change({
-                  ...specToForm(example.spec),
-                  numerics: { ...example.spec.numerics, quality: 'preview' }
-                })
+                change(exampleSpec(example.spec))
                 setValidJson(true)
                 setEditorKey((k) => k + 1)
               }
@@ -163,6 +195,7 @@ export function Sample3DPage() {
             {examples.map((e) => (
               <option key={e.name} value={e.name}>
                 {e.title}
+                {' · '}{exampleEstimates[e.name] === undefined ? 'Estimate unavailable' : roughRuntime(exampleEstimates[e.name])}
               </option>
             ))}
           </select>
@@ -175,6 +208,7 @@ export function Sample3DPage() {
         errors={errors}
         onValid={setValidJson}
         tiles={plan?.tiles}
+        estimateText={estimateState + (estimate ? ` · ${estimate.n_cells.toLocaleString()} cells` : '')}
       />
       {api && <LayoutImport api={api} onUse={(layout) => {
         change({ ...spec, layout: { ...spec.layout, ...layout } })
@@ -219,8 +253,7 @@ export function Sample3DPage() {
         <section className="card">
           <h3>Plan</h3>
           <p>
-            {plan.n_cells.toLocaleString()} cells · estimated {(plan.est_time_s / 60).toFixed(1)}{' '}
-            min
+            {plan.n_cells.toLocaleString()} cells · {roughRuntime(plan.est_time_s)}
           </p>
           {plan.est_time_s > 1800 && (
             <div className="callout callout-warn">

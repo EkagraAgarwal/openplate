@@ -125,7 +125,23 @@ def _result(request, run_id, tile_id):
             result = TileResult(path)
     except ValueError as exc:
         raise _bad(exc, "tile_id", "Choose a valid tile from /tiles.") from exc
+    if selected.get("mirror_axes"):
+        # Reduced (mirrored) tiles: serve the reconstructed full feature, as the pipeline's renders do.
+        result = _Mirrored(result, selected["mirror_axes"])
     return result, selected
+
+
+def _mirrored_cls():
+    from platesim.sample3d.pipeline import _ReflectedResult
+
+    class Mirrored(_ReflectedResult):
+        def __getattr__(self, name):  # frames, series, _index ... come from the stored tile
+            return getattr(self.result, name)
+    return Mirrored
+
+
+def _Mirrored(result, axes):
+    return _mirrored_cls()(result, axes)
 
 
 @router.get("/schema")
@@ -270,6 +286,7 @@ def tiles(request: Request, run_id: str):
     for tile in _read(service, "tiles.json"):
         grid = Grid3D.from_dict(_read(service, f'tiles/{tile["tile_id"]}/grid.json'))
         row = {k: tile[k] for k in ("tile_id", "kind", "feature_ids", "weight", "shape", "dx_um")}
+        row["mirror_axes"] = tile.get("mirror_axes", [])
         row.update({a + "_um": [grid.origin[i]*1e4, (grid.origin[i] + grid.shape[i]*grid.dx)*1e4]
                     for i, a in enumerate("xy")})
         output.append(row)
