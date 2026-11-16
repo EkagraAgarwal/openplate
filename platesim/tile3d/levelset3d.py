@@ -13,6 +13,8 @@ from scipy.optimize import brentq
 from .backend import ls_numpy
 
 DEFAULT_PERIODIC = (True, True, False)
+RELAX_ITERS = 20           # pseudo-time sweeps (4 cells) of the post-FMM gradient relaxation
+                           # (fewer sweeps grow the near-front gradient error: 12 -> 0.054)
 
 
 def _array(psi, dx=None):
@@ -110,7 +112,7 @@ def reinit(psi, dx, periodic=DEFAULT_PERIODIC, narrow_cells=None, backend="auto"
     def residual(u):
         return kernels.rhs(u, sign, dx, per, True)-sign
 
-    for _ in range(20):
+    for _ in range(RELAX_ITERS):
         u1 = out-step*residual(out)
         u2 = 0.75*out+0.25*(u1-step*residual(u1))
         relaxed = out/3+(2/3)*(u2-step*residual(u2))

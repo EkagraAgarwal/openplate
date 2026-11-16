@@ -50,6 +50,8 @@ from .backend import ls_numpy
 DIRECT_MAX = 40000      # unknowns up to which a sparse LU is used; above it AMG-preconditioned CG
 LU_FALLBACK_MAX = 600000  # advection systems up to this size may fall back to sparse LU at high Peclet
 PE_ILU = 10.0             # cell Peclet above which the Cu advection solve starts with ILU-GMRES
+INNER_TOL = 1e-8          # relative tolerance of the linear solves that set the reported fields
+INNER_LOOSE = 1e-3        # cap of the inexact-Newton inner tolerance while the step is still O(1)
 
 
 class _Precond:
@@ -584,6 +586,13 @@ class FieldSolver:
             maxit = max(int(maxit), 40)        # theta_s needs the extra passes (plan 2.3)
         for outer in range(maxit):
             # ---- potential and electrode potential V for fixed ct (bordered Newton, as in 2-D)
+            # The two bordered-Newton right-hand sides are warm started from the previous
+            # Newton step of the same outer pass: q moves slowly, so the inner Krylov solve
+            # needs fewer iterations at the same tolerance.  The inner tolerance follows the
+            # Newton step (inexact Newton): a step that is still O(1) does not need a 1e-8
+            # linear solve, while the last steps converge to the same fixed point.
+            x1_prev = x2_prev = None
+            newton_step = [1.0]
             for _ in range(14):
                 eta = V - phi
                 ci = ci_of(eta)
@@ -592,11 +601,14 @@ class FieldSolver:
                 R = A_p @ phi + wf * I
                 g = np.dot(wf, I) - It
                 lin = lin_p(q)
-                x1, x2 = lin.solve(-R), lin.solve(q)
+                lin.tol = max(INNER_TOL, min(INNER_LOOSE, 0.1 * newton_step[0]))
+                x1, x2 = lin.solve(-R, x0=x1_prev), lin.solve(q, x0=x2_prev)
+                x1_prev, x2_prev = x1, x2
                 info["cg"] += lin.iterations
                 dV = (g + np.dot(q, x1)) / (q.sum() - np.dot(q, x2) + 1e-300)
                 dphi = x1 + x2 * dV
                 m = float(np.max(np.abs(dV - dphi)))
+                newton_step[0] = m
                 lam = min(1.0, 0.15 / (m + 1e-300))
                 phi, V = phi + lam * dphi, V + lam * dV
                 info["newton"] += 1
@@ -784,6 +796,7 @@ class FieldSolver:
                     R = A_p @ phase_phi + wf * current
                     g = np.dot(wf, current) - target
                     lin = lin_p(q)
+                    lin.tol = INNER_TOL                # the Newton loop above may have left it loose
                     x1, x2 = lin.solve(-R), lin.solve(q)
                     info['cg'] += lin.iterations
                     dV = (g + np.dot(q, x1)) / (q.sum() - np.dot(q, x2) + 1e-300)
