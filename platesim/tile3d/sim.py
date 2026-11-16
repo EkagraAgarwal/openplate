@@ -10,6 +10,7 @@ import time
 
 import numpy as np
 
+from . import additives3d
 from . import levelset3d as ls
 from .fields import FieldSolver
 from .grid import Grid3D
@@ -32,7 +33,7 @@ def top_height(psi, grid: Grid3D):
 def run_tile(psi_si, grid: Grid3D, j_net_mA_cm2, duration_s, delta_um=64.0, params=None, T_C=22.0,
              run_dir=None, n_frames=10, dt_max=120.0, cfl=0.3, reinit_every=4, scheme="weno5",
              backend="auto", field_mask=None, progress=None, meta=None, volume_correct=False, flow=None,
-             linear="auto", pulse=None, frame_callback=None):
+             linear="auto", pulse=None, frame_callback=None, kinetics_factor=None):
     """Plate the bare geometry psi_si for duration_s at the net current density j_net_mA_cm2.
 
     pulse: None (legacy) or dict(t_f_ms, t_r_ms, t_off_ms, j_f_mA_cm2,
@@ -41,6 +42,14 @@ def run_tile(psi_si, grid: Grid3D, j_net_mA_cm2, duration_s, delta_um=64.0, para
     frame_callback: optional (time_s, psi, scalars) observer at every saved frame;
     psi is a borrowed array (copy it if retaining). Resolved summary['pulse']
     contains the last frozen-front solve's phase/charging diagnostics.
+    kinetics_factor: None or callable(z_cm, z_plane_cm, field_top_cm) -> array broadcastable to the
+    active (nx, ny, kt+1) block (a full (nx, ny, nz) array is trimmed too).  z_cm are the z cell
+    centres (nz,), z_plane_cm the bulk plane and field_top_cm = z_plane_cm - delta_um the current mean
+    field surface.  The values multiply the exchange current density i0_u of every interface cell: a
+    prescribed *effective suppression map*, uncalibrated (e.g. 0.85 for cells deeper than 25 um stands
+    in for a floor-depleted accelerator).  Params.additives='cl_ndr' adds the Cl-gated suppressor
+    coverage of tile3d.additives3d on top of it; the default 'legacy' keeps every additive path off
+    (bit-identical to the additive-free engine).
     field_mask: bool (nx, ny) columns that count as "field" for the bulk-plane height; default: columns
     whose bare surface lies within one cell of the highest bare surface.
     flow: None (no convection) or dict with any of shear_rate_s (0), shear_dir ((1, 0), in-plane),
@@ -52,6 +61,8 @@ def run_tile(psi_si, grid: Grid3D, j_net_mA_cm2, duration_s, delta_um=64.0, para
     solve_stokes3d).  Steady Stokes (platesim.flow3d), recomputed every update_every steps from the
     latest Cu2+ field (lagged one solve) and used to advect Cu2+ in the field solve.
     Returns a TileResult when run_dir is given, else a dict with the final psi and the series."""
+    if kinetics_factor is not None and not callable(kinetics_factor):
+        raise TypeError("kinetics_factor must be None or callable(z_cm, z_plane_cm, field_top_cm)")
     # None/model='net' retains the exact legacy numerical path.
     solver = FieldSolver(params, T_C, linear=linear, pulse=pulse)
     fl = None if flow is None else dict(dict(shear_rate_s=0.0, shear_dir=(1.0, 0.0), gravity_dir=None,
@@ -77,8 +88,32 @@ def run_tile(psi_si, grid: Grid3D, j_net_mA_cm2, duration_s, delta_um=64.0, para
     frame_times = np.linspace(0.0, duration_s, max(int(n_frames), 2))
     series = {k: [] for k in ("t_s", "charge_C_cm2", "solid_volume_cm3", "faraday_volume_cm3", "V",
                               "cu_balance_rel", "ct_min_front", "outer_iterations", "flow_umax_um_s")}
+    # Phase 1 additives (additives_3d_plan.md): Params.additives='cl_ndr' switches on the cell-local
+    # Cl-/suppressor coverages; 'legacy' (default) leaves cov None and every legacy number untouched.
+    if p.additives == "full":
+        raise NotImplementedError(
+            "run_tile: additives='full' has no 3-D implementation (bulk additive transport and the CEAC "
+            "accelerator/leveller are phases 2-3 of research/sims_3d/additives_3d_plan.md); use 'cl_ndr'")
+    cov = None if p.additives == "legacy" else additives3d.coverage_init(grid.shape, p.theta0)
+    if cov is not None:
+        for key in ("theta_s_floor", "theta_s_field", "theta_cl_floor", "theta_cl_field"):
+            series[key] = []
+    zc = grid.centers()[2]
     t, step, state, next_frame, charge = 0.0, 0, None, 0, 0.0
     wall0 = time.time()
+
+    def coverage_row(front_psi):
+        """Mean front coverage over the floor and field columns (face values in the series/frames)."""
+        ii, jj, kk = additives3d.front_cells(front_psi)
+        floor_cols = ~field_mask
+        if not floor_cols.any():                      # flat surface: one region, report it twice
+            floor_cols = field_mask
+        th_s = cov["theta_s"][ii, jj, kk]
+        th_cl = cov["theta_cl"][ii, jj, kk]
+        return dict(theta_s_floor=float(np.mean(th_s[floor_cols])),
+                    theta_s_field=float(np.mean(th_s[field_mask])),
+                    theta_cl_floor=float(np.mean(th_cl[floor_cols])),
+                    theta_cl_field=float(np.mean(th_cl[field_mask])))
 
     def save(out):
         nonlocal next_frame
@@ -89,12 +124,17 @@ def run_tile(psi_si, grid: Grid3D, j_net_mA_cm2, duration_s, delta_um=64.0, para
                    ct_min_front=out["info"]["ct_min_front"],
                    outer_iterations=float(out["info"]["outer"]),
                    flow_umax_um_s=float(flow_info.get("umax_cm_s", 0.0)) * 1e4)
+        if cov is not None:
+            row.update(coverage_row(psi))
         series["t_s"].append(t)
         for key, value in row.items():
             series[key].append(value)
         if writer is not None:
             fields = dict(c_cu=(out["ct"] * p.c_bulk).astype(np.float32), phi=out["phi"].astype(np.float32),
                           speed=out["speed"].astype(np.float32))
+            if cov is not None:
+                fields.update(theta_s=cov["theta_s"].astype(np.float32),
+                              theta_cl=cov["theta_cl"].astype(np.float32))
             writer.add_frame(t, psi.astype(np.float32), fields=fields, scalars=row)
         if frame_callback is not None:
             frame_callback(t, psi, row)
@@ -102,10 +142,14 @@ def run_tile(psi_si, grid: Grid3D, j_net_mA_cm2, duration_s, delta_um=64.0, para
 
     while True:
         z_plane = float(np.mean(top_height(psi, grid)[field_mask])) + delta_um * 1e-4
+        fac = None
+        if kinetics_factor is not None:
+            fac = kinetics_factor(zc, z_plane, z_plane - delta_um * 1e-4)
         if fl is not None and (flow_faces is None or step % int(fl["update_every"]) == 0):
             # flow from the latest Cu2+ field (one solve behind); the very first one from a no-flow solve
             if state is None or flow_faces is None:
-                prev = solver.solve(psi, dx, z0, z_plane, j, periodic=per, state=state, flow_faces=flow_faces)
+                prev = solver.solve(psi, dx, z0, z_plane, j, periodic=per, state=state, flow_faces=flow_faces,
+                                    kinetics_factor=fac, cov=cov)
                 state, ct_prev = prev["state"], prev["ct"]
             from ..flow3d import buoyancy_force, solve_stokes3d
             body = None
@@ -117,7 +161,8 @@ def run_tile(psi_si, grid: Grid3D, j_net_mA_cm2, duration_s, delta_um=64.0, para
                                   axial_net_flux_zero=fl["axial_net_flux_zero"])
             flow_faces = fsol["faces"]
             flow_info = dict(umax_cm_s=max(float(np.max(np.abs(fsol[k]))) for k in ("ux", "uy", "uz")))
-        out = solver.solve(psi, dx, z0, z_plane, j, periodic=per, state=state, flow_faces=flow_faces)
+        out = solver.solve(psi, dx, z0, z_plane, j, periodic=per, state=state, flow_faces=flow_faces,
+                           kinetics_factor=fac, cov=cov)
         state, ct_prev = out["state"], out["ct"]
         if next_frame < len(frame_times) and t >= frame_times[next_frame] - 1e-9:
             save(out)
@@ -148,6 +193,8 @@ def run_tile(psi_si, grid: Grid3D, j_net_mA_cm2, duration_s, delta_um=64.0, para
                                        if series["faraday_volume_cm3"][-1] > 0 else 0.0))
     if 'pulse' in out['info']:
         summary['pulse'] = out['info']['pulse']
+    if 'additives' in out['info']:
+        summary['additives'] = out['info']['additives']
     if writer is not None:
         writer.close(dict(summary=summary))
         return TileResult(run_dir)

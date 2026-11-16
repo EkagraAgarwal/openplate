@@ -191,6 +191,17 @@ class Params:
     # The assumption degrades below ~1 uM Cl- or with a much larger k_inc_cl [J].
     additives: str = "legacy"                  # 'legacy' | 'cl_ndr' | 'full'
     c_cl_bulk: float = 1.0e-6                  # mol/cm3 bulk Cl- (1 mM, Braun high-k S-NDR set [B19])
+    # Cl- adlayer + suppressor constants used by the 3-D tile engine's Phase-1 coverages
+    # (tile3d/additives3d.py).  The defaults are exactly the 2-D values (AdditiveSet in
+    # feature/engine/additives.py and s_bulk/Gamma/k_plus/k_minus above) so the port introduces no
+    # new calibration; the Cl- and k_des marks are [J] there and stay [J] here.
+    k_cl: float = 1.0e-3                       # cm/s Cl- adsorption velocity (=> k_ads = 1e6 cm3/mol/s)
+    Gamma_cl: float = 1.0e-9                   # mol/cm2 Cl adlayer
+    k_des_cl: float = 10.0                     # 1/s thermal Cl desorption [J]
+    k_inc_cl: float = 1.0e4                    # 1/cm Cl burial by the advancing front [J]
+    n_cl: float = 1.0                          # Cl gate exponent of the suppressor rate [J]
+    k_des_s: float = 0.0                       # 1/s suppressor thermal desorption (2-D: 0) [J]
+    cov_relax: float = 0.5                     # outer-loop relaxation of the 3-D coverages (0, 1]
     # Leveller (plan v2 D2, 'full' only): transported species, c_lev_bulk = 0 -> no leveller at all (factor 1).
     c_lev_bulk: float = 0.0                    # mol/cm3 (~10 uM bath, [J])
     k_lev: float = 1.0e-3                      # cm/s supply (mass-transfer) velocity [J]
@@ -357,6 +368,12 @@ def derive(p: Params, T_C: float) -> Phys:
         raise ValueError(f"c_cl_bulk must be >= 0, got {p.c_cl_bulk!r}")
     if p.c_lev_bulk < 0.0:
         raise ValueError(f"c_lev_bulk must be >= 0, got {p.c_lev_bulk!r}")
+    if p.Gamma_cl <= 0.0:
+        raise ValueError(f"Gamma_cl must be > 0, got {p.Gamma_cl!r}")
+    if not 0.0 < p.cov_relax <= 1.0:
+        raise ValueError(f"cov_relax must be in (0, 1], got {p.cov_relax!r}")
+    if min(p.k_cl, p.k_des_cl, p.k_inc_cl, p.k_des_s) < 0.0:
+        raise ValueError("Cl-/suppressor coverage rate constants must be nonnegative")
     if not 0.0 <= p.bubble_contact_deg <= 180.0:
         raise ValueError(f"bubble_contact_deg must be in [0, 180], got {p.bubble_contact_deg!r}")
     if p.bubble_max < 0:
