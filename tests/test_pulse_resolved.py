@@ -199,3 +199,45 @@ def test_pipeline_passes_waveform_and_saves_intermediate_frames(tmp_path, monkey
 def test_invalid_waveform(change):
     with pytest.raises(ValueError):
         solve(dict(PR, **change))
+
+
+def test_resolved_pulse_with_shear_flow_runs_and_conserves_charge():
+    """Resolved pulse-reverse combined with resolved shear flow (never exercised end to end before)."""
+    grid, psi = geometry(True)
+    lid = (grid.origin[2] + grid.shape[2] * grid.dx) * 1e4 - 8.0
+    out = run_tile(psi, grid, 15., 120., delta_um=64., n_frames=2, dt_max=60., backend='numpy',
+                   pulse=PR, flow=dict(shear_rate_s=20., lid_um=None, update_every=1))
+    summary = out['summary']
+    assert summary['pulse']['model'] == 'resolved' and summary['pulse']['converged']
+    assert abs(summary['faraday_error_rel']) < 0.05
+    assert np.isfinite(out['psi']).all()
+
+
+def test_coupon_position_scales_the_resolved_waveform(tmp_path, monkeypatch):
+    """With a coupon position the local current differs from the recipe net current; the resolved
+    waveform must be scaled with it (Waveform.parse requires its average to equal the solved current)."""
+    from platesim.multiscale import bridge
+    from platesim.sample3d.pipeline import run_sample
+    from platesim.tile3d import sim
+    data = json.loads(Path('platesim/spec3d/examples/single_trench.json').read_text())
+    data['layout'] = dict(die_um=[300., 300.], features=[dict(
+        kind='circle', x_um=150., y_um=150., w_um=32., h_um=32.)])
+    data['etch']['default'] = dict(depth_um=16.)
+    data['setup']['delta_um'] = 24.
+    data['setup']['coupon_position_cm'] = [.5, .5]
+    data['numerics'] = dict(quality='preview', dx_um=4., pulse_model='resolved')
+    data['recipe']['steps'] = [dict(t_forward_ms=9., t_reverse_ms=.5, t_off_ms=.5,
+        j_forward_mA_cm2=18.75, j_reverse_mA_cm2=37.5, duration_h=2./3600)]
+    monkeypatch.setattr(bridge, 'tile3d_conditions', lambda j, *a, **k: dict(
+        j_local_mA_cm2=1.3 * j, delta_um=24., efficiency=.97, scale=1.3, site={}))
+    real, captured = sim.run_tile, []
+
+    def capture(*args, **kwargs):
+        captured.append((args[2], kwargs['pulse']))
+        return real(*args, **kwargs)
+    monkeypatch.setattr(sim, 'run_tile', capture)
+    run_sample(data, tmp_path / 'run', field_margin_um=16.)
+    for j_local, pulse in captured:
+        assert j_local == pytest.approx(1.3 * 15.)
+        assert pulse['j_f_mA_cm2'] == pytest.approx(1.3 * 18.75)
+        assert pulse['j_r_mA_cm2'] == pytest.approx(1.3 * 37.5)

@@ -14,7 +14,8 @@ const FIELD_LABELS: Record<string, string> = {
   'layout.die_um.0': 'die width x (µm)',
   'layout.die_um.1': 'die height y (µm)',
   'setup.coupon_position_cm': 'coupon position x, y (cm)',
-  'setup.stir_pct': 'beaker stir (%)'
+  'setup.stir_pct': 'beaker stir (%)',
+  'numerics.pulse_model': 'pulse model'
 }
 
 export function SpecEditor({
@@ -371,7 +372,15 @@ export function SpecEditor({
                 'fine'
               ])}
               {field('numerics.dx_um', spec.numerics.dx_um)}
+              {field('numerics.pulse_model', (spec.numerics.pulse_model as string | undefined) ?? 'net', [
+                'net',
+                'resolved'
+              ])}
             </div>
+            <p className="muted">
+              Pulse model: net uses the cycle-average current; resolved solves forward, reverse and off phases
+              each cycle (about 3x slower). Without additives the two differ by ~0.01 in floor/field.
+            </p>
           </fieldset>
         </>
       )}

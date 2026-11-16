@@ -1,5 +1,5 @@
 """Quasi-steady field solve of one 3-D tile, physics level L1 (no flow) plus optional cell-local
-additive coverage (Phase 1 of research/sims_3d/additives_3d_plan.md).
+additive coverage (Phase 1 of the 3-D additives port).
 
 Same model as the 2-D engine's additive-free 'enhanced' path (platesim/feature/engine/fields.py,
 StepGeom 'diffuse' + newton_potential), written per unit volume on a uniform grid:
@@ -434,7 +434,7 @@ class FieldSolver:
                 raise NotImplementedError(
                     "additives='full' has no 3-D implementation: bulk suppressor/leveller transport, "
                     "the CEAC accelerator and surface coverage transport are phases 2-3 of "
-                    "research/sims_3d/additives_3d_plan.md.  Use additives='cl_ndr' (Phase 1).")
+                    "the 3-D additives port.  Use additives='cl_ndr' (Phase 1).")
             if p.alpha_s != p.alpha_u:
                 raise NotImplementedError(
                     "the 3-D additive coupling factorises i0 with one Tafel slope: alpha_s must equal "
@@ -746,7 +746,7 @@ class FieldSolver:
                 diffusion_length_um=float(np.sqrt(ph.D_c * sum(wave.durations)) * 1e4),
                 faraday_error_rel=float(np.dot(wf, I) / It - 1.),
                 alpha_a=p.pulse_alpha_a, kinetics='cathodic/anodic Tafel; i0 shared; uncalibrated',
-                alpha_a_reference='pulse_reverse_literature.md section 6: fitting range 1.0-1.5; uncalibrated')
+                alpha_a_reference='literature fitting range 1.0-1.5 (Cu/acid sulfate); uncalibrated')
             info['pulse'].update(charging)
             if p.C_dl_F_cm2:
                 info['pulse']['kinetics'] = 'Tafel forward/reverse; BV lumped RC and off-time relaxation; i0 shared'
