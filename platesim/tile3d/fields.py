@@ -1,5 +1,6 @@
 """Quasi-steady field solve of one 3-D tile, physics level L1 (no flow) plus optional cell-local
-additive coverage (Phase 1 of the 3-D additives port).
+additive coverage (Phase 1) and a transported accelerator (Phase 2) of
+the 3-D additives port.
 
 Same model as the 2-D engine's additive-free 'enhanced' path (platesim/feature/engine/fields.py,
 StepGeom 'diffuse' + newton_potential), written per unit volume on a uniform grid:
@@ -12,12 +13,24 @@ StepGeom 'diffuse' + newton_potential), written per unit volume on a uniform gri
   w  = |grad Hs|  [1/cm]                                              (interface area per unit volume)
   ci = i0_cell exp(-alpha_u f eta)  [A/cm2]                          (cathodic exchange current)
 
-  i0_cell = i0_u * Fcell(z) * Fcov(theta_s, theta_cl)                 (default: the scalar i0_u)
+  i0_cell = i0_u * Fcell(z) * Fcov(theta_s, theta_a)                  (default: the scalar i0_u)
 
 Fcell is an optional prescribed per-cell multiplier (``kinetics_factor``) and Fcov the Cl-gated
-suppressor factor of :mod:`platesim.tile3d.additives3d` (``cov``); both are applied to the cathodic
-kinetics, the galvanostatic V root-find, the multigrid shape term and the pulse phase solves.  With
-both ``None`` every expression is the original scalar one (bit-identical).
+suppressor factor plus the accelerator factor of :mod:`platesim.tile3d.additives3d` (``cov``); both are
+applied to the cathodic kinetics, the galvanostatic V root-find, the multigrid shape term and the pulse
+phase solves.  With both ``None`` every expression is the original scalar one (bit-identical).
+
+Phase 2 (``Params.additives='acc'``) adds one steady bulk field below the bulk plane, the normalised
+accelerator concentration ``alpha = c_a / c_acc``:
+
+  -div(D_acc Hs grad alpha) + w Gamma_acc k_acc (1 - theta_a) alpha = w Gamma_acc k_des_a theta_a / c_acc
+  theta_a = k_acc c_acc alpha / (k_acc c_acc alpha + k_inc_a v + k_des_a),   v = Mfac i
+
+solved once per outer pass with the same linear-solver family as the Cu2+ field (``system`` +
+``_MGFamily``/``_Linear``, or the Scharfetter-Gummel advection operator when ``flow_faces`` is given).
+Its only feedback into the electrochemistry is through ``theta_a`` in Fcov, so the accelerator is
+depleted where its supply is long (trench floor) and the local exchange current is correspondingly
+smaller -- the transport-limited differential of plan 0.2.  ``cov=None`` or 'cl_ndr' skips all of it.
 
 Boundary conditions: ct = 1 and phi = 0 on the bulk plane z = z_plane (at a distance d_top in
 [0.5, 1.5) dx above the last solved cell layer, as in 2-D); no flux through the bottom; lateral sides
@@ -365,12 +378,17 @@ class FieldSolver:
         :func:`_broadcast_factor`).  It is an *effective suppression map* (uncalibrated): 0.85 below
         a depth stands in for a floor-depleted accelerator, for example.  None -> the legacy scalar.
         cov: optional coverage state (:func:`platesim.tile3d.additives3d.coverage_init`), updated
-        in place with the quasi-steady Phase-1 theta_cl/theta_s of every interface cell; its
-        suppressor factor multiplies the prescribed one.  None -> no additives.  ``additives='full'``
-        (bulk transport, CEAC accelerator, leveller: plan phases 2-3) raises NotImplementedError.
+        in place with the quasi-steady theta_cl/theta_s of every interface cell; its suppressor
+        factor multiplies the prescribed one.  None -> no additives.  With ``Params.additives='acc'``
+        the state also carries the normalised bulk accelerator field ``cov['a']``, solved as a steady
+        diffusion problem with a surface consumption sink (Phase 2; see the module docstring).
+        ``additives='full'`` (leveller, surface transport, CEAC: plan phases 3-4) raises
+        NotImplementedError.
         Returns dict(ct, phi, i, speed, V, w, active, kt, info, state, i0_factor) on the full grid;
         i is the interface current density (A/cm2) of each cell, speed = Mfac * i, and i0_factor is
         the effective exchange-current multiplier actually used (1 everywhere in the legacy path).
+        With a coverage state the dict also carries theta_cl/theta_s/theta_a and (mode 'acc') the
+        normalised accelerator field a_acc, all on the full grid.
         In resolved mode i/speed/phi are cycle means; ct is the outer mean.
         info['pulse'] reports phase voltages, currents, diffusion length, charging
         times and cycle Faraday error. Off-time C*|delta eta|/j is undefined for
@@ -419,6 +437,8 @@ class FieldSolver:
 
         A_c, b_c = system(ph.D_c, 1.0)
         A_p, _ = system(ph.kappa, 0.0)
+        acc_on = False                             # set below when cov carries the accelerator field
+        A_a = b_a = None
         wf = w.ravel()
         act = active.ravel()
         It = j_net_A_cm2 * nx * ny / dx                 # target of sum(w * i) (volume-normalised)
@@ -432,9 +452,10 @@ class FieldSolver:
         if cov is not None:
             if p.additives == "full":
                 raise NotImplementedError(
-                    "additives='full' has no 3-D implementation: bulk suppressor/leveller transport, "
-                    "the CEAC accelerator and surface coverage transport are phases 2-3 of "
-                    "the 3-D additives port.  Use additives='cl_ndr' (Phase 1).")
+                    "additives='full' has no 3-D implementation: the transported leveller, the CEAC "
+                    "curvature/area-change term and surface coverage transport are phases 3-4 of "
+                    "the 3-D additives port.  Use additives='cl_ndr' (Phase 1) or "
+                    "additives='acc' (Phase 2: cl_ndr + transported accelerator).")
             if p.alpha_s != p.alpha_u:
                 raise NotImplementedError(
                     "the 3-D additive coupling factorises i0 with one Tafel slope: alpha_s must equal "
@@ -445,15 +466,27 @@ class FieldSolver:
                 raise ValueError(f"coverage arrays must have the psi shape {psi.shape}, "
                                  f"got {np.shape(cov['theta_s'])}")
             if p.additives == "legacy":
-                raise ValueError("cov was supplied with additives='legacy'; set additives='cl_ndr' "
-                                 "or pass cov=None")
+                raise ValueError("cov was supplied with additives='legacy'; set additives='cl_ndr', "
+                                 "'acc' or pass cov=None")
+            acc_on = p.additives == "acc"
+            if acc_on:
+                if additives3d.ACC_KEY not in cov:
+                    raise ValueError(f"additives='acc' needs the bulk field cov[{additives3d.ACC_KEY!r}] "
+                                     f"(additives3d.coverage_init(..., with_acc=True))")
+                if np.shape(cov[additives3d.ACC_KEY]) != psi.shape:
+                    raise ValueError(f"cov[{additives3d.ACC_KEY!r}] must have the psi shape {psi.shape}, "
+                                     f"got {np.shape(cov[additives3d.ACC_KEY])}")
+                if ph.D_acc <= 0.0:
+                    raise ValueError("additives='acc' needs a positive accelerator diffusivity "
+                                     "(Params.D_acc25)")
+                A_a, b_a = system(ph.D_acc, 1.0)      # pure diffusion of the neutral accelerator
         i0v = [None]
 
         def i0_cell_factor():
             """Fcov * Fac on the solved block (1 outside the interface band), raveled."""
             value = 1.0 if fac is None else fac
             if cov is not None:
-                value = additives3d.coverage_factor(cov["theta_s"][sl], p) * value
+                value = additives3d.coverage_factor(cov["theta_s"][sl], p, cov["theta_a"][sl]) * value
             return np.where(active, value, 1.0).ravel()
 
         if fac is not None or cov is not None:
@@ -477,20 +510,30 @@ class FieldSolver:
         V = V_fixed_phi(ct, phi)
         info = dict(outer=0, newton=0, cg=0)
         pc_p, pc_c = _Precond(info=info), _Precond(info=info)  # one AMG hierarchy per family, reused
+        pc_a = _Precond(info=info) if acc_on else None
         use_mg = self.linear == "mg" or (self.linear == "auto" and n > DIRECT_MAX and _mg_available())
         mode = self.linear if self.linear in ("direct", "amg") else "auto"
         info["linear"] = "mgcg" if use_mg else (
             "direct" if mode == "direct" or (mode == "auto" and n <= DIRECT_MAX) else "amg")
+        lin_a_of = None
         if use_mg:
             fam_p = _MGFamily((ph.kappa * hx, ph.kappa * hy, ph.kappa * hz), dx, active, {"z_hi": 0.0}, per)
             fam_c = _MGFamily((ph.D_c * hx, ph.D_c * hy, ph.D_c * hz), dx, active, {"z_hi": 1.0}, per)
             lin_p, lin_c_of = fam_p.system, fam_c.system
+            if acc_on:
+                fam_a = _MGFamily((ph.D_acc * hx, ph.D_acc * hy, ph.D_acc * hz), dx, active,
+                                  {"z_hi": 1.0}, per)
+                lin_a_of = fam_a.system
         else:
             def lin_p(q):
                 return _Linear(A_p + sparse.diags(q), precond=pc_p, mode=mode)
 
             def lin_c_of(q):
                 return _Linear(A_c + sparse.diags(q), precond=pc_c, mode=mode)
+
+            if acc_on:
+                def lin_a_of(q):
+                    return _Linear(A_a + sparse.diags(q), precond=pc_a, mode=mode)
         if flow_faces is not None:
             # Cu2+ with advection: non-symmetric exponentially fitted operator.  Small systems: sparse LU;
             # large: GMRES preconditioned by the symmetric part (diffusion + the same sink), one MGCG V-cycle
@@ -514,12 +557,28 @@ class FieldSolver:
                                  A_sym=A_sym_c, pc=pc_c, start=start_c,
                                  ilu_cache=ilu_cache if self.linear != "direct" else None)
                 return _Sticky(lin, self, info)
+            if acc_on:
+                # Neutral accelerator advected by the same MAC face velocities (plan 2.5's flow option).
+                A_a, b_a = operators.assemble_advdiff(ph.D_acc * hx, ph.D_acc * hy, ph.D_acc * hz, dx, slab,
+                                                      active=active, dirichlet={"z_hi": 1.0}, periodic=per)
+                F_top_a = fz[:, :, kt + 1] / dx * active[:, :, -1]
+                A_sym_a = system(ph.D_acc, 1.0)[0] if not (use_mg or direct_c) else None
+                start_a = "ilu" if info["cell_peclet_max"] > PE_ILU else None
+                lin_a_of = None
+
+                def lin_a_of(q):
+                    return _AdvLinear(A_a + sparse.diags(q), q, direct_c, fam_a if use_mg else None,
+                                      A_sym=A_sym_a, pc=pc_a, start=start_a)
         else:
             F_top = None
+            F_top_a = None
         relax = 1.0
         last_change = np.inf
         cov_change = np.inf                    # Phase-1 coverage change of the last outer pass
         last_cov_change = np.inf
+        acc_change = 0.0                       # Phase-2 accelerator change of the last outer pass
+        last_acc_change = np.inf
+        acc_balance = acc_sink = acc_in = acc_src = 0.0
         cov_beta = p.cov_relax
         if cov is not None:
             maxit = max(int(maxit), 40)        # theta_s needs the extra passes (plan 2.3)
@@ -583,7 +642,8 @@ class FieldSolver:
                 # v = Mfac * i_local, cathodic positive (cycle mean in a resolved pulse).  Only the
                 # front band is updated: theta lives on the interface, everything else keeps theta0.
                 i_loc = ct * ci_of(V - phi)
-                th_cl_ss, th_s_ss = additives3d.steady_state(np.maximum(i_loc, 0.0), p, ph.Mfac)
+                i_pos = np.maximum(i_loc, 0.0)
+                th_cl_ss, th_s_ss = additives3d.steady_state(i_pos, p, ph.Mfac)
                 front = wf > 0.0
                 # Convergence is measured where the interface area actually is: the tanh band's
                 # outer tails carry < 1e-3 of w and < 0.1 % of the current, but their theta creeps
@@ -600,6 +660,37 @@ class FieldSolver:
                 if cov_change > last_cov_change * 1.2:      # pulse-branch heuristic (TP/fields.py:528)
                     cov_beta = max(0.2, cov_beta * 0.5)
                 last_cov_change = cov_change
+                if acc_on:
+                    # ---- Phase-2 transported accelerator of the current iterate ------------------
+                    # theta_a from the bulk field of the previous pass, then one steady diffusion
+                    # solve for the bulk field with that sink (Gauss-Seidel on the alpha<->theta_a
+                    # pair; the outer loop closes it together with ct/V, the plan-2.3 structure).
+                    a_old = cov[additives3d.ACC_KEY][sl].ravel()
+                    th_a_old = cov["theta_a"][sl].ravel()
+                    th_a_ss = additives3d.accelerator_steady_state(i_pos, a_old, p, ph.Mfac)
+                    th_a_new = np.where(front, th_a_old + cov_beta * (th_a_ss - th_a_old), th_a_old)
+                    q_a = np.where(act, additives3d.accelerator_sink(th_a_new, p) * wf, 0.0)
+                    s_a = np.where(act, additives3d.accelerator_source(th_a_new, p) * wf, 0.0)
+                    lin_a = lin_a_of(q_a)
+                    a_new = np.clip(lin_a.solve(b_a + s_a, x0=a_old), 0.0, None)
+                    info["cg"] += lin_a.iterations
+                    acc_change = float(np.max(np.abs((a_new - a_old)[crit])))
+                    cov[additives3d.ACC_KEY][sl] = a_new.reshape(shape)
+                    cov["theta_a"][sl] = th_a_new.reshape(shape)
+                    # transport closure of this pass: plane influx (+ desorption source) = sink
+                    alpha3 = cov[additives3d.ACC_KEY][sl]
+                    acc_sink = float(np.sum(q_a * a_new))       # q_a already carries w [1/cm]
+                    acc_src = float(np.sum(s_a))
+                    acc_in = float(np.sum(ph.D_acc * Hs[:, :, -1] / (dx * d_top)
+                                          * (1.0 - alpha3[:, :, -1]) * active[:, :, -1]))
+                    if F_top_a is not None:                 # upwinded advective flux through the plane
+                        adv = -np.where(F_top_a < 0, F_top_a * 1.0, F_top_a * alpha3[:, :, -1])
+                        acc_in += float(np.sum(adv))
+                    acc_balance = (acc_in + acc_src) / acc_sink - 1.0 if acc_sink > 0.0 else 0.0
+                    if acc_change > last_acc_change * 1.2:
+                        cov_beta = max(0.2, cov_beta * 0.5)
+                    last_acc_change = acc_change
+                    change = max(change, acc_change)
                 i0v[0] = ph.i0_u * i0_cell_factor()
                 change = max(change, cov_change)
             info["outer"] = outer + 1
@@ -612,18 +703,37 @@ class FieldSolver:
             front_info = wf > 1e-3 * wf.max()               # same measure as the convergence test
             th_s = cov["theta_s"][sl].ravel()[front_info]
             th_cl = cov["theta_cl"][sl].ravel()[front_info]
+            th_a = cov["theta_a"][sl].ravel()[front_info]
             info["additives"] = dict(
-                model="cl_ndr Phase 1: quasi-steady theta_cl/theta_s, no bulk additive transport",
+                model=("acc Phase 2: quasi-steady theta_cl/theta_s plus a transported accelerator "
+                       "field (steady bulk diffusion, surface consumption sink)"
+                       if acc_on else
+                       "cl_ndr Phase 1: quasi-steady theta_cl/theta_s, no bulk additive transport"),
                 cov_change=float(cov_change), relax=float(cov_beta),
-                converged=bool(cov_change < tol),
+                converged=bool(max(cov_change, acc_change) < tol),
                 # A limit cycle of the S-NDR Picard map is reported, not hidden (plan 2.3 keeps the
                 # monotone-from-below branch; no separate bistability search is performed).
-                ndr_hysteresis=bool(cov_change >= tol),
+                ndr_hysteresis=bool(max(cov_change, acc_change) >= tol),
                 theta_s=(float(np.min(th_s)), float(np.max(th_s)), float(np.mean(th_s))) if th_s.size else None,
                 theta_cl=(float(np.min(th_cl)), float(np.max(th_cl)), float(np.mean(th_cl)))
                 if th_cl.size else None,
+                theta_a=(float(np.min(th_a)), float(np.max(th_a)), float(np.mean(th_a)))
+                if th_a.size else None,
                 uncalibrated=True,
                 note="effective suppression map; constants are the 2-D engine defaults [J]")
+            if acc_on:
+                a_front = cov[additives3d.ACC_KEY][sl].ravel()[front_info]
+                info["additives"].update(
+                    acc_change=float(acc_change),
+                    a_min_front=float(np.min(a_front)) if a_front.size else None,
+                    a_front=(float(np.min(a_front)), float(np.max(a_front)),
+                             float(np.mean(a_front))) if a_front.size else None,
+                    a_balance_rel=float(acc_balance), acc_sink_mol_cm2_s=float(acc_sink * dx ** 3 * p.c_acc),
+                    acc_influx_mol_cm2_s=float(acc_in * dx ** 3 * p.c_acc),
+                    D_acc_cm2_s=float(ph.D_acc), Gamma_acc_mol_cm2=float(p.Gamma_acc),
+                    k_inc_a_per_cm=float(p.k_inc_a),
+                    note_acc=("transported, transport-limited accelerator; D_acc25/Gamma_acc/k_inc_a "
+                              "are uncalibrated [J]"))
         I = ct * ci_of(V - phi)
         if resolved:
             # The outer Cu solve sees the cycle-mean sink, never the instantaneous
@@ -785,7 +895,14 @@ class FieldSolver:
         # Effective exchange-current map actually used: Fcov * prescribed factor, 1 in the bulk and
         # outside the front band.  Exactly 1 everywhere in the legacy path.
         i0_factor = full(np.ones(n) if i0v[0] is None else i0v[0] / ph.i0_u, 1.0)
-        return dict(ct=full(np.where(act, ct, 0.0), 1.0), phi=full(phi, 0.0), i=i_full,
-                    speed=ph.Mfac * i_full, V=float(V), w=full(wf, 0.0), active=full(act, False).astype(bool),
-                    kt=kt, info=info, state=dict(shape=shape, ct=ct, phi=phi),
-                    i0_factor=i0_factor)
+        out = dict(ct=full(np.where(act, ct, 0.0), 1.0), phi=full(phi, 0.0), i=i_full,
+                   speed=ph.Mfac * i_full, V=float(V), w=full(wf, 0.0), active=full(act, False).astype(bool),
+                   kt=kt, info=info, state=dict(shape=shape, ct=ct, phi=phi),
+                   i0_factor=i0_factor)
+        if cov is not None:
+            out["theta_cl"] = cov["theta_cl"].copy()
+            out["theta_s"] = cov["theta_s"].copy()
+            out["theta_a"] = cov["theta_a"].copy()
+            if acc_on:
+                out["a_acc"] = cov[additives3d.ACC_KEY].copy()
+        return out

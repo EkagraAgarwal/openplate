@@ -75,6 +75,11 @@ class ViaSim:
         # bath has a leveller (c_lev_bulk > 0), the transported normalised leveller field.
         self.cl_on = p.additives in ("cl_ndr", "full") and bool(p.suppressor)
         self.lev_on = p.additives == "full" and p.c_lev_bulk > 0.0
+        if p.additives == "acc":
+            raise NotImplementedError(
+                "additives='acc' is the 3-D tile engine's transported-accelerator mode "
+                "(platesim.tile3d.additives3d, plan phase 2); the 2-D level-set engine has no bulk "
+                "accelerator transport.  Use 'cl_ndr' or 'full' here.")
         self.aset = additive_set(p) if p.additives != "legacy" else None
         if p.additives != "legacy":
             if p.suppressor:
