@@ -30,7 +30,6 @@ direct observable of the surface chemistry) and the fill ratios are printed for 
 from __future__ import annotations
 
 import numpy as np
-import sys
 
 import pytest
 
@@ -40,6 +39,7 @@ from platesim.feature.engine.sim import ViaSim
 
 D_UM, H_UM, F_OPEN, DX_UM, DELTA_UM, J_MA = 227.0, 88.0, 0.2, 8.0, 64.0, 15.0
 HOURS = 0.25
+PRE_BREAKDOWN_HOURS = 0.1        # before the S-NDR floor breakdown (test 4)
 
 BASE = dict(geometry="trench_full", suppressor=True, ohmic=True, dx_um=DX_UM, delta_um=DELTA_UM,
             k_mix=0.0, max_overburden_um=140.0, H_um=H_UM, flow_shear_s=0.0)
@@ -158,16 +158,20 @@ def test_zero_chloride_suppresses_nothing():
 
 
 # ------------------------------------------------------------------ 4. ample Cl -> the legacy S-NDR
-@pytest.mark.xfail(sys.platform != 'win32', strict=False,
-                   reason='platform-sensitive suppressor ratio; passes on Windows, differs on Linux CI (follow-up)')
 def test_ample_chloride_reproduces_the_legacy_suppressor():
     """At the numerical ample-Cl limit (theta_cl -> 1) the gated rate k_plus c_s theta_cl**n_cl equals the
     legacy k_plus*s_bulk*s_t, so the suppressor coverage of 'cl_ndr' must reproduce the legacy run.  The
-    0.25 h thicknesses are printed but only loosely bounded: theta_cl = 0.999 is still 0.1 % below 1 and
+    thicknesses are printed but only loosely bounded: theta_cl = 0.999 is still 0.1 % below 1 and
     the first-order level-set advection turns that into ~10 % of thickness near the S-NDR breakdown (the
-    coverage, which is the quantity the Cl gate really controls, is asserted to 5e-3)."""
-    leg = _run("legacy")
-    amp = _run("cl_1e-2", additives="cl_ndr", c_cl_bulk=1e-2)
+    coverage, which is the quantity the Cl gate really controls, is asserted to 5e-3).
+
+    The comparison is made at PRE_BREAKDOWN_HOURS (0.1 h), before the floor reaches the S-NDR breakdown.
+    The 0.25 h run sits on that threshold: with the default fixed-point tolerances the floor breaks down
+    at ~855 s on Linux and not at all on Windows, and with tight tolerances it breaks down on both, so the
+    branch it lands on is set by floating-point noise through the dt controller.  At 0.1 h both platforms
+    are on the suppressed branch (theta_floor ~0.995) and legacy and cl_1e-2 agree to < 1e-3 in coverage."""
+    leg = _run("legacy_pre", hours=PRE_BREAKDOWN_HOURS)
+    amp = _run("cl_1e-2_pre", hours=PRE_BREAKDOWN_HOURS, additives="cl_ndr", c_cl_bulk=1e-2)
     print(_fmt("legacy", leg))
     print(_fmt("cl_1e-2", amp))
     print(f"   |d theta_face| = {abs(amp['theta_face'] - leg['theta_face']):.2e}  "
