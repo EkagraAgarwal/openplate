@@ -398,6 +398,10 @@ def derive(p: Params, T_C: float) -> Phys:
         raise ValueError("pulse stripping rate constants k_strip_* must be nonnegative")
     if not 0.0 <= p.strip_return_a <= 1.0:
         raise ValueError(f"strip_return_a must be in [0, 1], got {p.strip_return_a!r}")
+    if not np.isfinite(p.b_acc) or p.b_acc < -1.0:
+        # b_acc < 0 turns the adsorbate into an inhibitor; below -1 the factor 1 + b_acc theta_a goes
+        # negative where theta_a -> 1 (negative exchange current, singular potential system).
+        raise ValueError(f"b_acc must be finite and >= -1, got {p.b_acc!r}")
     if p.pulse_coverage == "mean" and (p.k_strip_s or p.k_strip_a or p.strip_return_a != 1.0):
         raise ValueError("k_strip_s/k_strip_a/strip_return_a only act with pulse_coverage='resolved' "
                          "(the 'mean' coverages use the cycle-mean current and ignore stripping)")

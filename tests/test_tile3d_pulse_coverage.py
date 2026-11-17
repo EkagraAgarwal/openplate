@@ -236,3 +236,9 @@ def test_strip_constants_need_resolved_coverage():
         with pytest.raises(ValueError, match="pulse_coverage"):
             derive(Params(**bad), 22.0)
     derive(Params(pulse_coverage="resolved", k_strip_a=1.0, strip_return_a=0.5), 22.0)
+
+
+def test_b_acc_inhibitor_bound():
+    derive(Params(b_acc=-1.0), 22.0)
+    with pytest.raises(ValueError, match="b_acc"):
+        derive(Params(b_acc=-1.5), 22.0)
