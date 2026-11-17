@@ -761,7 +761,10 @@ class FieldSolver:
             pulse_change = np.inf
             pulse_relax = 1.
 
-            def phase_solve(concentration, target, relaxation=False):
+            do_res = (cov is not None and p.pulse_coverage == "resolved")
+            res_state = {}  # last-iteration Level-A means for the info report
+
+            def phase_solve(concentration, target, relaxation=False, i0=None):
                 nonlocal phase_phi, phase_V
                 bv = relaxation and p.C_dl_F_cm2 > 0
                 if abs(target) < 1e-30 and not bv:
@@ -773,7 +776,10 @@ class FieldSolver:
                 # not the electrolyte Cu2+ concentration used by the cathodic branch.
                 # The per-cell additive/prescribed factor multiplies both branches (the same
                 # surface sites gate the cathodic and the anodic exchange).
-                b0 = ph.i0_u if i0v[0] is None else i0v[0]
+                if i0 is None:
+                    b0 = ph.i0_u if i0v[0] is None else i0v[0]
+                else:
+                    b0 = i0
                 pref = b0 * (concentration if sign > 0 else np.ones(n))
                 pref = np.where(act, pref, 0.)
                 def kinetics(eta):
@@ -813,16 +819,71 @@ class FieldSolver:
                 current = kinetics(phase_V - phase_phi)[0]
                 return current, float(phase_V), float(np.dot(wf, phase_V - phase_phi) / wf.sum())
 
-            def i0_area():
+            def i0_area(i0_phases=None):
                 """Area-mean exchange current of the front, for the lumped RC circuit (it is scalar).
 
                 Exactly ``ph.i0_u`` in the legacy path so the arithmetic there is unchanged.
+                With per-phase arrays (resolved Level A) returns the weight-mean of the
+                per-phase area means.
                 """
-                if i0v[0] is None:
-                    return ph.i0_u
-                return float(np.dot(wf, i0v[0]) / wf.sum())
+                if i0_phases is None:
+                    if i0v[0] is None:
+                        return ph.i0_u
+                    return float(np.dot(wf, i0v[0]) / wf.sum())
+                return float(sum(weights[k] * np.dot(wf, i0_phases[k]) / wf.sum()
+                                 for k in range(3)))
 
+            if do_res:
+                from ..feature.engine.additives import suppressor_cl_rate as _scr
+                taus_r = np.array(wave.durations, dtype=float)
+                front_n = wf > 0.0
+                crit_n = wf > 1e-3 * wf.max()
+                beta_res = float(p.cov_relax)
             for coupling in range(40):
+                if do_res:
+                    Iavg_prev = weights @ phase_i
+                    th_cl_prev, _ = additives3d.steady_state(np.maximum(Iavg_prev, 0.0), p, ph.Mfac)
+                    v_f = ph.Mfac * np.maximum(phase_i[0], 0.0)
+                    i_a = np.maximum(-phase_i[1], 0.0)
+                    if p.suppressor:
+                        a_s = _scr(p.s_bulk, th_cl_prev, p.k_plus, n_cl=p.n_cl)
+                        L_s = np.empty((3, n), dtype=np.float64)
+                        L_s[0] = p.k_minus * v_f + p.k_des_s
+                        L_s[1] = p.k_des_s + p.k_strip_s * i_a
+                        L_s[2] = p.k_des_s
+                        _, xbar_s = additives3d.periodic_phase_means(a_s, L_s, taus_r)
+                    else:
+                        xbar_s = np.zeros((3, n), dtype=np.float64)
+                    if acc_on:
+                        alpha_old = cov[additives3d.ACC_KEY][sl].ravel()
+                        a_a = p.k_acc * p.c_acc * np.clip(alpha_old, 0.0, None)
+                        L_a = np.empty((3, n), dtype=np.float64)
+                        L_a[0] = p.k_inc_a * v_f + p.k_des_a
+                        L_a[1] = p.k_des_a + p.k_strip_a * i_a
+                        L_a[2] = p.k_des_a
+                        _, xbar_a = additives3d.periodic_phase_means(a_a, L_a, taus_r)
+                    else:
+                        xbar_a = np.zeros((3, n), dtype=np.float64)
+                    i0_phase = []
+                    for kk in range(3):
+                        th_s_k = xbar_s[kk].reshape(shape) if p.suppressor else np.zeros(shape)
+                        th_a_k = xbar_a[kk].reshape(shape) if acc_on else np.zeros(shape)
+                        fcov_k = additives3d.coverage_factor(th_s_k, p, th_a_k)
+                        if fac is not None:
+                            fcov_k = fcov_k * fac
+                        i0_phase.append(ph.i0_u * np.where(active, fcov_k, 1.0).ravel())
+                    res_state["xbar_s"] = xbar_s
+                    res_state["xbar_a"] = xbar_a
+                    res_state["v_f"] = v_f
+                    res_state["i_a"] = i_a
+                    if p.suppressor:
+                        res_state["a_s"] = a_s
+                        res_state["L_s"] = L_s
+                    if acc_on:
+                        res_state["a_a"] = a_a
+                        res_state["L_a"] = L_a
+                else:
+                    i0_phase = None
                 cs = surface_concentration(ct, phase_i, wave.durations, ph.D_c, p.c_bulk, p.efficiency)
                 front = wf > 1e-6 * wf.max()
                 if np.min(cs[:, front][weights > 0]) <= 0:
@@ -834,13 +895,19 @@ class FieldSolver:
                 effective = targets.copy()
                 if p.C_dl_F_cm2:
                     effective_j, charging = capacitive_cycle(wave.durations, wave.currents,
-                        p.C_dl_F_cm2, i0_area(), af, p.pulse_alpha_a * ph.f_RT,
+                        p.C_dl_F_cm2, i0_area(i0_phase) if do_res else i0_area(),
+                        af, p.pulse_alpha_a * ph.f_RT,
                         cs @ wf / wf.sum(), area_ratio)
                     effective = effective_j * nx * ny / dx
                 for k, dt_phase in enumerate(wave.durations):
                     if dt_phase == 0:
                         continue
-                    phase_i[k], volts[k], eta_mean[k] = phase_solve(cs[k], effective[k], relaxation=k == 2)
+                    if do_res:
+                        phase_i[k], volts[k], eta_mean[k] = phase_solve(
+                            cs[k], effective[k], relaxation=k == 2, i0=i0_phase[k])
+                    else:
+                        phase_i[k], volts[k], eta_mean[k] = phase_solve(
+                            cs[k], effective[k], relaxation=k == 2)
                     mean_phi += weights[k] * phase_phi
                 Iavg = weights @ phase_i
                 # Implicit positive sink, explicit local dissolution source.
@@ -849,9 +916,71 @@ class FieldSolver:
                 new_ct = lin.solve(b_c - sink * wf * np.minimum(Iavg, 0.), x0=ct)
                 info['cg'] += lin.iterations
                 new_ct = np.where(act, new_ct, 0.)
+                cov_change_res = 0.0
+                acc_change_res = 0.0
+                if do_res:
+                    xbar_s = res_state["xbar_s"]
+                    xbar_a = res_state["xbar_a"]
+                    i_a_old = res_state["i_a"]
+                    th_s_bar = weights @ xbar_s if p.suppressor else np.zeros(n)
+                    if p.suppressor and "a_s" in res_state:
+                        a_s_r = res_state["a_s"]
+                        L_s_r = res_state["L_s"]
+                        R_s_r = a_s_r[None, :] + L_s_r
+                        if np.any(taus_r > 0):
+                            deg_s = np.max(R_s_r * taus_r[:, None], axis=0) == 0.0
+                            if np.any(deg_s):
+                                th_s_bar = np.where(deg_s, cov["theta_s"][sl].ravel(), th_s_bar)
+                    th_s_old = cov["theta_s"][sl].ravel()
+                    th_s_new = np.where(front_n,
+                                        th_s_old + beta_res * (th_s_bar - th_s_old), th_s_old)
+                    if np.any(crit_n):
+                        cov_change_res = float(np.max(np.abs(th_s_new - th_s_old)[crit_n]))
+                    cov["theta_s"][sl] = th_s_new.reshape(shape)
+                    if acc_on:
+                        th_a_bar = weights @ xbar_a
+                        if "a_a" in res_state:
+                            a_a_r = res_state["a_a"]
+                            L_a_r = res_state["L_a"]
+                            R_a_r = a_a_r[None, :] + L_a_r
+                            if np.any(taus_r > 0):
+                                deg_a = np.max(R_a_r * taus_r[:, None], axis=0) == 0.0
+                                if np.any(deg_a):
+                                    th_a_bar = np.where(deg_a, cov["theta_a"][sl].ravel(), th_a_bar)
+                        th_a_old = cov["theta_a"][sl].ravel()
+                        th_a_new = np.where(front_n,
+                                            th_a_old + beta_res * (th_a_bar - th_a_old), th_a_old)
+                        if np.any(crit_n):
+                            cov_change_res = max(cov_change_res,
+                                float(np.max(np.abs(th_a_new - th_a_old)[crit_n])))
+                        cov["theta_a"][sl] = th_a_new.reshape(shape)
+                        w_r = float(weights[1])
+                        th_a_bar_r = xbar_a[1]
+                        if p.c_acc > 0.0:
+                            s_a_vol = (p.Gamma_acc * (p.k_des_a * th_a_bar + p.strip_return_a
+                                * w_r * p.k_strip_a * i_a_old * th_a_bar_r)
+                                / p.c_acc * wf)
+                        else:
+                            s_a_vol = np.zeros(n)
+                        q_a_vol = p.Gamma_acc * p.k_acc * (1.0 - th_a_bar) * wf
+                        q_a = np.where(act, q_a_vol, 0.0)
+                        s_a = np.where(act, s_a_vol, 0.0)
+                        a_old = cov[additives3d.ACC_KEY][sl].ravel()
+                        lin_a = lin_a_of(q_a)
+                        a_new = np.clip(lin_a.solve(b_a + s_a, x0=a_old), 0.0, None)
+                        info["cg"] += lin_a.iterations
+                        if np.any(crit_n):
+                            acc_change_res = float(np.max(np.abs(a_new - a_old)[crit_n]))
+                        cov[additives3d.ACC_KEY][sl] = a_new.reshape(shape)
+                        cov_change_res = max(cov_change_res, acc_change_res)
+                        res_state["th_a_bar"] = th_a_bar
+                        res_state["th_a_bar_r"] = th_a_bar_r
+                        res_state["i_a_old"] = i_a_old
+                    res_state["th_s_bar"] = th_s_bar
                 previous_change = pulse_change
                 pulse_change = max(float(np.max(np.abs(new_ct - ct))),
-                    float(np.max(np.abs(phase_i - old_i))) / max(np.max(np.abs(phase_i)), 1e-12))
+                    float(np.max(np.abs(phase_i - old_i))) / max(np.max(np.abs(phase_i)), 1e-12),
+                    cov_change_res)
                 if pulse_change > previous_change * 1.2:
                     pulse_relax = max(.2, pulse_relax * .5)
                 ct += pulse_relax * (new_ct - ct)
@@ -861,7 +990,8 @@ class FieldSolver:
             phi, V = mean_phi, float(np.dot(weights, volts))
             if not p.C_dl_F_cm2:
                 _, charging = capacitive_cycle(wave.durations, wave.currents, 0.,
-                    i0_area(), af, p.pulse_alpha_a * ph.f_RT, cs @ wf / wf.sum(), area_ratio)
+                    i0_area(i0_phase) if do_res else i0_area(),
+                    af, p.pulse_alpha_a * ph.f_RT, cs @ wf / wf.sum(), area_ratio)
             info['pulse'] = dict(model='resolved', coupling_iterations=coupling + 1,
                 converged=bool(pulse_change < min(tol, 2e-5)), change=pulse_change,
                 phase_V=volts.tolist(), phase_eta_V=eta_mean.tolist(),
@@ -876,6 +1006,78 @@ class FieldSolver:
             info['pulse']['tau_off_note'] = 'No finite C*|delta eta|/j when applied j=0; null denotes undefined.'
             info['pulse']['phase_surface_ct_min'] = [float(np.min(cs[k, front]))
                 if weights[k] else None for k in range(3)]
+            if do_res:
+                xbar_s_f = res_state.get("xbar_s", np.zeros((3, n)))
+                xbar_a_f = res_state.get("xbar_a", np.zeros((3, n)))
+                i_a_f = res_state.get("i_a", np.maximum(-phase_i[1], 0.0))
+                wsum = float(wf.sum())
+                th_s_pm = [float(np.dot(wf, xbar_s_f[k]) / wsum) for k in range(3)]
+                th_a_pm = [float(np.dot(wf, xbar_a_f[k]) / wsum) for k in range(3)]
+                tau_r = float(taus_r[1])
+                Lr_s = p.k_des_s + p.k_strip_s * np.asarray(i_a_f, dtype=float)
+                Lr_a = p.k_des_a + p.k_strip_a * np.asarray(i_a_f, dtype=float)
+                strip_s = 1.0 - np.exp(-np.asarray(Lr_s, dtype=float) * tau_r) if tau_r > 0 else np.zeros(n)
+                strip_a = 1.0 - np.exp(-np.asarray(Lr_a, dtype=float) * tau_r) if tau_r > 0 else np.zeros(n)
+                strip_mean_s = float(np.dot(wf, strip_s) / wsum)
+                strip_mean_a = float(np.dot(wf, strip_a) / wsum)
+                if acc_on and ph.D_acc > 0.0 and p.c_acc > 0.0 and float(taus_r.sum()) > 0.0:
+                    ripple = np.max(xbar_a_f, axis=0) - np.min(xbar_a_f, axis=0)
+                    alpha_fin = cov[additives3d.ACC_KEY][sl].ravel()
+                    denom = (p.c_acc * np.clip(alpha_fin, 0.0, None)
+                             * np.sqrt(np.pi * ph.D_acc * float(taus_r.sum())))
+                    ratio_cell = np.where(denom > 0.0,
+                                          p.Gamma_acc * np.abs(ripple) / np.where(denom > 0.0, denom, 1.0),
+                                          0.0)
+                    supply_ratio = float(np.dot(wf, ratio_cell) / wsum)
+                else:
+                    supply_ratio = 0.0
+                if acc_on:
+                    th_a_bar_rep = res_state.get("th_a_bar", weights @ xbar_a_f)
+                    th_a_bar_r_rep = res_state.get("th_a_bar_r", xbar_a_f[1])
+                    i_a_rep = np.asarray(res_state.get("i_a_old", i_a_f), dtype=float)
+                    w_r_rep = float(weights[1])
+                    if p.c_acc > 0.0:
+                        s_a_rep = np.where(act, (p.Gamma_acc * (p.k_des_a * th_a_bar_rep
+                            + p.strip_return_a * w_r_rep * p.k_strip_a * i_a_rep * th_a_bar_r_rep)
+                            / p.c_acc * wf), 0.0)
+                    else:
+                        s_a_rep = np.zeros(n)
+                    q_a_rep = np.where(act, p.Gamma_acc * p.k_acc * (1.0 - th_a_bar_rep) * wf, 0.0)
+                    a_fin = cov[additives3d.ACC_KEY][sl].ravel()
+                    acc_sink_rep = float(np.sum(q_a_rep * a_fin))
+                    acc_src_rep = float(np.sum(s_a_rep))
+                    alpha3 = cov[additives3d.ACC_KEY][sl]
+                    acc_in_rep = float(np.sum(ph.D_acc * Hs[:, :, -1] / (dx * d_top)
+                        * (1.0 - alpha3[:, :, -1]) * active[:, :, -1]))
+                    if F_top_a is not None:
+                        adv_rep = -np.where(F_top_a < 0, F_top_a * 1.0, F_top_a * alpha3[:, :, -1])
+                        acc_in_rep += float(np.sum(adv_rep))
+                    acc_bal_rep = ((acc_in_rep + acc_src_rep) / acc_sink_rep - 1.0
+                                   if acc_sink_rep > 0.0 else 0.0)
+                    info["additives"]["a_balance_rel"] = float(acc_bal_rep)
+                    info["additives"]["acc_sink_mol_cm2_s"] = float(acc_sink_rep * dx ** 3 * p.c_acc)
+                    info["additives"]["acc_influx_mol_cm2_s"] = float(acc_in_rep * dx ** 3 * p.c_acc)
+                    front_rep = wf > 1e-3 * wf.max()
+                    a_front_rep = cov[additives3d.ACC_KEY][sl].ravel()[front_rep]
+                    if a_front_rep.size:
+                        info["additives"]["a_min_front"] = float(np.min(a_front_rep))
+                        info["additives"]["a_front"] = (float(np.min(a_front_rep)),
+                            float(np.max(a_front_rep)), float(np.mean(a_front_rep)))
+                    th_s_rep = cov["theta_s"][sl].ravel()[front_rep]
+                    if th_s_rep.size:
+                        info["additives"]["theta_s"] = (float(np.min(th_s_rep)),
+                            float(np.max(th_s_rep)), float(np.mean(th_s_rep)))
+                    th_a_rep = cov["theta_a"][sl].ravel()[front_rep]
+                    if th_a_rep.size:
+                        info["additives"]["theta_a"] = (float(np.min(th_a_rep)),
+                            float(np.max(th_a_rep)), float(np.mean(th_a_rep)))
+                info["additives"]["pulse_coverage"] = dict(
+                    model="resolved Level A",
+                    theta_s_phase_mean=th_s_pm, theta_a_phase_mean=th_a_pm,
+                    strip_fraction_per_cycle=[strip_mean_s, strip_mean_a],
+                    supply_ratio_a=float(supply_ratio),
+                    note=("supply_ratio_a > 1 means Level B (cycle-resolved additive surface "
+                          "concentration) is needed and the Level-A recovery is overstated"))
             info['converged'] = info['pulse']['converged']
             info['amg_builds'] = pc_p.builds + pc_c.builds
             info['current_error'] = info['pulse']['faraday_error_rel']

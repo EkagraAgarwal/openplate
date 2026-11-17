@@ -124,6 +124,14 @@ class Params:
     Gamma_acc: float = 1.0e-10                 # mol/cm2 accelerator saturation coverage [J]
     k_inc_a: float = 1.0e5                     # 1/cm incorporation by the advancing front [J]
     k_des_a: float = 0.0                       # 1/s thermal desorption (2-D accelerator: none) [J]
+    # ---- pulse-resolved additive coverages (3-D tile Phase 4 Level A, tile3d/fields.py).
+    # All three are uncalibrated [J]: the stripping rates are per unit local anodic current
+    # density, the return fraction is the share of stripped accelerator that re-enters the
+    # electrolyte instead of being destroyed.
+    pulse_coverage: str = "mean"               # 'mean' (cycle-mean quasi-steady) | 'resolved' (Level A) [J]
+    k_strip_s: float = 0.0                     # 1/s per A/cm2 of local anodic current (suppressor) [J]
+    k_strip_a: float = 0.0                     # 1/s per A/cm2 of local anodic current (accelerator) [J]
+    strip_return_a: float = 1.0                # fraction of stripped accelerator returned to solution [J]
     # ---- convection / boundary layer
     delta_um: float = 20.0                     # diffusion boundary layer above the field
     D_t0: float = 1e-3                         # cm2/s eddy diffusivity at the via mouth
@@ -384,6 +392,12 @@ def derive(p: Params, T_C: float) -> Phys:
         raise ValueError(f"Gamma_cl must be > 0, got {p.Gamma_cl!r}")
     if not 0.0 < p.cov_relax <= 1.0:
         raise ValueError(f"cov_relax must be in (0, 1], got {p.cov_relax!r}")
+    if p.pulse_coverage not in ("mean", "resolved"):
+        raise ValueError(f"pulse_coverage must be 'mean' or 'resolved', got {p.pulse_coverage!r}")
+    if min(p.k_strip_s, p.k_strip_a) < 0.0:
+        raise ValueError("pulse stripping rate constants k_strip_* must be nonnegative")
+    if not 0.0 <= p.strip_return_a <= 1.0:
+        raise ValueError(f"strip_return_a must be in [0, 1], got {p.strip_return_a!r}")
     if min(p.k_cl, p.k_des_cl, p.k_inc_cl, p.k_des_s) < 0.0:
         raise ValueError("Cl-/suppressor coverage rate constants must be nonnegative")
     if not np.isfinite(p.D_acc25) or p.D_acc25 <= 0.0:

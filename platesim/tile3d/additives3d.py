@@ -49,8 +49,11 @@ Not implemented here (phases 3-4 of the plan), left as explicit hooks:
     of the accelerator balance: the coverage above is a local algebraic function of the front, so a
     shrinking feature cannot yet enrich its accelerator.  The leveller ``theta_l`` is still 0, hence the
     ``(1 - strength_l theta_l)`` factor of ``AdditiveSet.combined_i0_factor`` is exactly 1.
-  * Phase 4 -- pulse-reverse phase-resolved coverages: the quasi-steady values below use the cycle-mean
-    local current; ``b_ex``/``k_rd`` stripping is not applied.
+  * Phase 4 Level A -- pulse-reverse phase-resolved coverages -- is implemented
+    (:func:`periodic_phase_means` plus the ``pulse_coverage='resolved'`` branch of
+    ``FieldSolver.solve``).  Level B (cycle-resolved bulk additive surface concentration) is not:
+    ``info['additives']['pulse_coverage']['supply_ratio_a']`` > 1 means the Level-A recovery is
+    overstated and Level B is needed.
   * The transported **suppressor** field ``s`` of plan 2.5 (D_s25, Gamma_s, k_plus sink) is not wired:
     Phase 2 here transports the accelerator only (the scope's optional part of "accelerator (and
     suppressor)").  The suppressor keeps the bulk ``s_bulk`` of Phase 1, which is the right default for
@@ -72,7 +75,8 @@ from ..feature.engine.additives import (displace_suppressor, langmuir_steady_sta
                                         suppressor_cl_rate, suppressor_i0_factor)
 
 __all__ = ["COV_KEYS", "ACC_KEY", "coverage_init", "steady_state", "accelerator_steady_state",
-           "accelerator_sink", "accelerator_source", "coverage_factor", "front_cells"]
+           "accelerator_sink", "accelerator_source", "coverage_factor", "front_cells",
+           "periodic_phase_means"]
 
 COV_KEYS = ("theta_cl", "theta_s", "theta_a")
 ACC_KEY = "a"                     # normalised bulk accelerator field c_a / c_acc (mode 'acc' only)
@@ -187,3 +191,62 @@ def front_cells(psi):
     k = np.clip(k + 1, 0, a.shape[2] - 1)                             # first electrolyte cell
     ii, jj = np.meshgrid(np.arange(a.shape[0]), np.arange(a.shape[1]), indexing="ij")
     return ii, jj, k
+
+
+def periodic_phase_means(a, L, taus):
+    """Periodic steady state of ``dx/dt = a - R_k x`` over forward/reverse/off phases.
+
+    ``a`` is the adsorption rate per cell ``(n,)`` [1/s], ``L`` the loss rates per phase
+    ``(3, n)`` [1/s] (``R_k = a + L_k``), ``taus`` the phase durations ``(3,)`` [s].
+    Returns ``(x_start, xbar)`` each ``(3, n)``: the coverage at the start of each phase and
+    the time mean within each phase, in the periodic steady state (forward -> reverse -> off).
+
+    Per phase ``x_end = w + (x_start - w) e^{-R tau}`` with ``w = a/R``; composing gives
+    ``x0 = A x0 + B`` (``A = prod e^{-R_k tau_k}``), solved as ``x0 = B/(1-A)``.  Phase means
+    ``xbar_k = w_k + (x_k,start - w_k)(1 - e^{-R_k tau_k})/(R_k tau_k)`` (-> ``x_k,start``
+    when ``R_k tau_k -> 0``).  ``expm1`` is used for accuracy at small ``R tau``.  Phases
+    with ``tau`` 0 are the identity map.  When every ``R_k tau_k`` is 0 (i.e. ``a = L = 0``)
+    the ODE is ``dx/dt = 0`` and the periodic state is undetermined: this function returns 0
+    and the caller must keep the previous coverage (``dx/dt = 0`` stays where it was).
+
+    All inputs must be finite and nonnegative; outputs are clipped to [0, 1].
+    """
+    a_v = np.atleast_1d(np.asarray(a, dtype=np.float64))
+    L_m = np.asarray(L, dtype=np.float64)
+    t_v = np.asarray(taus, dtype=np.float64).ravel()
+    if t_v.shape != (3,):
+        raise ValueError(f"taus must have shape (3,), got {t_v.shape}")
+    if a_v.ndim != 1:
+        raise ValueError(f"a must have shape (n,), got {a_v.shape}")
+    n = a_v.shape[0]
+    if L_m.shape != (3, n):
+        raise ValueError(f"L must have shape (3, {n}), got {L_m.shape}")
+    if not (np.all(np.isfinite(a_v)) and np.all(np.isfinite(L_m)) and np.all(np.isfinite(t_v))):
+        raise ValueError("periodic_phase_means inputs must be finite")
+    if a_v.min() < 0.0 or L_m.min() < 0.0 or t_v.min() < 0.0:
+        raise ValueError("periodic_phase_means inputs must be nonnegative")
+    R = a_v[None, :] + L_m                                  # (3, n)
+    rtau = R * t_v[:, None]                                 # (3, n)
+    one_minus_E = -np.expm1(-rtau)                          # 1 - exp(-rtau), accurate at small rtau
+    E = np.exp(-rtau)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        w = np.where(R > 0.0, a_v[None, :] / np.where(R > 0.0, R, 1.0), 0.0)
+    wE = w * one_minus_E                                    # w (1 - E), 0 when tau 0 or R 0
+    A = E[0] * E[1] * E[2]                                  # (n,)
+    B = wE[0] * E[1] * E[2] + wE[1] * E[2] + wE[2]          # (n,)
+    denom = -np.expm1(-(rtau[0] + rtau[1] + rtau[2]))      # 1 - A without cancellation at small R tau
+    x0 = np.where(denom != 0.0, B / np.where(denom != 0.0, denom, 1.0), 0.0)
+    x_start = np.empty((3, n), dtype=np.float64)
+    x_start[0] = x0
+    x_start[1] = E[0] * x0 + wE[0]
+    x_start[2] = E[1] * x_start[1] + wE[1]
+    xbar = np.empty((3, n), dtype=np.float64)
+    for k in range(3):
+        denom_k = rtau[k]
+        factor = np.where(denom_k > 0.0,
+                          one_minus_E[k] / np.where(denom_k > 0.0, denom_k, 1.0), 1.0)
+        xbar[k] = w[k] + (x_start[k] - w[k]) * factor
+        xbar[k] = np.where(t_v[k] == 0.0, x_start[k], xbar[k])
+    x_start = np.clip(x_start, 0.0, 1.0)
+    xbar = np.clip(xbar, 0.0, 1.0)
+    return x_start, xbar
