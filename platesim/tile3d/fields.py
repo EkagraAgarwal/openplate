@@ -978,9 +978,16 @@ class FieldSolver:
                         res_state["i_a_old"] = i_a_old
                     res_state["th_s_bar"] = th_s_bar
                 previous_change = pulse_change
-                pulse_change = max(float(np.max(np.abs(new_ct - ct))),
-                    float(np.max(np.abs(phase_i - old_i))) / max(np.max(np.abs(phase_i)), 1e-12),
-                    cov_change_res)
+                ct_step = float(np.max(np.abs(new_ct - ct)))
+                i_step = float(np.max(np.abs(phase_i - old_i))) / max(np.max(np.abs(phase_i)), 1e-12)
+                if do_res:
+                    # The relaxed coverages (and the currents they gate) converge geometrically and are
+                    # held to the outer-loop coverage tolerance ``tol``; Cu2+ keeps the tight pulse one.
+                    # Scaling keeps a single ``pulse_change`` < min(tol, 2e-5) test for both.
+                    scale = min(tol, 2e-5) / tol
+                    pulse_change = max(ct_step, scale * i_step, scale * cov_change_res)
+                else:
+                    pulse_change = max(ct_step, i_step)
                 if pulse_change > previous_change * 1.2:
                     pulse_relax = max(.2, pulse_relax * .5)
                 ct += pulse_relax * (new_ct - ct)
@@ -1063,14 +1070,13 @@ class FieldSolver:
                         info["additives"]["a_min_front"] = float(np.min(a_front_rep))
                         info["additives"]["a_front"] = (float(np.min(a_front_rep)),
                             float(np.max(a_front_rep)), float(np.mean(a_front_rep)))
-                    th_s_rep = cov["theta_s"][sl].ravel()[front_rep]
-                    if th_s_rep.size:
-                        info["additives"]["theta_s"] = (float(np.min(th_s_rep)),
-                            float(np.max(th_s_rep)), float(np.mean(th_s_rep)))
-                    th_a_rep = cov["theta_a"][sl].ravel()[front_rep]
-                    if th_a_rep.size:
-                        info["additives"]["theta_a"] = (float(np.min(th_a_rep)),
-                            float(np.max(th_a_rep)), float(np.mean(th_a_rep)))
+                # Report the resolved (cycle-mean) coverages in both modes, not the outer-loop ones.
+                front_rep = wf > 1e-3 * wf.max()
+                for key in ("theta_s", "theta_a"):
+                    rep = cov[key][sl].ravel()[front_rep]
+                    if rep.size:
+                        info["additives"][key] = (float(np.min(rep)), float(np.max(rep)),
+                                                  float(np.mean(rep)))
                 info["additives"]["pulse_coverage"] = dict(
                     model="resolved Level A",
                     theta_s_phase_mean=th_s_pm, theta_a_phase_mean=th_a_pm,

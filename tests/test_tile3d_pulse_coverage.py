@@ -1,4 +1,4 @@
-"""Pulse-resolved additive coverages, Phase 4 Level A (brief `pulse_coverage_brief.md`).
+"""Pulse-resolved additive coverages of the 3-D tile engine (additives Phase 4 Level A).
 
 No team data: generic geometry/numbers only. Each test uses small grids (<60 s).
 """
@@ -207,3 +207,32 @@ def test_param_validation():
                 dict(strip_return_a=-0.1), dict(strip_return_a=1.1)):
         with pytest.raises(ValueError):
             derive(Params(**bad), 22.0)
+
+
+def test_g_suppressor_stripping_lowers_theta_s():
+    """cl_ndr + suppressor path: reverse-pulse stripping lowers the cycle-mean suppressor coverage."""
+    theta = []
+    for ks in (0.0, 2000.0):
+        p = Params(additives="cl_ndr", suppressor=True, c_cl_bulk=1e-6, pulse_coverage="resolved",
+                   k_strip_s=ks)
+        grid, psi = flat(nx=4, ny=4, nz=30, dx_um=8.0)
+        cov = additives3d.coverage_init(psi.shape)
+        out = FieldSolver(p, 22.0, pulse=PR).solve(psi, grid.dx, grid.origin[2], 64 * UM, 15e-3,
+                                                    periodic=grid.periodic, cov=cov, tol=2e-4, maxit=60)
+        assert out["info"]["pulse"]["converged"]
+        assert np.all((cov["theta_s"] >= 0.0) & (cov["theta_s"] <= 1.0))
+        pcov = out["info"]["additives"]["pulse_coverage"]
+        assert len(pcov["theta_s_phase_mean"]) == 3
+        theta.append(float(out["info"]["additives"]["theta_s"][2]))
+        if ks:
+            assert pcov["strip_fraction_per_cycle"][0] > 0.0
+            # the reverse-phase mean is the most stripped of the three phases
+            assert pcov["theta_s_phase_mean"][1] < pcov["theta_s_phase_mean"][0]
+    assert theta[0] > 0.0 and theta[1] < theta[0]
+
+
+def test_strip_constants_need_resolved_coverage():
+    for bad in (dict(k_strip_s=1.0), dict(k_strip_a=1.0), dict(strip_return_a=0.5)):
+        with pytest.raises(ValueError, match="pulse_coverage"):
+            derive(Params(**bad), 22.0)
+    derive(Params(pulse_coverage="resolved", k_strip_a=1.0, strip_return_a=0.5), 22.0)

@@ -398,6 +398,9 @@ def derive(p: Params, T_C: float) -> Phys:
         raise ValueError("pulse stripping rate constants k_strip_* must be nonnegative")
     if not 0.0 <= p.strip_return_a <= 1.0:
         raise ValueError(f"strip_return_a must be in [0, 1], got {p.strip_return_a!r}")
+    if p.pulse_coverage == "mean" and (p.k_strip_s or p.k_strip_a or p.strip_return_a != 1.0):
+        raise ValueError("k_strip_s/k_strip_a/strip_return_a only act with pulse_coverage='resolved' "
+                         "(the 'mean' coverages use the cycle-mean current and ignore stripping)")
     if min(p.k_cl, p.k_des_cl, p.k_inc_cl, p.k_des_s) < 0.0:
         raise ValueError("Cl-/suppressor coverage rate constants must be nonnegative")
     if not np.isfinite(p.D_acc25) or p.D_acc25 <= 0.0:
