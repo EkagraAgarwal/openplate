@@ -839,7 +839,7 @@ class FieldSolver:
                 front_n = wf > 0.0
                 crit_n = wf > 1e-3 * wf.max()
                 beta_res = float(p.cov_relax)
-            for coupling in range(40):
+            for coupling in range(80):
                 if do_res:
                     Iavg_prev = weights @ phase_i
                     th_cl_prev, _ = additives3d.steady_state(np.maximum(Iavg_prev, 0.0), p, ph.Mfac)
