@@ -77,7 +77,7 @@ def _additive_quantities(index, report):
         if key == 'pulse_coverage' and isinstance(value, dict):
             for subkey, subvalue in value.items():
                 _flatten_report(path + '.' + subkey, subvalue, out)
-        elif key not in ('model', 'note', 'note_acc'):
+        elif key not in ('model', 'note', 'note_acc', 'relax', 'cov_change'):  # solver diagnostics
             _flatten_report(path, value, out)
     return out
 
