@@ -1,6 +1,6 @@
 """Quasi-steady field solve of one 3-D tile, physics level L1 (no flow) plus optional cell-local
-additive coverage (Phase 1) and a transported accelerator (Phase 2) of
-the 3-D additives port.
+additive coverage (Phase 1), a transported accelerator (Phase 2) and per-phase pulse coverages
+(Phase 4 Level A) of the 3-D additives port.
 
 Same model as the 2-D engine's additive-free 'enhanced' path (platesim/feature/engine/fields.py,
 StepGeom 'diffuse' + newton_potential), written per unit volume on a uniform grid:
@@ -34,7 +34,15 @@ smaller -- the transport-limited differential of plan 0.2.  ``cov=None`` or 'cl_
 
 Boundary conditions: ct = 1 and phi = 0 on the bulk plane z = z_plane (at a distance d_top in
 [0.5, 1.5) dx above the last solved cell layer, as in 2-D); no flux through the bottom; lateral sides
-periodic or no flux.  Units: cm, s, mol, A, V.  Pulse-reverse enters only through the net current.
+periodic or no flux.  Units: cm, s, mol, A, V.
+
+Pulse-reverse: with ``model='net'`` or ``pulse=None`` the net-current path is kept (a single sink at
+the time-averaged current).  A pulse dict with ``model='resolved'`` instead has FieldSolver solve the
+forward, reverse and off phases on the frozen front, coupled to an analytic pulsating diffusion layer
+(``platesim/tile3d/pulse.py``, ``surface_concentration``) and optional double-layer charging
+(``Params.C_dl_F_cm2``, ``capacitive_cycle``).  Optional Phase 4 Level A
+(``Params.pulse_coverage='resolved'``) gives each phase its own additive coverages and i0 via
+``additives3d.periodic_phase_means``; the net-current path is otherwise unchanged.
 """
 from __future__ import annotations
 
