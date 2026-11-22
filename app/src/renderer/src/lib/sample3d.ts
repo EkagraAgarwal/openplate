@@ -1,4 +1,14 @@
-import type { Feature3D, Plan3D, Point3D, SampleSpec3D, Section3D, Step3D } from '../api/client3d'
+import type {
+  Additives,
+  Feature3D,
+  Plan3D,
+  Point3D,
+  SampleSpec3D,
+  Section3D,
+  Step3D
+} from '../api/client3d'
+import type { ParamSpec } from '../types'
+import { coerceParam } from './coercion'
 
 export const defaultSpec3D: SampleSpec3D = {
   layout: {
@@ -56,6 +66,101 @@ export function parseSpec(text: string): SampleSpec3D {
     throw new Error('Expected layout, etch, recipe, bath, setup and numerics objects.')
   return value
 }
+// ---------------------------------------------------------- L3 additives ----
+/** Accelerator-only keys (contract 10g): removed when mode switches to cl_ndr. */
+export const ACC_KEYS = [
+  'c_acc_mol_cm3', 'Gamma_acc_mol_cm2', 'k_acc_cm3_mol_s',
+  'b_acc', 'k_inc_a_1_cm', 'D_acc_cm2_s'
+] as const
+
+export type AdditiveNumberKey =
+  | 's_bulk_mol_cm3'
+  | (typeof ACC_KEYS)[number]
+  | 'k_strip_s'
+  | 'k_strip_a'
+  | 'strip_return_a'
+
+/** Contract ranges: coerceParam clamps into range and flags empty/non-finite input. */
+const ADDITIVE_NUMBER_SPECS: Record<AdditiveNumberKey, ParamSpec> = {
+  s_bulk_mol_cm3: { name: 's_bulk_mol_cm3', type: 'float', min: 0 },
+  c_acc_mol_cm3: { name: 'c_acc_mol_cm3', type: 'float', min: 0 },
+  Gamma_acc_mol_cm2: { name: 'Gamma_acc_mol_cm2', type: 'float', min: 0 },
+  k_acc_cm3_mol_s: { name: 'k_acc_cm3_mol_s', type: 'float', min: 0 },
+  b_acc: { name: 'b_acc', type: 'float', min: -1 },
+  k_inc_a_1_cm: { name: 'k_inc_a_1_cm', type: 'float', min: 0 },
+  D_acc_cm2_s: { name: 'D_acc_cm2_s', type: 'float', min: 0 },
+  k_strip_s: { name: 'k_strip_s', type: 'float', min: 0 },
+  k_strip_a: { name: 'k_strip_a', type: 'float', min: 0 },
+  strip_return_a: { name: 'strip_return_a', type: 'float', min: 0, max: 1 }
+}
+
+export function defaultAdditives(): Additives {
+  return {
+    mode: 'cl_ndr', suppressor: true, pulse_coverage: 'mean',
+    k_strip_s: 0, k_strip_a: 0, strip_return_a: 1
+  }
+}
+
+/** Enable/disable the L3 block, keeping numerics.physics in sync (contract 10g). */
+export function setAdditivesEnabled(spec: SampleSpec3D, enabled: boolean): SampleSpec3D {
+  const next = specToForm(spec)
+  if (enabled) {
+    next.additives = defaultAdditives()
+    next.numerics.physics = 'L3'
+  } else {
+    delete next.additives
+    next.numerics.physics = 'L1'
+  }
+  return next
+}
+
+/** Change additive mode; leaving 'acc' drops every accelerator-only key. */
+export function setAdditivesMode(spec: SampleSpec3D, mode: Additives['mode']): SampleSpec3D {
+  const next = specToForm(spec)
+  if (!next.additives) return next
+  next.additives.mode = mode
+  if (mode === 'cl_ndr') for (const key of ACC_KEYS) delete next.additives[key]
+  return next
+}
+
+/** Shallow patch for simple additive values (suppressor, pulse_coverage). */
+export function patchAdditives(spec: SampleSpec3D, patch: Partial<Additives>): SampleSpec3D {
+  const next = specToForm(spec)
+  if (!next.additives) return next
+  next.additives = { ...next.additives, ...patch }
+  return next
+}
+
+/** Empty/invalid input removes the key so the engine default is used (never "" or NaN). */
+export function setAdditivesNumber(
+  spec: SampleSpec3D, key: AdditiveNumberKey, raw: unknown
+): SampleSpec3D {
+  const next = specToForm(spec)
+  if (!next.additives) return next
+  // coerceParam maps whitespace-only to 0; an empty field must mean "engine default".
+  if (typeof raw === 'string' && raw.trim() === '') {
+    delete next.additives[key]
+    return next
+  }
+  const value = coerceParam(ADDITIVE_NUMBER_SPECS[key], raw).value
+  if (typeof value === 'number' && Number.isFinite(value)) next.additives[key] = value
+  else delete next.additives[key]
+  return next
+}
+
+/** Resolved-only settings are meaningless for the net model; reset them on switch-back. */
+export function setPulseModel(spec: SampleSpec3D, model: 'net' | 'resolved'): SampleSpec3D {
+  const next = specToForm(spec)
+  next.numerics.pulse_model = model
+  if (model === 'net' && next.additives) {
+    next.additives.pulse_coverage = 'mean'
+    next.additives.k_strip_s = 0
+    next.additives.k_strip_a = 0
+    next.additives.strip_return_a = 1
+  }
+  return next
+}
+
 export function recipeMath(step: Step3D): { net: number; duty: number } {
   const period = step.t_forward_ms + step.t_reverse_ms + step.t_off_ms
   return period > 0
