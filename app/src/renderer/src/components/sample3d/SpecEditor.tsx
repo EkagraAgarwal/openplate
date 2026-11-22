@@ -1,6 +1,18 @@
 import { useState } from 'react'
 import type { FieldIssue, Plan3D, SampleSpec3D } from '../../api/client3d'
-import { defaultSpec3D, parseSpec, recipeMath, specToForm } from '../../lib/sample3d'
+import {
+  ACC_KEYS,
+  defaultSpec3D,
+  parseSpec,
+  patchAdditives,
+  recipeMath,
+  setAdditivesEnabled,
+  setAdditivesMode,
+  setAdditivesNumber,
+  setPulseModel,
+  specToForm,
+  type AdditiveNumberKey
+} from '../../lib/sample3d'
 import { LayoutPreview } from './LayoutPreview'
 
 /** Spec fields the L1 sample pipeline does not read yet (kept in the spec for later physics levels). */
@@ -10,13 +22,30 @@ const L1_UNUSED = {
     'Not used by L1 yet: orientation, up_edge (no buoyancy), taped, area_cm2. Optional coupon position (centred, x across, y up) selects local current, Nernst layer and efficiency from the calibrated DC coupon model; beaker stir (%) is used only by that model (blank uses its default). Without a position, delta_um sets the bulk plane. stir_shear_1_s (if set, EXPERIMENTAL) adds resolved shear flow with the lid at the bulk plane. stir_angle_deg sets the shear direction in die axes. Sheared runs use full periodic tiles and are ~20x slower (quick_trench: 24 min instead of ~1 min).'
 }
 
+/** Cl is inert in L1; with L3 additives it feeds the suppressor chemistry. */
+const L3_BATH_NOTE =
+  'With L3 additives, bath.cl_ppm sets the bulk chloride concentration (ppm = mg/L). Without additives the Cl value is unused.'
+
 const FIELD_LABELS: Record<string, string> = {
   'layout.die_um.0': 'die width x (µm)',
   'layout.die_um.1': 'die height y (µm)',
   'setup.coupon_position_cm': 'coupon position x, y (cm)',
   'setup.stir_pct': 'beaker stir (%)',
   'numerics.pulse_model': 'pulse model',
-  'numerics.pulse_C_dl_uF_cm2': 'double layer (uF/cm2, resolved only)'
+  'numerics.pulse_C_dl_uF_cm2': 'double layer (uF/cm2, resolved only)',
+  'additives.mode': 'additive mode',
+  'additives.suppressor': 'suppressor (Cl-gated)',
+  'additives.s_bulk_mol_cm3': 'bulk suppressor s (mol/cm³)',
+  'additives.c_acc_mol_cm3': 'bulk accelerator c (mol/cm³)',
+  'additives.Gamma_acc_mol_cm2': 'accelerator site density (mol/cm²)',
+  'additives.k_acc_cm3_mol_s': 'accelerator adsorption k (cm³/mol/s)',
+  'additives.b_acc': 'accelerator interaction b',
+  'additives.k_inc_a_1_cm': 'accelerator incorporation k (1/cm)',
+  'additives.D_acc_cm2_s': 'accelerator diffusivity (cm²/s)',
+  'additives.pulse_coverage': 'pulse coverage',
+  'additives.k_strip_s': 'suppressor strip k (1/s per A/cm²)',
+  'additives.k_strip_a': 'accelerator strip k (1/s per A/cm²)',
+  'additives.strip_return_a': 'accelerator return fraction'
 }
 
 export function SpecEditor({
@@ -37,6 +66,7 @@ export function SpecEditor({
   const [tab, setTab] = useState('form')
   const [raw, setRaw] = useState('')
   const [jsonError, setJsonError] = useState('')
+  const [additivesOpen, setAdditivesOpen] = useState(() => Boolean(spec.additives))
   const update = (path: string, value: unknown): void => {
     const next = specToForm(spec)
     const keys = path.split('.')
@@ -104,6 +134,35 @@ export function SpecEditor({
   }
   const fields = (prefix: string, obj: Record<string, unknown>, names: string[]) =>
     names.map((key) => field(`${prefix}.${key}`, obj[key]))
+  const additiveIssue = (path: string) =>
+    errors.find((e) => {
+      const name = e.field.replace(/^spec\./, '').replace(/\[(\d+)\]/g, '.$1')
+      return name === path || path.startsWith(`${name}.`)
+    })
+  const additiveNumber = (key: AdditiveNumberKey) => {
+    const path = `additives.${key}`
+    const issue = additiveIssue(path)
+    return (
+      <label key={path} className={`sample3d-field ${issue ? 'sample3d-invalid' : ''}`}>
+        <span>{FIELD_LABELS[path] ?? key}</span>
+        <input
+          aria-label={path}
+          aria-invalid={Boolean(issue)}
+          type="number"
+          step="any"
+          placeholder="engine default"
+          value={spec.additives?.[key] ?? ''}
+          onChange={(e) => onChange(setAdditivesNumber(spec, key, e.target.value))}
+        />
+        {issue && (
+          <span className="field-error">
+            {issue.message} {issue.fix}
+          </span>
+        )}
+      </label>
+    )
+  }
+  const pulseModelIssue = additiveIssue('numerics.pulse_model')
   return (
     <section className="card">
       <div className="row gap">
@@ -334,7 +393,7 @@ export function SpecEditor({
               {field('bath.name', spec.bath.name, undefined, true)}
               {fields('bath', spec.bath, ['cu_g_L', 'h2so4_g_L', 'cl_ppm', 'temperature_C'])}
             </div>
-            <p className="muted">{L1_UNUSED.bath}</p>
+            <p className="muted">{spec.additives ? L3_BATH_NOTE : L1_UNUSED.bath}</p>
           </fieldset>
           <fieldset>
             <legend>Setup</legend>
@@ -373,10 +432,23 @@ export function SpecEditor({
                 'fine'
               ])}
               {field('numerics.dx_um', spec.numerics.dx_um)}
-              {field('numerics.pulse_model', (spec.numerics.pulse_model as string | undefined) ?? 'net', [
-                'net',
-                'resolved'
-              ])}
+              <label className={`sample3d-field ${pulseModelIssue ? 'sample3d-invalid' : ''}`}>
+                <span>{FIELD_LABELS['numerics.pulse_model']}</span>
+                <select
+                  aria-label="numerics.pulse_model"
+                  aria-invalid={Boolean(pulseModelIssue)}
+                  value={(spec.numerics.pulse_model as string | undefined) ?? 'net'}
+                  onChange={(e) => onChange(setPulseModel(spec, e.target.value as 'net' | 'resolved'))}
+                >
+                  <option>net</option>
+                  <option>resolved</option>
+                </select>
+                {pulseModelIssue && (
+                  <span className="field-error">
+                    {pulseModelIssue.message} {pulseModelIssue.fix}
+                  </span>
+                )}
+              </label>
               {field('numerics.pulse_C_dl_uF_cm2', (spec.numerics.pulse_C_dl_uF_cm2 as number | undefined) ?? 30)}
             </div>
             <p className="muted">
@@ -385,6 +457,95 @@ export function SpecEditor({
               (0 turns it off). Without additives the two differ by ~0.01 in floor/field at 30 uF/cm2.
             </p>
           </fieldset>
+          <details
+            className="sample3d-additives"
+            open={additivesOpen}
+            onToggle={(e) => setAdditivesOpen(e.currentTarget.open)}
+          >
+            <summary>Additives (L3, uncalibrated)</summary>
+            <label className="sample3d-check">
+              <input
+                type="checkbox"
+                checked={Boolean(spec.additives)}
+                onChange={(e) => onChange(setAdditivesEnabled(spec, e.target.checked))}
+              />{' '}
+              Enable additives
+            </label>
+            {spec.additives ? (
+              <>
+                <div className="sample3d-fields">
+                  <label className="sample3d-field">
+                    <span>additive mode</span>
+                    <select
+                      aria-label="additives.mode"
+                      value={spec.additives.mode}
+                      onChange={(e) =>
+                        onChange(setAdditivesMode(spec, e.target.value as 'cl_ndr' | 'acc'))
+                      }
+                    >
+                      <option value="cl_ndr">cl_ndr</option>
+                      <option value="acc">acc</option>
+                    </select>
+                  </label>
+                  <label className="sample3d-check">
+                    <input
+                      type="checkbox"
+                      checked={spec.additives.suppressor ?? true}
+                      onChange={(e) =>
+                        onChange(patchAdditives(spec, { suppressor: e.target.checked }))
+                      }
+                    />{' '}
+                    suppressor (Cl-gated)
+                  </label>
+                  {additiveNumber('s_bulk_mol_cm3')}
+                </div>
+                {spec.additives.mode === 'acc' && (
+                  <fieldset>
+                    <legend>Accelerator transport (acc only)</legend>
+                    <div className="sample3d-fields">{ACC_KEYS.map(additiveNumber)}</div>
+                  </fieldset>
+                )}
+                <fieldset>
+                  <legend>Pulse coverage</legend>
+                  <div className="sample3d-fields">
+                    <label className="sample3d-field">
+                      <span>pulse coverage</span>
+                      <select
+                        aria-label="additives.pulse_coverage"
+                        value={spec.additives.pulse_coverage ?? 'mean'}
+                        disabled={spec.numerics.pulse_model !== 'resolved'}
+                        onChange={(e) =>
+                          onChange(patchAdditives(spec, {
+                            pulse_coverage: e.target.value as 'mean' | 'resolved'
+                          }))
+                        }
+                      >
+                        <option value="mean">mean</option>
+                        <option value="resolved">resolved</option>
+                      </select>
+                    </label>
+                  </div>
+                  {spec.numerics.pulse_model !== 'resolved' && (
+                    <p className="muted small">
+                      Set numerics pulse model to resolved to enable resolved additive coverage.
+                    </p>
+                  )}
+                  {spec.additives.pulse_coverage === 'resolved' && (
+                    <div className="sample3d-fields">
+                      {additiveNumber('k_strip_s')}
+                      {additiveNumber('k_strip_a')}
+                      {additiveNumber('strip_return_a')}
+                    </div>
+                  )}
+                </fieldset>
+              </>
+            ) : (
+              <p className="muted small">
+                Off: numerics.physics = L1 and the spec has no additives object. Enable to add the
+                uncalibrated L3 chemistry block (mode, suppressor and coverage).
+              </p>
+            )}
+          </details>
         </>
       )}
       <LayoutPreview layout={spec.layout} tiles={tiles} />
