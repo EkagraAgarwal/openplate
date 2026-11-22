@@ -197,6 +197,9 @@ class Additives(StrictModel):
     k_inc_a_1_cm: Nonnegative | None = None
     D_acc_cm2_s: Positive | None = None
     pulse_coverage: Literal["mean", "resolved"] = "mean"
+    # Contract 10i: carried CEAC accelerator coverage (Params.ceac / Params.ceac_smooth).
+    ceac: bool = False
+    ceac_smooth: bool = False
     k_strip_s: Nonnegative = 0
     k_strip_a: Nonnegative = 0
     strip_return_a: Annotated[float, Field(ge=0, le=1)] = 1
@@ -210,6 +213,14 @@ class Additives(StrictModel):
                 if value is not None:
                     invalid(self, [name], value,
                             f'additives.{name} is accelerator-only: set mode="acc" or remove it')
+        if self.ceac and self.pulse_coverage != 'mean':
+            invalid(self, ['ceac'], self.ceac,
+                    'additives.ceac requires additives.pulse_coverage="mean"; '
+                    'set pulse_coverage to "mean" or use ceac=false')
+        if self.ceac_smooth and not self.ceac:
+            invalid(self, ['ceac_smooth'], self.ceac_smooth,
+                    'additives.ceac_smooth requires additives.ceac=true; '
+                    'set ceac to true or use ceac_smooth=false')
         if self.pulse_coverage != 'resolved' and self.k_strip_s > 0:
             invalid(self, ['k_strip_s'], self.k_strip_s,
                     'additives.k_strip_s > 0 requires additives.pulse_coverage="resolved"; '

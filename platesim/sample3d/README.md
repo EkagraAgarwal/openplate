@@ -118,6 +118,14 @@ defaults and are flagged `uncalibrated`; the manifest records the mode actually
 run and the per-step additive coverages. `L2` is not supported; a spec without
 `additives` keeps the L1 behaviour unchanged.
 
+`additives.ceac` opts into the uncalibrated carried CEAC accelerator coverage
+(`Params.ceac`); it requires `pulse_coverage="mean"` and works with `cl_ndr` or
+`acc`. `additives.ceac_smooth` additionally smooths the front curvature and requires
+`ceac`. Curvature is meaningful only for local radii >= 3-4 dx, so use `dx_um <= 4`
+for features under 50 um; both flags default to false and leave the `spec_hash`
+and numbers unchanged. The manifest summary records this resolution note, and the
+last carried `theta_a_floor`/`theta_a_field` values are reported per step.
+
 ## Optional resolved shear
 
 `setup.stir_shear_1_s=None` preserves the no-flow solver path (no `flow` argument).

@@ -43,6 +43,8 @@ def _spec_params(spec: SampleSpec):
     overrides.update({name: value for name, value in mapping if value is not None})
     overrides.update(pulse_coverage=additives.pulse_coverage, k_strip_s=additives.k_strip_s,
                      k_strip_a=additives.k_strip_a, strip_return_a=additives.strip_return_a)
+    # Contract 10i: carried CEAC accelerator coverage (both default to False).
+    overrides.update(ceac=additives.ceac, ceac_smooth=additives.ceac_smooth)
     return replace(params, **overrides)
 
 
@@ -101,6 +103,9 @@ def _duration(step):
 
 _BUOYANCY_NOTE = ('Solutal buoyancy: expansion 0.15 L/mol [J], uncalibrated; modelled across-trench '
                   'buoyancy overshot narrow-trench floor/field in validation.')
+
+_CEAC_NOTE = ('CEAC carried accelerator coverage (uncalibrated); curvature resolved only for '
+              'radii >= 3-4 dx.')
 
 
 def _buoyancy_assumption():
@@ -344,6 +349,7 @@ def _run_one(spec, plan, out_dir, progress=None) -> dict:
     local_conditions = []
     pulse_reports = []
     additives_reports = []
+    theta_a_reports = []
     for index, (step, duration) in enumerate(zip(spec.recipe.steps, durations)):
         def report(fraction, message):
             if progress is not None:
@@ -379,6 +385,18 @@ def _run_one(spec, plan, out_dir, progress=None) -> dict:
                             n_frames=spec.numerics.frames_per_step, backend='numpy', field_mask=field_mask, progress=report,
                             **flow_kwargs, **pulse_kwargs)
         psi = step_result['psi']
+        # Contract 10i: CEAC carries theta_a_floor/field in the series (or the summary).
+        # The quantity names below are emitted only if not already present.
+        summary_add = step_result.get('summary', {}).get('additives', {})
+        last_theta_a = {}
+        for name in ('theta_a_floor', 'theta_a_field'):
+            values = step_result.get('series', {}).get(name)
+            if values:
+                last_theta_a[name] = float(values[-1])
+            elif isinstance(summary_add, dict) and isinstance(summary_add.get(name), (int, float)):
+                last_theta_a[name] = float(summary_add[name])
+        if last_theta_a:
+            theta_a_reports.append((index + 1, last_theta_a))
         if 'pulse' in step_result.get('summary', {}):
             pulse_reports.append((index + 1, step_result['summary']['pulse']))
         if 'additives' in step_result.get('summary', {}):
@@ -430,6 +448,13 @@ def _run_one(spec, plan, out_dir, progress=None) -> dict:
     for index, additive_report in additives_reports:
         for name, value in _additive_quantities(index, additive_report):
             quantity(name, value, _additive_unit(name))
+    reported_names = {q.name for q in quantities}
+    for index, last_theta_a in theta_a_reports:
+        for name, value in last_theta_a.items():
+            qname = f'step_{index}.{name}'
+            if qname not in reported_names:
+                quantity(qname, value, '1')
+                reported_names.add(qname)
     for name in ('field_um', 'floor_um', 'wall_um', 'overburden_um'):
         quantity(name, features.get(name), 'um')
     quantity('floor_over_field', features.get('floor_over_field'), '1')
@@ -464,6 +489,8 @@ def _run_one(spec, plan, out_dir, progress=None) -> dict:
     else:
         lead = (f'Uncalibrated L3 (additives mode "{spec.additives.mode}"), CPU; '
                 'all additive quantities are uncalibrated engine defaults. ')
+        if spec.additives.ceac:
+            lead += _CEAC_NOTE + ' '
     if spec.setup.stir_shear_1_s:
         lead += _shear_assumption(spec) + ' '
     if spec.setup.buoyancy:
@@ -533,6 +560,8 @@ def run_sample(spec: SampleSpec | dict | str, out_dir, progress=None, *, field_m
                   + _shear_assumption(spec) + ' ')
     else:
         head = f'Uncalibrated CPU L3 (additives mode "{spec.additives.mode}").'
+        if spec.additives.ceac:
+            head += ' ' + _CEAC_NOTE
         no_add = ('All additive quantities are uncalibrated engine defaults. '
                   + (_shear_assumption(spec) + ' ' if spec.setup.stir_shear_1_s else ''))
     buoy_note = (_buoyancy_assumption() + ' ') if spec.setup.buoyancy else ''
