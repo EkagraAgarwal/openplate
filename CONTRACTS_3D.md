@@ -180,6 +180,7 @@ recipe:   {steps: [Step]}
 bath:     {name: str = "EP-EC1-65L", cu_g_L, h2so4_g_L, cl_ppm, temperature_C}
 setup:    {orientation: "vertical"|"face_up"|"face_down" = "vertical", up_edge: "+x"|"-x"|"+y"|"-y" = "+y",
            stir_shear_1_s: float | None, stir_angle_deg: float = 0, delta_um: float = 64,
+           buoyancy: bool = False,                       # contract 10h
            taped: bool, area_cm2: float}
 numerics: {quality: "preview"|"standard"|"fine" = "standard", physics: "L1"|"L2"|"L3" = "L1",
            dx_um: float | None, device: "auto"|"cpu"|int = "auto", use_surrogate: bool = False,
@@ -220,6 +221,27 @@ Rules:
 - Every L3 quantity carries flag "uncalibrated" (or "preview"); the manifest notes name the additive mode.
 - Per step, `run_tile`'s `summary['additives']` (theta means, and `pulse_coverage` diagnostics when
   resolved) is kept with the per-tile step reports, like the pulse reports.
+
+**Contract 10h: opt-in solutal buoyancy in sample runs (2026-11-22).** Uncalibrated.
+
+```
+setup.buoyancy: bool = False     # new; False = unchanged behaviour
+```
+
+Rules:
+- `buoyancy=True` passes `run_tile(flow=dict(gravity_dir=g, beta_L_mol=0.15, ...))` (run_tile defaults for
+  beta, nu, update_every; lid at the bulk plane as for shear). Combined with `stir_shear_1_s` in one flow dict.
+- Gravity direction from the coupon orientation, in die axes (x, y in the die plane, z out of the die face):
+  `vertical`: in-plane, pointing away from `up_edge` (`+y` -> (0, -1, 0), `-y` -> (0, +1, 0), `+x` -> (-1, 0, 0),
+  `-x` -> (+1, 0, 0)); `face_up`: (0, 0, -1); `face_down`: (0, 0, +1). In-plane components are rotated
+  into tile axes with the same rotation as the shear direction (`_tile_rotation`).
+- Like resolved shear, buoyant runs use full periodic tiles (mirrored tiles have no-flux sides that an
+  in-plane flow would cross) and skip the trench-end diagnostic; a gravity component crossing a remaining
+  symmetry boundary is a ValueError naming the tile and the fix.
+- A spec with `buoyancy` False (or absent) is unchanged in every respect: same tiles, same numbers, same
+  `spec_hash` (the key is omitted from the canonical JSON when False).
+- Manifest summary states the assumption: solutal expansion 0.15 L/mol [J], uncalibrated; in the Trench 1
+  validation, modelled across-trench buoyancy overshot the narrow-trench floor/field (research notes).
 
 Validation errors must name the field path, the value, the allowed range and a suggested fix.
 `spec_hash(spec) -> str` is the SHA-256 of the canonical JSON (sorted keys, defaults filled).
