@@ -84,7 +84,8 @@ def test_schema(tmp_path):
     export_schema(path)
     schema = json.loads(path.read_text())
     assert set(schema["$defs"]["SampleSpec"]["properties"]) == {
-        "layout", "etch", "recipe", "bath", "setup", "numerics"}
+        "layout", "etch", "recipe", "bath", "setup", "numerics", "additives"}
+    assert "Additives" in schema["$defs"]
     assert "Manifest" in schema["$defs"]
 
 

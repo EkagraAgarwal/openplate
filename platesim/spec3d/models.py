@@ -184,6 +184,46 @@ class Etch(StrictModel):
     layers: dict[str, EtchLayer] = Field(default_factory=dict)
 
 
+class Additives(StrictModel):
+    """Uncalibrated L3 engine API (tile3d phases 1, 2 and 4A); None means Params default."""
+    mode: Literal["cl_ndr", "acc"]
+    suppressor: bool = True
+    s_bulk_mol_cm3: Positive | None = None
+    c_acc_mol_cm3: Positive | None = None
+    Gamma_acc_mol_cm2: Positive | None = None
+    k_acc_cm3_mol_s: Positive | None = None
+    b_acc: Annotated[float, Field(ge=-1)] | None = None
+    k_inc_a_1_cm: Nonnegative | None = None
+    D_acc_cm2_s: Positive | None = None
+    pulse_coverage: Literal["mean", "resolved"] = "mean"
+    k_strip_s: Nonnegative = 0
+    k_strip_a: Nonnegative = 0
+    strip_return_a: Annotated[float, Field(ge=0, le=1)] = 1
+
+    @model_validator(mode="after")
+    def accelerators(self):
+        if self.mode == 'cl_ndr':
+            for name in ('c_acc_mol_cm3', 'Gamma_acc_mol_cm2', 'k_acc_cm3_mol_s',
+                         'b_acc', 'k_inc_a_1_cm', 'D_acc_cm2_s'):
+                value = getattr(self, name)
+                if value is not None:
+                    invalid(self, [name], value,
+                            f'additives.{name} is accelerator-only: set mode="acc" or remove it')
+        if self.pulse_coverage != 'resolved' and self.k_strip_s > 0:
+            invalid(self, ['k_strip_s'], self.k_strip_s,
+                    'additives.k_strip_s > 0 requires additives.pulse_coverage="resolved"; '
+                    'set pulse_coverage to "resolved" (and numerics.pulse_model="resolved") or use 0')
+        if self.pulse_coverage != 'resolved' and self.k_strip_a > 0:
+            invalid(self, ['k_strip_a'], self.k_strip_a,
+                    'additives.k_strip_a > 0 requires additives.pulse_coverage="resolved"; '
+                    'set pulse_coverage to "resolved" (and numerics.pulse_model="resolved") or use 0')
+        if self.pulse_coverage == 'mean' and self.strip_return_a != 1:
+            invalid(self, ['strip_return_a'], self.strip_return_a,
+                    'additives.strip_return_a != 1 requires additives.pulse_coverage="resolved"; '
+                    'set pulse_coverage to "resolved" or use the default 1')
+        return self
+
+
 class SampleSpec(StrictModel):
     layout: Layout
     etch: Etch
@@ -191,6 +231,25 @@ class SampleSpec(StrictModel):
     bath: Bath
     setup: Setup
     numerics: Numerics = Field(default_factory=Numerics)
+    additives: Additives | None = None
+
+    @model_validator(mode="after")
+    def additives_physics(self):
+        present = self.additives is not None
+        l3 = self.numerics.physics == 'L3'
+        if present and not l3:
+            invalid(self, ['additives'], self.additives,
+                    'additives requires numerics.physics="L3"; set numerics.physics to "L3" or remove additives')
+        if l3 and not present:
+            invalid(self, ['numerics', 'physics'], self.numerics.physics,
+                    'numerics.physics="L3" requires additives; set additives or use physics="L1"')
+        additives = self.additives
+        if (additives is not None and additives.pulse_coverage == 'resolved'
+                and self.numerics.pulse_model != 'resolved'):
+            invalid(self, ['additives', 'pulse_coverage'], additives.pulse_coverage,
+                    'additives.pulse_coverage="resolved" requires numerics.pulse_model="resolved"; '
+                    'set numerics.pulse_model to "resolved" or use pulse_coverage="mean"')
+        return self
 
 
 class Quantity(StrictModel):

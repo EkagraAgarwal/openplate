@@ -108,6 +108,15 @@ pulse timing beyond its cycle average, chloride/additives, seed thinning,
 orientation and up_edge (buoyancy) are not modelled. Conductivity and kinetics
 remain uncalibrated engine defaults.
 
+## Physics "L3" (additives)
+
+Set `numerics.physics="L3"` together with an `additives` block in the sample
+spec to run the uncalibrated 3-D additive engine (`cl_ndr`, or `acc` with a
+transported accelerator). All additive constants and coverages use engine
+defaults and are flagged `uncalibrated`; the manifest records the mode actually
+run and the per-step additive coverages. `L2` is not supported; a spec without
+`additives` keeps the L1 behaviour unchanged.
+
 ## Optional resolved shear
 
 `setup.stir_shear_1_s=None` preserves the no-flow solver path (no `flow` argument).
