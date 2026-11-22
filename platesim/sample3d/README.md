@@ -104,9 +104,10 @@ width-dependent depths see the full feature. Circle radius is derived from
 diameter. Rendering metadata is filtered to the strict Artifact schema.
 Only CPU L1 without a surrogate is supported. Net current, temperature, bulk
 Cu and fully dissociated acid migration enhancement are mapped to the engine;
-pulse timing beyond its cycle average, chloride/additives, seed thinning,
-orientation and up_edge (buoyancy) are not modelled. Conductivity and kinetics
-remain uncalibrated engine defaults.
+pulse timing beyond its cycle average, chloride/additives and seed thinning are
+not modelled. Orientation and up_edge select the gravity direction when optional
+buoyancy is enabled (see below). Conductivity and kinetics remain uncalibrated
+engine defaults.
 
 ## Physics "L3" (additives)
 
@@ -139,3 +140,18 @@ rejected before any tile runs. `stir_shear_1_s = 0` is the same as None.
 field). In the T2.5 comparison that convention differed from the 2-D engine's
 domain-top lid by +0.03 in floor/field at 50/s, while a domain-top lid matched;
 a lid-height option for sample runs is not wired yet.
+
+## Optional solutal buoyancy
+
+`setup.buoyancy=True` opts into the uncalibrated solutal (Boussinesq) buoyancy
+flow; `False` (the default, and an absent key) leaves the no-flow path and the
+`spec_hash` unchanged. Gravity comes from `setup.orientation` / `up_edge` in die
+axes: `vertical` points away from `up_edge` in the die plane, `face_up` is
+(0, 0, -1) and `face_down` is (0, 0, +1); the in-plane part is rotated into tile
+axes exactly like the shear direction. Buoyancy uses the full periodic tiles
+(and omits the trench-end diagnostic) just like resolved shear, and the two can
+be combined in one flow dict; an in-plane component crossing a remaining no-flux
+side is rejected. The solutal expansion is 0.15 L/mol [J], uncalibrated; in the
+Trench 1 validation the modelled across-trench buoyancy overshot the
+narrow-trench floor/field, so treat these results as qualitative. The manifest
+summary records this assumption.

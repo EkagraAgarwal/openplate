@@ -99,9 +99,22 @@ def _duration(step):
             else step.charge_C_cm2 * 1000 / step.j_net_mA_cm2)
 
 
+_BUOYANCY_NOTE = ('Solutal buoyancy: expansion 0.15 L/mol [J], uncalibrated; modelled across-trench '
+                  'buoyancy overshot narrow-trench floor/field in validation.')
+
+
+def _buoyancy_assumption():
+    return _BUOYANCY_NOTE
+
+
 def _shear_assumption(spec):
+    # The shear-only text stays byte-identical; with buoyancy on, the (new) trailing
+    # clause is replaced by the separate buoyancy sentence recorded in the manifest.
+    tail = ('no buoyancy.' if not spec.setup.buoyancy
+            else 'combined with the solutal buoyancy noted below.')
     return (f'Resolved Couette shear G={spec.setup.stir_shear_1_s:g} 1/s at angle '
-            f'{spec.setup.stir_angle_deg:g} deg (die axes); EXPERIMENTAL: lid at the bulk plane (vs 2-D domain-top lid: +0.03 floor/field at 50/s in T2.5); no buoyancy.')
+            f'{spec.setup.stir_angle_deg:g} deg (die axes); EXPERIMENTAL: lid at the bulk plane '
+            f'(vs 2-D domain-top lid: +0.03 floor/field at 50/s in T2.5); {tail}')
 
 
 def _coupon_assumption(spec):
@@ -117,23 +130,58 @@ def _tile_rotation(plan):
     return float(plan.get('rotation_from_die_deg', 0.0))
 
 
+def _gravity_die(setup) -> tuple[float, float, float]:
+    """Gravity unit vector in die axes: x,y in the die plane, z out of the die face."""
+    if setup.orientation == 'face_up':
+        return (0., 0., -1.)
+    if setup.orientation == 'face_down':
+        return (0., 0., 1.)
+    return {'+y': (0., -1., 0.), '-y': (0., 1., 0.),
+            '+x': (-1., 0., 0.), '-x': (1., 0., 0.)}[setup.up_edge]
+
+
+def _gravity_tile(setup, plan) -> tuple[float, float, float]:
+    """Rotate the in-plane gravity vector into tile axes (same rule as shear); z stays."""
+    gx, gy, gz = _gravity_die(setup)
+    angle = np.deg2rad(-_tile_rotation(plan))
+    c, s = float(np.cos(angle)), float(np.sin(angle))
+    return (gx * c - gy * s, gx * s + gy * c, gz)
+
+
+def _check_inplane_flow(plan, axis, component, message, fix):
+    """Reject a nonzero in-plane flow component crossing a remaining no-flux side."""
+    boundaries = [f'{axis}_{side}' for side in ('lo', 'hi')
+                  if plan['side_bc'].get(f'{axis}_{side}') == 'symmetry']
+    if boundaries and abs(component) > 1e-12:
+        raise ValueError(f'{message} crosses symmetry/no-flux boundary {boundaries} '
+                         f'of tile {plan["tile_id"]}; fix: {fix}')
+
+
 def _tile_flow(spec, plan):
-    """Rotate die-frame shear and reject flow across any no-flux tile side."""
+    """Rotate die-frame shear/gravity into tile axes and reject flow across no-flux sides."""
     angle = np.deg2rad(spec.setup.stir_angle_deg - _tile_rotation(plan))
     direction = (float(np.cos(angle)), float(np.sin(angle)))
-    if spec.setup.stir_shear_1_s > 0:
+    if (spec.setup.stir_shear_1_s or 0) > 0:
         for axis, component in zip('xy', direction):
-            boundaries = [f'{axis}_{side}' for side in ('lo', 'hi')
-                          if plan['side_bc'].get(f'{axis}_{side}') == 'symmetry']
-            if boundaries and abs(component) > 1e-12:
-                raise ValueError(
-                    f'setup.stir_shear_1_s={spec.setup.stir_shear_1_s:g}: resolved shear '
-                    f'crosses symmetry/no-flux boundary {boundaries} of tile {plan["tile_id"]}; '
-                    'fix: use stir_angle_deg along the symmetry axis, or a full tile '
-                    '(non-mirrored periodic array cell). Quarter tiles and trench-end '
-                    'diagnostics have no compatible nonzero in-plane shear direction.')
-    return dict(shear_rate_s=spec.setup.stir_shear_1_s, shear_dir=direction,
+            _check_inplane_flow(
+                plan, axis, component,
+                f'setup.stir_shear_1_s={spec.setup.stir_shear_1_s:g}: resolved shear',
+                'use stir_angle_deg along the symmetry axis, or a full tile '
+                '(non-mirrored periodic array cell). Quarter tiles and trench-end '
+                'diagnostics have no compatible nonzero in-plane shear direction.')
+    flow = dict(shear_rate_s=spec.setup.stir_shear_1_s or 0, shear_dir=direction,
                 lid_um=None, update_every=5, axial_net_flux_zero=None)
+    if spec.setup.buoyancy:
+        gravity = _gravity_tile(spec.setup, plan)
+        for axis, component in zip('xy', gravity[:2]):
+            _check_inplane_flow(
+                plan, axis, component,
+                f'setup.buoyancy=True: gravity component {component:g} along {axis}',
+                'use a full tile periodic in x and y (non-mirrored periodic array '
+                'cell) or set setup.buoyancy=False; face_up/face_down have no '
+                'in-plane gravity component.')
+        flow['gravity_dir'] = gravity
+    return flow
 
 
 def plan_tile(spec: SampleSpec, *, field_margin_um=None) -> list[dict]:
@@ -150,10 +198,13 @@ def plan_tile(spec: SampleSpec, *, field_margin_um=None) -> list[dict]:
                      ['j_local_mA_cm2'] * 1e-3 * _duration(s) for s in spec.recipe.steps)
     plans = plan_features(spec, charge * MFAC * 1e4,
                           sum(_duration(s) for s in spec.recipe.steps), field_margin_um)
-    if spec.setup.stir_shear_1_s:  # 0 and None both mean no resolved shear
+    if spec.setup.stir_shear_1_s or spec.setup.buoyancy:  # 0/None mean no resolved shear
         for plan in plans:
             _tile_flow(spec, plan)  # validate every tile before creating output or solving
-            plan['assumptions'].append(_shear_assumption(spec))
+            if spec.setup.stir_shear_1_s:
+                plan['assumptions'].append(_shear_assumption(spec))
+            if spec.setup.buoyancy:
+                plan['assumptions'].append(_buoyancy_assumption())
     return plans
 
 
@@ -273,7 +324,8 @@ def _run_one(spec, plan, out_dir, progress=None) -> dict:
         raise ValueError('numerics: only physics="L1" or "L3", use_surrogate=False supported; fix these fields.')
     if isinstance(spec.numerics.device, int):
         raise ValueError('numerics.device: L1 sample pipeline is CPU-only; fix: use "cpu" or "auto".')
-    flow_kwargs = {} if not spec.setup.stir_shear_1_s else dict(flow=_tile_flow(spec, plan))
+    flowing = bool(spec.setup.stir_shear_1_s) or spec.setup.buoyancy
+    flow_kwargs = dict(flow=_tile_flow(spec, plan)) if flowing else {}
     bare, grid = build_geometry(spec, plan)
     psi = bare.copy()
     out = Path(out_dir)
@@ -414,6 +466,8 @@ def _run_one(spec, plan, out_dir, progress=None) -> dict:
                 'all additive quantities are uncalibrated engine defaults. ')
     if spec.setup.stir_shear_1_s:
         lead += _shear_assumption(spec) + ' '
+    if spec.setup.buoyancy:
+        lead += _buoyancy_assumption() + ' '
     manifest = Manifest(spec_hash=spec_hash(spec), code_version=__version__, backend='numpy',
         device='cpu', dx_um=grid.dx * 1e4, physics=spec.numerics.physics, created_utc=datetime.now(timezone.utc),
         quantities=quantities, checks=[Check(name='faraday_error_rel', value=error, limit=.05, passed=error <= .05),
@@ -481,13 +535,14 @@ def run_sample(spec: SampleSpec | dict | str, out_dir, progress=None, *, field_m
         head = f'Uncalibrated CPU L3 (additives mode "{spec.additives.mode}").'
         no_add = ('All additive quantities are uncalibrated engine defaults. '
                   + (_shear_assumption(spec) + ' ' if spec.setup.stir_shear_1_s else ''))
+    buoy_note = (_buoyancy_assumption() + ' ') if spec.setup.buoyancy else ''
     payload = dict(template, dx_um=max(p['dx_um'] for p in plans), quantities=quantities,
                    checks=checks, artifacts=artifacts,
                    summary_text=head + ' Mid-length tiles are the profile result. '
                    'Mirrored renders/analysis reconstruct centre cuts; end cuts are not reflected. '
                    'Weights count physical copies, not symmetry sectors; do not sum overlapping diagnostic volumes. '
                    'Deposited volumes are simulated-sector volumes, while void analysis uses the reflected view. '
-                   + no_add + _coupon_assumption(spec) + ' | '.join(descriptions))
+                   + no_add + buoy_note + _coupon_assumption(spec) + ' | '.join(descriptions))
     payload = Manifest.model_validate(payload).model_dump(mode='json')
     temporary = out / 'manifest.json.tmp'
     temporary.write_text(json.dumps(payload, indent=2, allow_nan=False), encoding='utf-8')

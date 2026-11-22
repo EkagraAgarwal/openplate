@@ -87,5 +87,10 @@ def spec_hash(spec: SampleSpec | dict) -> str:
     # omitted the key or supplied it explicitly as null.
     if data.get("additives") is None:
         data.pop("additives", None)
+    # Likewise, a spec without solutal buoyancy keeps its exact pre-10h hash,
+    # whether the key was omitted or supplied explicitly as false.
+    setup = data.get("setup")
+    if isinstance(setup, dict) and setup.get("buoyancy") is False:
+        setup.pop("buoyancy", None)
     canonical = json.dumps(data, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
