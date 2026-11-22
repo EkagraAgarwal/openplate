@@ -66,6 +66,15 @@ export function parseSpec(text: string): SampleSpec3D {
     throw new Error('Expected layout, etch, recipe, bath, setup and numerics objects.')
   return value
 }
+
+/** Solutal buoyancy (contract 10h): opt-in, off removes the key to keep specs minimal. */
+export function setBuoyancy(spec: SampleSpec3D, on: boolean): SampleSpec3D {
+  const next = specToForm(spec)
+  if (on) next.setup.buoyancy = true
+  else delete next.setup.buoyancy
+  return next
+}
+
 // ---------------------------------------------------------- L3 additives ----
 /** Accelerator-only keys (contract 10g): removed when mode switches to cl_ndr. */
 export const ACC_KEYS = [
@@ -128,6 +137,32 @@ export function patchAdditives(spec: SampleSpec3D, patch: Partial<Additives>): S
   const next = specToForm(spec)
   if (!next.additives) return next
   next.additives = { ...next.additives, ...patch }
+  // CEAC needs mean coverage: switching to resolved drops both carried-accelerator keys.
+  if (next.additives.pulse_coverage === 'resolved') {
+    delete next.additives.ceac
+    delete next.additives.ceac_smooth
+  }
+  return next
+}
+
+/** CEAC carried accelerator (contract 10i); off removes both it and its smooth sub-flag. */
+export function setCeac(spec: SampleSpec3D, on: boolean): SampleSpec3D {
+  const next = specToForm(spec)
+  if (!next.additives) return next
+  if (on) next.additives.ceac = true
+  else {
+    delete next.additives.ceac
+    delete next.additives.ceac_smooth
+  }
+  return next
+}
+
+/** Smoothed curvature for CEAC (contract 10i); only set while CEAC itself is on. */
+export function setCeacSmooth(spec: SampleSpec3D, on: boolean): SampleSpec3D {
+  const next = specToForm(spec)
+  if (!next.additives || !next.additives.ceac) return next
+  if (on) next.additives.ceac_smooth = true
+  else delete next.additives.ceac_smooth
   return next
 }
 

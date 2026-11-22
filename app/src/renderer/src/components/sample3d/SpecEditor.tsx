@@ -9,6 +9,9 @@ import {
   setAdditivesEnabled,
   setAdditivesMode,
   setAdditivesNumber,
+  setBuoyancy,
+  setCeac,
+  setCeacSmooth,
   setPulseModel,
   specToForm,
   type AdditiveNumberKey
@@ -19,7 +22,7 @@ import { LayoutPreview } from './LayoutPreview'
 const L1_UNUSED = {
   bath: 'Not used by L1 yet: cl_ppm (no additive/chloride chemistry). Cu and H2SO4 set the bulk Cu2+, H+ and SO4 2- (migration); conductivity is an uncalibrated default.',
   setup:
-    'Not used by L1 yet: orientation, up_edge (no buoyancy), taped, area_cm2. Optional coupon position (centred, x across, y up) selects local current, Nernst layer and efficiency from the calibrated DC coupon model; beaker stir (%) is used only by that model (blank uses its default). Without a position, delta_um sets the bulk plane. stir_shear_1_s (if set, EXPERIMENTAL) adds resolved shear flow with the lid at the bulk plane. stir_angle_deg sets the shear direction in die axes. Sheared runs use full periodic tiles and are ~20x slower (quick_trench: 24 min instead of ~1 min).'
+    'Not used by L1 yet: taped, area_cm2. orientation and up_edge set the gravity direction when solutal buoyancy is on (uncalibrated, ~6x slower; buoyant runs use full periodic tiles). Optional coupon position (centred, x across, y up) selects local current, Nernst layer and efficiency from the calibrated DC coupon model; beaker stir (%) is used only by that model (blank uses its default). Without a position, delta_um sets the bulk plane. stir_shear_1_s (if set, EXPERIMENTAL) adds resolved shear flow with the lid at the bulk plane. stir_angle_deg sets the shear direction in die axes. Sheared runs use full periodic tiles and are ~20x slower (quick_trench: 24 min instead of ~1 min).'
 }
 
 /** Cl is inert in L1; with L3 additives it feeds the suppressor chemistry. */
@@ -421,6 +424,14 @@ export function SpecEditor({
               />{' '}
               Taped
             </label>
+            <label>
+              <input
+                type="checkbox"
+                checked={Boolean(spec.setup.buoyancy)}
+                onChange={(e) => onChange(setBuoyancy(spec, e.target.checked))}
+              />{' '}
+              solutal buoyancy (uncalibrated, ~6x slower)
+            </label>
             <p className="muted">{L1_UNUSED.setup}</p>
           </fieldset>
           <fieldset>
@@ -537,6 +548,37 @@ export function SpecEditor({
                       {additiveNumber('strip_return_a')}
                     </div>
                   )}
+                </fieldset>
+                <fieldset>
+                  <legend>CEAC (curvature-enhanced accelerator coverage)</legend>
+                  <label className="sample3d-check">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(spec.additives.ceac)}
+                      disabled={spec.additives.pulse_coverage !== 'mean'}
+                      onChange={(e) => onChange(setCeac(spec, e.target.checked))}
+                    />{' '}
+                    CEAC carried accelerator (uncalibrated)
+                  </label>
+                  {spec.additives.pulse_coverage !== 'mean' && (
+                    <p className="muted small">
+                      CEAC requires pulse coverage "mean"; resolved coverage clears it.
+                    </p>
+                  )}
+                  {spec.additives.ceac && (
+                    <label className="sample3d-check">
+                      <input
+                        type="checkbox"
+                        checked={Boolean(spec.additives.ceac_smooth)}
+                        onChange={(e) => onChange(setCeacSmooth(spec, e.target.checked))}
+                      />{' '}
+                      smooth curvature
+                    </label>
+                  )}
+                  <p className="muted small">
+                    Uncalibrated: curvature is meaningful only for radii ≥ 3–4 dx; use dx ≤ 4 µm for
+                    features under 50 µm.
+                  </p>
                 </fieldset>
               </>
             ) : (

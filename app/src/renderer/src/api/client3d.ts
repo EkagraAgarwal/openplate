@@ -33,6 +33,10 @@ export interface Additives {
   k_inc_a_1_cm?: number | null
   D_acc_cm2_s?: number | null
   pulse_coverage?: 'mean' | 'resolved'
+  /** Curvature-enhanced accelerator coverage (contract 10i). Needs pulse_coverage === 'mean'. */
+  ceac?: boolean
+  /** Smoothed curvature for CEAC (contract 10i). Only meaningful when ceac is true. */
+  ceac_smooth?: boolean
   k_strip_s?: number
   k_strip_a?: number
   strip_return_a?: number
@@ -61,6 +65,8 @@ export interface SampleSpec3D {
     delta_um?: number
     area_cm2?: number
     taped?: boolean
+    /** Solutal natural convection (contract 10h); gravity from orientation/up_edge. Uncalibrated. */
+    buoyancy?: boolean
   }
   numerics: {
     quality?: string
