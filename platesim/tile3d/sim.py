@@ -106,6 +106,10 @@ def run_tile(psi_si, grid: Grid3D, j_net_mA_cm2, duration_s, delta_um=64.0, para
         if acc_on:
             for key in ("theta_a_floor", "theta_a_field", "a_floor", "a_field"):
                 series[key] = []
+        elif p.ceac:
+            # cl_ndr + ceac carries theta_a too (no bulk alpha field to report).
+            for key in ("theta_a_floor", "theta_a_field"):
+                series[key] = []
     zc = grid.centers()[2]
     t, step, state, next_frame, charge = 0.0, 0, None, 0, 0.0
     wall0 = time.time()
@@ -122,13 +126,14 @@ def run_tile(psi_si, grid: Grid3D, j_net_mA_cm2, duration_s, delta_um=64.0, para
                    theta_s_field=float(np.mean(th_s[field_mask])),
                    theta_cl_floor=float(np.mean(th_cl[floor_cols])),
                    theta_cl_field=float(np.mean(th_cl[field_mask])))
-        if acc_on:
+        if acc_on or p.ceac:
             th_a = cov["theta_a"][ii, jj, kk]
-            a = cov[additives3d.ACC_KEY][ii, jj, kk]
             row.update(theta_a_floor=float(np.mean(th_a[floor_cols])),
-                       theta_a_field=float(np.mean(th_a[field_mask])),
-                       a_floor=float(np.mean(a[floor_cols])),
-                       a_field=float(np.mean(a[field_mask])))
+                       theta_a_field=float(np.mean(th_a[field_mask])))
+            if acc_on:
+                a = cov[additives3d.ACC_KEY][ii, jj, kk]
+                row.update(a_floor=float(np.mean(a[floor_cols])),
+                           a_field=float(np.mean(a[field_mask])))
         return row
 
     def save(out):
@@ -196,7 +201,17 @@ def run_tile(psi_si, grid: Grid3D, j_net_mA_cm2, duration_s, delta_um=64.0, para
         dt = min(dt_max, cfl * dx / max(vmax, 1e-30), duration_s - t)
         if next_frame < len(frame_times):
             dt = min(dt, max(frame_times[next_frame] - t, 1e-9))
+        psi_pre = psi
         psi = ls.advect(psi, speed, dt, dx, periodic=per, scheme=scheme, backend=backend)
+        if p.ceac:
+            # Phase 3: carry theta_a with the SAME Faraday-rescaled speed the front was advanced with.
+            # In mode 'acc' feed the bulk accelerator concentration at the cells (c_acc * alpha); the
+            # normalised alpha field is already converged on the pre-advance front and needs no extend
+            # here -- ceac_carry_step extends the updated coverage off psi_new itself.
+            c_a = p.c_acc * cov[additives3d.ACC_KEY] if acc_on else None
+            cov["theta_a"] = additives3d.ceac_carry_step(
+                cov["theta_a"], psi_pre, psi, speed, dt, dx, per, p,
+                c_a=c_a, smooth=p.ceac_smooth)
         t += dt
         charge += j * dt
         step += 1

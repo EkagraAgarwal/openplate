@@ -679,8 +679,14 @@ class FieldSolver:
                     # pair; the outer loop closes it together with ct/V, the plan-2.3 structure).
                     a_old = cov[additives3d.ACC_KEY][sl].ravel()
                     th_a_old = cov["theta_a"][sl].ravel()
-                    th_a_ss = additives3d.accelerator_steady_state(i_pos, a_old, p, ph.Mfac)
-                    th_a_new = np.where(front, th_a_old + cov_beta * (th_a_ss - th_a_old), th_a_old)
+                    if p.ceac:
+                        # Phase 3: theta_a is a CARRIED state owned by run_tile (ceac_carry_step).
+                        # Read it for the alpha sink/source and the kinetics, but never relax it here;
+                        # alpha is still solved below from that fixed coverage.
+                        th_a_new = th_a_old
+                    else:
+                        th_a_ss = additives3d.accelerator_steady_state(i_pos, a_old, p, ph.Mfac)
+                        th_a_new = np.where(front, th_a_old + cov_beta * (th_a_ss - th_a_old), th_a_old)
                     q_a = np.where(act, additives3d.accelerator_sink(th_a_new, p) * wf, 0.0)
                     s_a = np.where(act, additives3d.accelerator_source(th_a_new, p) * wf, 0.0)
                     lin_a = lin_a_of(q_a)
@@ -688,7 +694,8 @@ class FieldSolver:
                     info["cg"] += lin_a.iterations
                     acc_change = float(np.max(np.abs((a_new - a_old)[crit])))
                     cov[additives3d.ACC_KEY][sl] = a_new.reshape(shape)
-                    cov["theta_a"][sl] = th_a_new.reshape(shape)
+                    if not p.ceac:
+                        cov["theta_a"][sl] = th_a_new.reshape(shape)
                     # transport closure of this pass: plane influx (+ desorption source) = sink
                     alpha3 = cov[additives3d.ACC_KEY][sl]
                     acc_sink = float(np.sum(q_a * a_new))       # q_a already carries w [1/cm]

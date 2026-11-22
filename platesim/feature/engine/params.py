@@ -124,6 +124,12 @@ class Params:
     Gamma_acc: float = 1.0e-10                 # mol/cm2 accelerator saturation coverage [J]
     k_inc_a: float = 1.0e5                     # 1/cm incorporation by the advancing front [J]
     k_des_a: float = 0.0                       # 1/s thermal desorption (2-D accelerator: none) [J]
+    # ---- 3-D CEAC carried accelerator (Phase 3 step 2, tile3d/sim.py + fields.py).  Off by default:
+    # both flags only act when additives is 'cl_ndr' or 'acc' and pulse_coverage == 'mean' (derived below).
+    # ceac carries theta_a as a real surface state advanced by ceac_carry_step instead of the algebraic
+    # quasi-steady coverage; ceac_smooth Gaussian-smooths psi before evaluating its front curvature.
+    ceac: bool = False                         # opt-in carried accelerator coverage [J]
+    ceac_smooth: bool = False                  # smooth the CEAC curvature source [J]
     # ---- pulse-resolved additive coverages (3-D tile Phase 4 Level A, tile3d/fields.py).
     # All three are uncalibrated [J]: the stripping rates are per unit local anodic current
     # density, the return fraction is the share of stripped accelerator that re-enters the
@@ -413,6 +419,14 @@ def derive(p: Params, T_C: float) -> Phys:
         raise ValueError(f"Gamma_acc must be finite and > 0, got {p.Gamma_acc!r}")
     if min(p.k_acc, p.k_inc_a, p.k_des_a, p.c_acc) < 0.0:
         raise ValueError("accelerator rate constants and c_acc must be nonnegative")
+    if p.ceac:
+        if p.additives not in ("cl_ndr", "acc"):
+            raise ValueError("ceac=True requires additives in ('cl_ndr', 'acc') "
+                             f"(got {p.additives!r}) and pulse_coverage == 'mean'")
+        if p.pulse_coverage != "mean":
+            raise ValueError("ceac=True requires additives in ('cl_ndr', 'acc') "
+                             "and pulse_coverage == 'mean' "
+                             f"(got {p.pulse_coverage!r}); the carried theta_a has no resolved-pulse state")
     if not 0.0 <= p.bubble_contact_deg <= 180.0:
         raise ValueError(f"bubble_contact_deg must be in [0, 180], got {p.bubble_contact_deg!r}")
     if p.bubble_max < 0:
