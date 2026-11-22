@@ -16,6 +16,71 @@ from platesim.tile3d.grid import Grid3D
 
 MFAC = M_CU / (2 * F * RHO_CU)  # cm3 per C of Cu charge (applied charge times efficiency)
 
+_ADDITIVE_TRIPLET = ('_min', '_max', '_mean')
+
+
+def _spec_params(spec: SampleSpec):
+    """Legacy base Params plus the L3 additive overrides; nothing else changes."""
+    from platesim.feature.engine.params import Params, migration_enhancement
+
+    cu = spec.bath.cu_g_L / M_CU  # mol/L
+    acid = spec.bath.h2so4_g_L / 98.079
+    params = Params(suppressor=False, c_bulk=cu * 1e-3,
+                    E_mig=migration_enhancement(cu, [(1, 2 * acid), (-2, cu + acid)]),
+                    c_h_bulk=2 * acid * 1e-3, c_so4_bulk=(cu + acid) * 1e-3)
+    additives = spec.additives
+    if additives is None:
+        return params
+    overrides = dict(additives=additives.mode, suppressor=additives.suppressor,
+                     c_cl_bulk=spec.bath.cl_ppm / 35.453 * 1e-6)
+    mapping = (('s_bulk', additives.s_bulk_mol_cm3),
+               ('c_acc', additives.c_acc_mol_cm3),
+               ('Gamma_acc', additives.Gamma_acc_mol_cm2),
+               ('k_acc', additives.k_acc_cm3_mol_s),
+               ('b_acc', additives.b_acc),
+               ('k_inc_a', additives.k_inc_a_1_cm),
+               ('D_acc25', additives.D_acc_cm2_s))
+    overrides.update({name: value for name, value in mapping if value is not None})
+    overrides.update(pulse_coverage=additives.pulse_coverage, k_strip_s=additives.k_strip_s,
+                     k_strip_a=additives.k_strip_a, strip_return_a=additives.strip_return_a)
+    return replace(params, **overrides)
+
+
+def _additive_unit(name):
+    if name.endswith('_mol_cm2_s'):
+        return 'mol/cm2/s'
+    if name.endswith('_cm2_s'):
+        return 'cm2/s'
+    if name.endswith('_mol_cm2'):
+        return 'mol/cm2'
+    if name.endswith('_per_cm'):
+        return '1/cm'
+    return '1'
+
+
+def _flatten_report(path, value, out):
+    """Emit JSON-safe scalar quantities from one run_tile summary entry."""
+    if value is None or isinstance(value, bool):
+        return
+    if isinstance(value, (int, float)) and np.isfinite(value):
+        out.append((path, float(value)))
+    elif isinstance(value, (tuple, list)):
+        for i, item in enumerate(value):
+            suffix = _ADDITIVE_TRIPLET[i] if len(value) == 3 and i < 3 else f'_{i}'
+            _flatten_report(path + suffix, item, out)
+
+
+def _additive_quantities(index, report):
+    out = []
+    for key, value in report.items():
+        path = f'step_{index}.additives.{key}'
+        if key == 'pulse_coverage' and isinstance(value, dict):
+            for subkey, subvalue in value.items():
+                _flatten_report(path + '.' + subkey, subvalue, out)
+        elif key not in ('model', 'note', 'note_acc', 'relax', 'cov_change'):  # solver diagnostics
+            _flatten_report(path, value, out)
+    return out
+
 
 def _spec(value):
     if isinstance(value, SampleSpec):
@@ -198,15 +263,14 @@ def _run_one(spec, plan, out_dir, progress=None) -> dict:
     """
     from platesim.analysis3d import height_map, feature_report, void_report, cross_section
     from platesim.render3d import render_surface, render_height_map, render_cross_section
-    from platesim.feature.engine.params import Params, migration_enhancement
     from platesim.tile3d import levelset3d as ls
     from platesim.tile3d.result import TileResult, TileResultWriter
     from platesim.tile3d.sim import run_tile, top_height
 
     started = time.perf_counter()
     spec = _spec(spec)
-    if spec.numerics.physics != 'L1' or spec.numerics.use_surrogate:
-        raise ValueError('numerics: only physics="L1", use_surrogate=False supported; fix these fields.')
+    if spec.numerics.physics not in ('L1', 'L3') or spec.numerics.use_surrogate:
+        raise ValueError('numerics: only physics="L1" or "L3", use_surrogate=False supported; fix these fields.')
     if isinstance(spec.numerics.device, int):
         raise ValueError('numerics.device: L1 sample pipeline is CPU-only; fix: use "cpu" or "auto".')
     flow_kwargs = {} if not spec.setup.stir_shear_1_s else dict(flow=_tile_flow(spec, plan))
@@ -218,11 +282,7 @@ def _run_one(spec, plan, out_dir, progress=None) -> dict:
     area = grid.shape[0] * grid.shape[1] * grid.dx**2
     h0 = top_height(bare, grid)
     field_mask = h0 > h0.max() - grid.dx
-    cu = spec.bath.cu_g_L / M_CU  # mol/L
-    acid = spec.bath.h2so4_g_L / 98.079
-    params = Params(suppressor=False, c_bulk=cu * 1e-3,
-                    E_mig=migration_enhancement(cu, [(1, 2 * acid), (-2, cu + acid)]),
-                    c_h_bulk=2 * acid * 1e-3, c_so4_bulk=(cu + acid) * 1e-3)
+    params = _spec_params(spec)
     elapsed = charge = deposited = expected = 0.
     worst_balance = 0.
     writer.add_frame(0., psi, scalars=dict(charge_C_cm2=0., solid_volume_cm3=0.,
@@ -231,6 +291,7 @@ def _run_one(spec, plan, out_dir, progress=None) -> dict:
     total_duration = sum(durations)
     local_conditions = []
     pulse_reports = []
+    additives_reports = []
     for index, (step, duration) in enumerate(zip(spec.recipe.steps, durations)):
         def report(fraction, message):
             if progress is not None:
@@ -268,6 +329,8 @@ def _run_one(spec, plan, out_dir, progress=None) -> dict:
         psi = step_result['psi']
         if 'pulse' in step_result.get('summary', {}):
             pulse_reports.append((index + 1, step_result['summary']['pulse']))
+        if 'additives' in step_result.get('summary', {}):
+            additives_reports.append((index + 1, step_result['summary']['additives']))
         elapsed += duration
         step_charge = j_local * 1e-3 * duration
         charge += step_charge  # applied tile charge, before efficiency
@@ -312,6 +375,9 @@ def _run_one(spec, plan, out_dir, progress=None) -> dict:
         for name in ('C_dl_F_cm2', 'reverse_capacitive_fraction', 'diagnostic_reverse_capacitive_fraction'):
             if name in pulse_report:
                 quantity(f'step_{index}.{name}', pulse_report[name], 'F/cm2' if name == 'C_dl_F_cm2' else '1')
+    for index, additive_report in additives_reports:
+        for name, value in _additive_quantities(index, additive_report):
+            quantity(name, value, _additive_unit(name))
     for name in ('field_um', 'floor_um', 'wall_um', 'overburden_um'):
         quantity(name, features.get(name), 'um')
     quantity('floor_over_field', features.get('floor_over_field'), '1')
@@ -331,18 +397,29 @@ def _run_one(spec, plan, out_dir, progress=None) -> dict:
     artifacts.extend([Artifact(kind='json', path='grid.json', title='Tile grid (cm)'),
                       Artifact(kind='json', path='series.json', title='Cumulative recipe series'),
                       Artifact(kind='npz', path='static.npz', title='Original bare silicon (cm)')])
+    if spec.numerics.pulse_model == 'resolved':
+        sensitivity = ('Frozen-front cycle-resolved Tafel kinetics and periodic sub-grid diffusion; '
+                       'uncalibrated anodic kinetics; grain refinement/nucleation not modelled.')
+    elif spec.additives is not None:
+        sensitivity = ('Uncalibrated L3 additive coverages use the cycle-mean current; pulse timing '
+                       'and reverse-current effects beyond the cycle average are not resolved.')
+    else:
+        sensitivity = ('L1 uses only the net current; pulse timing and reverse-current effects '
+                       'beyond the cycle average are not resolved.')
+    if spec.additives is None:
+        lead = ('Uncalibrated L1, CPU, no additives or resolved flow. '
+                if not spec.setup.stir_shear_1_s else 'Uncalibrated L1, CPU, no additives. ')
+    else:
+        lead = (f'Uncalibrated L3 (additives mode "{spec.additives.mode}"), CPU; '
+                'all additive quantities are uncalibrated engine defaults. ')
+    if spec.setup.stir_shear_1_s:
+        lead += _shear_assumption(spec) + ' '
     manifest = Manifest(spec_hash=spec_hash(spec), code_version=__version__, backend='numpy',
-        device='cpu', dx_um=grid.dx * 1e4, physics='L1', created_utc=datetime.now(timezone.utc),
+        device='cpu', dx_um=grid.dx * 1e4, physics=spec.numerics.physics, created_utc=datetime.now(timezone.utc),
         quantities=quantities, checks=[Check(name='faraday_error_rel', value=error, limit=.05, passed=error <= .05),
         Check(name='cu_balance_rel', value=worst_balance, limit=.01, passed=worst_balance <= .01)],
-        waveform_sensitivity=('Frozen-front cycle-resolved Tafel kinetics and periodic sub-grid diffusion; '
-                             'uncalibrated anodic kinetics; grain refinement/nucleation not modelled.'
-                             if spec.numerics.pulse_model == 'resolved' else
-                             'L1 uses only the net current; pulse timing and reverse-current effects '
-                             'beyond the cycle average are not resolved.'),
-        artifacts=artifacts, summary_text=('Uncalibrated L1, CPU, no additives or resolved flow. '
-        if not spec.setup.stir_shear_1_s else 'Uncalibrated L1, CPU, no additives. '
-        + _shear_assumption(spec) + ' ') +
+        waveform_sensitivity=sensitivity,
+        artifacts=artifacts, summary_text=lead +
         'One result retains original silicon and cumulative step-end frames. '
         'Seed thinning is not modelled; conductivity and kinetics use uncalibrated engine defaults. '
          'Faraday volume correction is disabled; checks report actual numerical drift.'
@@ -361,8 +438,8 @@ def run_sample(spec: SampleSpec | dict | str, out_dir, progress=None, *, field_m
     """
     spec = _spec(spec)
     plans = plan_tile(spec, field_margin_um=field_margin_um)
-    if spec.numerics.physics != 'L1' or spec.numerics.use_surrogate:
-        raise ValueError('numerics: only physics="L1", use_surrogate=False supported; fix these fields.')
+    if spec.numerics.physics not in ('L1', 'L3') or spec.numerics.use_surrogate:
+        raise ValueError('numerics: only physics="L1" or "L3", use_surrogate=False supported; fix these fields.')
     if isinstance(spec.numerics.device, int):
         raise ValueError('numerics.device: CPU only; fix: use "cpu" or "auto".')
     out = Path(out_dir)
@@ -394,17 +471,23 @@ def run_sample(spec: SampleSpec | dict | str, out_dir, progress=None, *, field_m
         # the only validated sample Manifest is at the sample root.
     (out / 'tiles.json').write_text(json.dumps(plans, indent=2, allow_nan=False), encoding='utf-8')
     artifacts.append(dict(kind='json', path='tiles.json', title='Tile plans, weights, flags and assumptions'))
+    if spec.additives is None:
+        head = 'Uncalibrated CPU L1.'
+        no_add = ('No additives, resolved flow or seed thinning; conductivity/kinetics are uncalibrated defaults. '
+                  if not spec.setup.stir_shear_1_s else
+                  'No additives or seed thinning; conductivity/kinetics are uncalibrated defaults. '
+                  + _shear_assumption(spec) + ' ')
+    else:
+        head = f'Uncalibrated CPU L3 (additives mode "{spec.additives.mode}").'
+        no_add = ('All additive quantities are uncalibrated engine defaults. '
+                  + (_shear_assumption(spec) + ' ' if spec.setup.stir_shear_1_s else ''))
     payload = dict(template, dx_um=max(p['dx_um'] for p in plans), quantities=quantities,
                    checks=checks, artifacts=artifacts,
-                   summary_text='Uncalibrated CPU L1. Mid-length tiles are the profile result. '
+                   summary_text=head + ' Mid-length tiles are the profile result. '
                    'Mirrored renders/analysis reconstruct centre cuts; end cuts are not reflected. '
                    'Weights count physical copies, not symmetry sectors; do not sum overlapping diagnostic volumes. '
                    'Deposited volumes are simulated-sector volumes, while void analysis uses the reflected view. '
-                   + ('No additives, resolved flow or seed thinning; conductivity/kinetics are uncalibrated defaults. '
-                      if not spec.setup.stir_shear_1_s else
-                      'No additives or seed thinning; conductivity/kinetics are uncalibrated defaults. '
-                      + _shear_assumption(spec) + ' ')
-                    + _coupon_assumption(spec) + ' | '.join(descriptions))
+                   + no_add + _coupon_assumption(spec) + ' | '.join(descriptions))
     payload = Manifest.model_validate(payload).model_dump(mode='json')
     temporary = out / 'manifest.json.tmp'
     temporary.write_text(json.dumps(payload, indent=2, allow_nan=False), encoding='utf-8')

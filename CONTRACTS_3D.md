@@ -182,8 +182,44 @@ setup:    {orientation: "vertical"|"face_up"|"face_down" = "vertical", up_edge: 
            stir_shear_1_s: float | None, stir_angle_deg: float = 0, delta_um: float = 64,
            taped: bool, area_cm2: float}
 numerics: {quality: "preview"|"standard"|"fine" = "standard", physics: "L1"|"L2"|"L3" = "L1",
-           dx_um: float | None, device: "auto"|"cpu"|int = "auto", use_surrogate: bool = False}
+           dx_um: float | None, device: "auto"|"cpu"|int = "auto", use_surrogate: bool = False,
+           pulse_model: "net"|"resolved" = "net", pulse_C_dl_uF_cm2: float in [0, 500] = 30,
+           frames_per_step: int >= 2 = 2}
+additives: Additives | None = None        # L3 (contract 10g, 2026-11-22); see below
 ```
+
+**Contract 10g: L3 additives in the sample spec (2026-11-22).** Uncalibrated; engine API of
+`tile3d` Phases 1, 2 and 4A exposed through the spec. Field names mirror `feature.engine.params.Params`;
+units are the engine's (cm, s, mol). `None` means "the Params default".
+
+```
+Additives = {
+  mode: "cl_ndr"|"acc",                    # Params.additives ('acc' = cl_ndr + transported accelerator)
+  suppressor: bool = true,                 # Params.suppressor (Cl-gated suppressor coverage theta_s)
+  s_bulk_mol_cm3: float > 0 | None,        # Params.s_bulk
+  c_acc_mol_cm3: float > 0 | None,         # Params.c_acc          } 'acc' only:
+  Gamma_acc_mol_cm2: float > 0 | None,     # Params.Gamma_acc      } setting any of these
+  k_acc_cm3_mol_s: float > 0 | None,       # Params.k_acc          } with mode 'cl_ndr'
+  b_acc: float >= -1 | None,               # Params.b_acc (< 0: inhibitor) } is a validation
+  k_inc_a_1_cm: float >= 0 | None,         # Params.k_inc_a        } error
+  D_acc_cm2_s: float > 0 | None,           # Params.D_acc25        }
+  pulse_coverage: "mean"|"resolved" = "mean",  # Params.pulse_coverage; "resolved" needs
+                                               # numerics.pulse_model = "resolved"
+  k_strip_s: float >= 0 = 0, k_strip_a: float >= 0 = 0,   # need pulse_coverage "resolved" when > 0
+  strip_return_a: float in [0, 1] = 1
+}
+```
+
+Rules:
+- `additives` present <=> `numerics.physics == "L3"` (either without the other is a validation error naming
+  both fields). "L2" stays refused by the pipeline. The manifest records the physics actually run.
+- With additives, `bath.cl_ppm` sets `Params.c_cl_bulk = cl_ppm / 35.453 * 1e-6` mol/cm3 (ppm = mg/L).
+  Without additives the Cl value stays unused, as before.
+- A spec without `additives` is unchanged in every respect: same `spec_hash` (the `additives` key is
+  omitted from the canonical JSON when None), same pipeline numbers (bit-identical).
+- Every L3 quantity carries flag "uncalibrated" (or "preview"); the manifest notes name the additive mode.
+- Per step, `run_tile`'s `summary['additives']` (theta means, and `pulse_coverage` diagnostics when
+  resolved) is kept with the per-tile step reports, like the pulse reports.
 
 Validation errors must name the field path, the value, the allowed range and a suggested fix.
 `spec_hash(spec) -> str` is the SHA-256 of the canonical JSON (sorted keys, defaults filled).

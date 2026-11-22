@@ -5,6 +5,7 @@ import hashlib
 import json
 import math
 from pathlib import Path
+from typing import Any
 
 from pydantic import ValidationError
 
@@ -81,6 +82,10 @@ def _normalise(value):
 def spec_hash(spec: SampleSpec | dict) -> str:
     """SHA-256 over validated, default-filled JSON; reject invalid specs."""
     model = spec if isinstance(spec, SampleSpec) else SampleSpec.model_validate(spec)
-    data = _normalise(model.model_dump(mode="json"))
+    data: Any = _normalise(model.model_dump(mode="json"))
+    # A spec without additives keeps its exact pre-10g hash, whether the input
+    # omitted the key or supplied it explicitly as null.
+    if data.get("additives") is None:
+        data.pop("additives", None)
     canonical = json.dumps(data, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()

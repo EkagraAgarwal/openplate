@@ -21,6 +21,22 @@ export interface Step3D {
   duration_h?: number | null
   charge_C_cm2?: number | null
 }
+/** L3 additives (CONTRACTS_3D.md, contract 10g). Optional numeric keys mean "Params default". */
+export interface Additives {
+  mode: 'cl_ndr' | 'acc'
+  suppressor?: boolean
+  s_bulk_mol_cm3?: number | null
+  c_acc_mol_cm3?: number | null
+  Gamma_acc_mol_cm2?: number | null
+  k_acc_cm3_mol_s?: number | null
+  b_acc?: number | null
+  k_inc_a_1_cm?: number | null
+  D_acc_cm2_s?: number | null
+  pulse_coverage?: 'mean' | 'resolved'
+  k_strip_s?: number
+  k_strip_a?: number
+  strip_return_a?: number
+}
 export interface SampleSpec3D {
   layout: { die_um: number[]; features?: Feature3D[] | null; [key: string]: unknown }
   etch: {
@@ -46,7 +62,16 @@ export interface SampleSpec3D {
     area_cm2?: number
     taped?: boolean
   }
-  numerics: { quality?: string; dx_um?: number | null; [key: string]: unknown }
+  numerics: {
+    quality?: string
+    dx_um?: number | null
+    physics?: string
+    pulse_model?: 'net' | 'resolved'
+    pulse_C_dl_uF_cm2?: number
+    [key: string]: unknown
+  }
+  /** Present exactly when numerics.physics === 'L3' (contract 10g). */
+  additives?: Additives | null
 }
 export interface FieldIssue {
   field: string

@@ -99,6 +99,7 @@ export function Sample3DPage() {
     }, 400)
     return () => { alive = false; clearTimeout(timer) }
   }, [api, spec, validJson])
+  const physics = spec.numerics.physics ?? 'L1'
   const runId = run?.run_id
   useEffect(() => {
     if (!api || !runId) return
@@ -172,7 +173,9 @@ export function Sample3DPage() {
   return (
     <div className="page sample3d-page">
       <div className="sample3d-banner callout callout-warn">
-        Uncalibrated: L1 physics, no additives. Compare shapes, not absolute thickness.
+        {spec.additives
+          ? `Uncalibrated: L3 physics, ${spec.additives.mode} additives (uncalibrated). Compare shapes, not absolute thickness.`
+          : `Uncalibrated: ${physics} physics, no additives. Compare shapes, not absolute thickness.`}
       </div>
       <h2>3-D sample</h2>
       <div className="row gap sample3d-controls">
