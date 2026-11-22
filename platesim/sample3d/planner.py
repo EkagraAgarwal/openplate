@@ -48,9 +48,12 @@ def plan_features(spec, faraday_um, duration, field_margin_um=None):
         raise ValueError('field_margin_um must be finite and >= 0; fix: omit it for the depth-based default.')
     quality = spec.numerics.quality
     requested = spec.numerics.dx_um or {'preview': 8., 'standard': 4., 'fine': 2.}[quality]
-    # Resolved shear (setup.stir_shear_1_s) needs flow through the tile sides: mirrored tiles have
-    # no-flux sides, so sheared runs use full tiles periodic in x and y (periodic images) instead.
+    # Resolved shear (setup.stir_shear_1_s) and solutal buoyancy both need flow through the tile
+    # sides: mirrored tiles have no-flux sides, so flowing runs use full tiles periodic in x and y
+    # (periodic images) instead. The shear-only text/paths stay exactly as before.
     sheared = bool(spec.setup.stir_shear_1_s)
+    flowing = sheared or bool(spec.setup.buoyancy)
+    flow_note = 'Resolved shear' if sheared else 'Solutal buoyancy'
     groups = {}
     for i, f in enumerate(features):
         signature = repr(f.model_dump(exclude={'x_um', 'y_um'}))
@@ -77,7 +80,7 @@ def plan_features(spec, faraday_um, duration, field_margin_um=None):
             pitch = [feature.array.pitch_x_um, feature.array.pitch_y_um]
             weight = feature.array.nx * feature.array.ny
         assumptions, flags = [], ['preview'] if quality == 'preview' else []
-        symmetric = (f['kind'] == 'circle' or math.isclose(f['rotation_deg'] % 90, 0., abs_tol=1e-9)) and not sheared
+        symmetric = (f['kind'] == 'circle' or math.isclose(f['rotation_deg'] % 90, 0., abs_tol=1e-9)) and not flowing
         rotation_from_die = 0.            # tile x axis relative to die x (arrays keep die axes)
         if pitch:
             angle = math.radians(f['rotation_deg'])
@@ -102,18 +105,18 @@ def plan_features(spec, faraday_um, duration, field_margin_um=None):
             assumptions += [f'Feature-local XY axes, rotated {rotation:g} degrees from die axes; infinite field, no die edge.']
             rotation_from_die = rotation
             w, length = f['w_um'], f['h_um']
-            if sheared:
+            if flowing:
                 half_x = w/2 + margin
                 if length / w > 4 and f['kind'] != 'circle':
                     descriptors = [('trench_mid_periodic', [-half_x, 0., half_x, 0.], [], 1, True)]
-                    assumptions += ['Resolved shear: full-width mid-length tile, periodic in x (a periodic image '
+                    assumptions += [f'{flow_note}: full-width mid-length tile, periodic in x (a periodic image '
                                     f'of the trench every ~{2*half_x:g} um); trench-end diagnostic omitted.']
                 else:
                     half_y = length/2 + margin
                     descriptors = [('compact_periodic', [-half_x, -half_y, half_x, half_y], [], 1, False)]
-                    assumptions += ['Resolved shear: full tile periodic in x and y (periodic images every '
+                    assumptions += [f'{flow_note}: full tile periodic in x and y (periodic images every '
                                     f'~{2*half_x:g} x {2*half_y:g} um).']
-                flags += ['periodic images under resolved shear: neighbour interaction at the tile pitch']
+                flags += [f'periodic images under {flow_note.lower()}: neighbour interaction at the tile pitch']
             elif length / w > 4 and f['kind'] != 'circle':
                 assumptions += ['Mid-length tile is the profile result; ends are independent local diagnostics, not additive volumes.']
                 descriptors = [('trench_mid', [0., 0., w/2+margin, 0.], ['x'], 1, True),
@@ -150,7 +153,7 @@ def plan_features(spec, faraday_um, duration, field_margin_um=None):
                 target_dx *= 1.25
                 if target_dx > max(window[2]-window[0], window[3]-window[1], depth)*4:
                     raise ValueError('Incommensurate pitches cannot fit the cell cap; fix: use commensurate pitches.')
-            bc = {f'{a}_{s}': ('periodic' if (pitch and not symmetric) or (thin and a == 'y') or sheared
+            bc = {f'{a}_{s}': ('periodic' if (pitch and not symmetric) or (thin and a == 'y') or flowing
                                else 'symmetry')
                   for a in 'xy' for s in ('lo', 'hi')}
             tile_flags = flags.copy()
@@ -167,6 +170,6 @@ def plan_features(spec, faraday_um, duration, field_margin_um=None):
                 flags=tile_flags, geometry_feature=tile_f, source_center_um=[feature.x_um, feature.y_um],
                 rotation_from_die_deg=rotation_from_die,
                 faraday_thickness_um=faraday_um,
-                # resolved shear: Stokes every 5 steps + nonsymmetric Cu solves, measured ~6x per cell
-                est_seconds=max(.01, cells/1000*(duration/120+len(spec.recipe.steps))*.2*(6. if sheared else 1.))))
+                # resolved flow: Stokes every 5 steps + nonsymmetric Cu solves, measured ~6x per cell
+                est_seconds=max(.01, cells/1000*(duration/120+len(spec.recipe.steps))*.2*(6. if flowing else 1.))))
     return plans
