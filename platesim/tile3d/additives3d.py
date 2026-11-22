@@ -46,13 +46,13 @@ as Cu2+ (``operators.assemble_advdiff``).
 
 Not implemented here (phases 3-4 of the plan), left as explicit hooks:
   * Phase 3 -- surface (extension) transport and the CEAC curvature/area-change term ``-theta_a kappa v``
-    of the accelerator balance: the coverage above is a local algebraic function of the front, so a
-    shrinking feature cannot yet enrich its accelerator.  The leveller ``theta_l`` is still 0, hence the
-    ``(1 - strength_l theta_l)`` factor of ``AdditiveSet.combined_i0_factor`` is exactly 1.  The Phase 3
-    CEAC kernel itself now exists as :func:`ceac_carry_step` (built on the 2-D engine's exact
-    ``accelerator_step`` plus :func:`platesim.tile3d.levelset3d.front_curvature` and ``extend``), but it
-    is a pure function: wiring it into ``fields.py`` / ``sim.py`` to carry ``theta_a`` across time steps
-    is still to do, so the algebraic coverage above remains the engine default.
+    of the accelerator balance.  The CEAC kernel :func:`ceac_carry_step` (built on the 2-D engine's exact
+    ``accelerator_step`` plus :func:`platesim.tile3d.levelset3d.front_curvature` and ``extend``) is now
+    WIRED behind the opt-in ``Params.ceac``: ``sim.run_tile`` carries ``theta_a`` across time steps with
+    it, and ``fields.FieldSolver.solve`` reads that carried state (kinetics and, in mode ``'acc'``, the
+    alpha sink/source coverage) without relaxing it.  ``Params.ceac=False`` keeps the algebraic coverage
+    above as the engine default (bit-identical).  The leveller ``theta_l`` is still 0, hence the
+    ``(1 - strength_l theta_l)`` factor of ``AdditiveSet.combined_i0_factor`` is exactly 1.
   * Phase 4 Level A -- pulse-reverse phase-resolved coverages -- is implemented
     (:func:`periodic_phase_means` plus the ``pulse_coverage='resolved'`` branch of
     ``FieldSolver.solve``).  Level B (cycle-resolved bulk additive surface concentration) is not:
@@ -186,7 +186,7 @@ def ceac_carry_step(theta_a, psi_pre, psi_new, speed, dt, dx, periodic, p,
     and clipped to [0, 1], so it is ready to be carried into the next step.
 
     Pure function: no engine state is read or mutated; the ``fields.py`` / ``sim.py``
-    wiring is still to do (see the module docstring).
+    wiring is the opt-in ``Params.ceac`` path (see the module docstring).
     """
     if kappa is None:
         kappa = front_curvature(psi_pre, dx, periodic, smooth=smooth)
