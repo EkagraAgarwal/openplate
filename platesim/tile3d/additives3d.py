@@ -48,7 +48,11 @@ Not implemented here (phases 3-4 of the plan), left as explicit hooks:
   * Phase 3 -- surface (extension) transport and the CEAC curvature/area-change term ``-theta_a kappa v``
     of the accelerator balance: the coverage above is a local algebraic function of the front, so a
     shrinking feature cannot yet enrich its accelerator.  The leveller ``theta_l`` is still 0, hence the
-    ``(1 - strength_l theta_l)`` factor of ``AdditiveSet.combined_i0_factor`` is exactly 1.
+    ``(1 - strength_l theta_l)`` factor of ``AdditiveSet.combined_i0_factor`` is exactly 1.  The Phase 3
+    CEAC kernel itself now exists as :func:`ceac_carry_step` (built on the 2-D engine's exact
+    ``accelerator_step`` plus :func:`platesim.tile3d.levelset3d.front_curvature` and ``extend``), but it
+    is a pure function: wiring it into ``fields.py`` / ``sim.py`` to carry ``theta_a`` across time steps
+    is still to do, so the algebraic coverage above remains the engine default.
   * Phase 4 Level A -- pulse-reverse phase-resolved coverages -- is implemented
     (:func:`periodic_phase_means` plus the ``pulse_coverage='resolved'`` branch of
     ``FieldSolver.solve``).  Level B (cycle-resolved bulk additive surface concentration) is not:
@@ -71,12 +75,14 @@ from __future__ import annotations
 
 import numpy as np
 
-from ..feature.engine.additives import (displace_suppressor, langmuir_steady_state,
-                                        suppressor_cl_rate, suppressor_i0_factor)
+from ..feature.engine.additives import (accelerator_step, displace_suppressor,
+                                         langmuir_steady_state, suppressor_cl_rate,
+                                         suppressor_i0_factor)
+from .levelset3d import extend, front_curvature
 
-__all__ = ["COV_KEYS", "ACC_KEY", "coverage_init", "steady_state", "accelerator_steady_state",
-           "accelerator_sink", "accelerator_source", "coverage_factor", "front_cells",
-           "periodic_phase_means"]
+__all__ = ["COV_KEYS", "ACC_KEY", "ceac_carry_step", "coverage_init", "steady_state",
+           "accelerator_steady_state", "accelerator_sink", "accelerator_source",
+           "coverage_factor", "front_cells", "periodic_phase_means"]
 
 COV_KEYS = ("theta_cl", "theta_s", "theta_a")
 ACC_KEY = "a"                     # normalised bulk accelerator field c_a / c_acc (mode 'acc' only)
@@ -161,6 +167,34 @@ def accelerator_source(theta_a, p):
     if p.k_des_a == 0.0 or p.c_acc <= 0.0:
         return np.zeros_like(th)
     return p.Gamma_acc * p.k_des_a * th / p.c_acc
+
+
+def ceac_carry_step(theta_a, psi_pre, psi_new, speed, dt, dx, periodic, p,
+                    c_a=None, kappa=None, smooth=False):
+    """One exact CEAC step of the carried accelerator coverage on a moving 3-D front.
+
+        d theta_a/dt = k_a c_a (1 - theta_a) - theta_a kappa v - k_inc v theta_a
+
+    The curvature ``kappa = div n`` [1/cm] comes from
+    :func:`platesim.tile3d.levelset3d.front_curvature` on ``psi_pre`` unless supplied;
+    ``v = speed`` [cm/s] is the front growth speed (positive grows solid).  The
+    time integration REUSES the 2-D engine's exact exponential
+    :func:`platesim.feature.engine.additives.accelerator_step` (no re-derivation),
+    with ``k_a = p.k_acc`` and ``k_inc = p.k_inc_a``.  ``c_a`` defaults to the bulk
+    ``p.c_acc`` [mol/cm3] and may be an array (a transported field sampled at the
+    front).  The result is extended off the NEW front ``psi_new`` along its normals
+    and clipped to [0, 1], so it is ready to be carried into the next step.
+
+    Pure function: no engine state is read or mutated; the ``fields.py`` / ``sim.py``
+    wiring is still to do (see the module docstring).
+    """
+    if kappa is None:
+        kappa = front_curvature(psi_pre, dx, periodic, smooth=smooth)
+    if c_a is None:
+        c_a = p.c_acc
+    theta = accelerator_step(theta_a, dt, c_a, v=speed, kappa=kappa,
+                             k_a=p.k_acc, k_inc=p.k_inc_a)
+    return np.clip(extend(psi_new, theta, dx, periodic), 0.0, 1.0)
 
 
 def coverage_factor(theta_s, p, theta_a=0.0):

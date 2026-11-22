@@ -164,6 +164,45 @@ def curvature(psi, dx, periodic=DEFAULT_PERIODIC):
     return _restore(out, psi)
 
 
+def front_curvature(psi, dx, periodic=DEFAULT_PERIODIC, smooth=False, band_cells=1.5,
+                    clip=True):
+    """Front curvature ``kappa = div(grad psi / |grad psi|)`` [1/cm], carried off the front.
+
+    Sign convention: psi > 0 is electrolyte, psi < 0 is solid, so the normal
+    ``n = grad psi / |grad psi|`` points out of the solid and ``kappa`` is
+    positive on a convex solid sphere (``+2/R``) and negative on an electrolyte
+    cavity inside solid (``-2/R``).  This is the kappa of the CEAC balance
+    ``d theta_a/dt = ... - theta_a kappa v``: a growing solid sphere dilutes the
+    carried coverage, a shrinking cavity enriches it.
+
+    With ``smooth=True`` psi is Gaussian-filtered with sigma = 1 cell (``mode``
+    'wrap' on periodic axes, 'nearest' otherwise, passed as a per-axis tuple)
+    before differencing, which damps cell-scale noise of the discrete operator.
+    The curvature is evaluated only on the ``|psi| < band_cells*dx`` band and
+    that band is extended to every cell along the normals of the ORIGINAL psi
+    (constant off the front).  With ``clip=True`` the magnitude is capped at
+    ``1/(2 dx)``, the 2-D engine's resolution guard.
+
+    Resolution note: the finite-difference curvature is meaningful only for a
+    local radius of curvature >= 3-4 dx; below that it is dominated by the
+    stencil and the clip, not by geometry.
+    """
+    a = _array(psi, dx)
+    per = _periodic(periodic)
+    if not np.isfinite(band_cells) or band_cells <= 0:
+        raise ValueError("band_cells must be finite and positive")
+    src = a
+    if smooth:
+        mode = tuple("wrap" if p else "nearest" for p in per)
+        src = ndi.gaussian_filter(a, sigma=1.0, mode=mode)
+    k = np.asarray(curvature(src, dx, per), dtype=np.float64)
+    band = np.where(np.abs(a) < band_cells*dx, k, 0.0)
+    out = extend(a, band, dx, per)
+    if clip:
+        out = np.clip(out, -0.5/dx, 0.5/dx)
+    return _restore(out, psi)
+
+
 def electrolyte_fraction(psi, dx):
     """Regularised Heaviside, cosine-smoothed over +/- one cell.
 
