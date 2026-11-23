@@ -87,6 +87,13 @@ def spec_hash(spec: SampleSpec | dict) -> str:
     # omitted the key or supplied it explicitly as null.
     if data.get("additives") is None:
         data.pop("additives", None)
+    # A spec whose CEAC flags are false keeps its pre-10i hash, whether the keys
+    # were omitted or supplied explicitly as false (like setup.buoyancy below).
+    additives = data.get("additives")
+    if isinstance(additives, dict):
+        for key in ("ceac", "ceac_smooth"):
+            if additives.get(key) is False:
+                additives.pop(key, None)
     # Likewise, a spec without solutal buoyancy keeps its exact pre-10h hash,
     # whether the key was omitted or supplied explicitly as false.
     setup = data.get("setup")

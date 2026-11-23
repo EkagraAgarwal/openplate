@@ -206,6 +206,8 @@ Additives = {
   D_acc_cm2_s: float > 0 | None,           # Params.D_acc25        }
   pulse_coverage: "mean"|"resolved" = "mean",  # Params.pulse_coverage; "resolved" needs
                                                # numerics.pulse_model = "resolved"
+  ceac: bool = false,                          # Params.ceac; carried CEAC accelerator coverage (10i)
+  ceac_smooth: bool = false,                   # Params.ceac_smooth; smooth the CEAC curvature source (10i)
   k_strip_s: float >= 0 = 0, k_strip_a: float >= 0 = 0,   # need pulse_coverage "resolved" when > 0
   strip_return_a: float in [0, 1] = 1
 }
@@ -242,6 +244,28 @@ Rules:
   `spec_hash` (the key is omitted from the canonical JSON when False).
 - Manifest summary states the assumption: solutal expansion 0.15 L/mol [J], uncalibrated; in the Trench 1
   validation, modelled across-trench buoyancy overshot the narrow-trench floor/field (research notes).
+
+**Contract 10i: CEAC in the sample spec (2026-11-22).** Uncalibrated. Two new `Additives` fields expose
+the carried curvature-enhanced accelerator coverage of `feature.engine.params.Params` (as used by
+`tile3d.sim.run_tile`):
+
+```
+additives.ceac: bool = false          # Params.ceac; carried CEAC accelerator coverage
+additives.ceac_smooth: bool = false   # Params.ceac_smooth; smooth the CEAC curvature source
+```
+
+Rules:
+- `ceac=True` requires `additives.pulse_coverage="mean"` (the carried `theta_a` has no resolved-pulse
+  state); `derive()` also requires `additives.mode` in ("cl_ndr", "acc"). `ceac_smooth=True` requires
+  `ceac=True`. Either mismatch is a validation error naming the offending field and the fix.
+- Both flags are uncalibrated [J]. Curvature is meaningful only for local radii >= 3-4 dx; use
+  `dx_um <= 4` for features under 50 um. The manifest summary states this resolution note when CEAC is on.
+- A spec without these keys (or with both false) is unchanged in every respect: same `spec_hash` (the
+  keys are omitted from the canonical JSON when false, like `setup.buoyancy`), same pipeline numbers.
+- With CEAC on, the per-tile and sample-level manifest summaries add one sentence: "CEAC carried
+  accelerator coverage (uncalibrated); curvature resolved only for radii >= 3-4 dx." When a step's
+  `run_tile` summary or series carries `theta_a_floor`/`theta_a_field`, their last values are reported as
+  uncalibrated quantities `step_<i>.theta_a_floor` / `step_<i>.theta_a_field` unless already reported.
 
 Validation errors must name the field path, the value, the allowed range and a suggested fix.
 `spec_hash(spec) -> str` is the SHA-256 of the canonical JSON (sorted keys, defaults filled).
